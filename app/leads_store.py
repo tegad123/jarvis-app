@@ -52,13 +52,6 @@ DB_PATH = Path(
 # The sheet's vocabularies are already the product's — they are what the people
 # using this actually say. Kept closed so the UI can chip them safely.
 STATUSES = ("New", "No Response", "Responded", "Not Interested")
-
-# Slug -> the word a person reads. Auto-capture (_shared/lead_capture.py)
-# writes the slug; this is the only place it becomes prose.
-SOURCE_DISPLAY = {
-    "zillow": "Zillow", "har": "HAR", "realtor": "Realtor.com",
-    "redfin": "Redfin", "site": "the website", "email": "email",
-}
 TEMPERATURES = ("Hot", "Warm", "Cold", "")
 
 _local = threading.local()
@@ -135,12 +128,6 @@ def init() -> None:
                 ON leads(archived, next_touch_at);
             CREATE INDEX IF NOT EXISTS idx_leads_owner  ON leads(owner_person);
             CREATE INDEX IF NOT EXISTS idx_leads_thread ON leads(thread_id);
-            -- Auto-capture dedupes on address first, then on a normalised name.
-            -- Indexed rather than scanned because the connector runs on every
-            -- inbound inquiry, and a table scan per email is a cost that only
-            -- shows up once a tenant is busy.
-            CREATE INDEX IF NOT EXISTS idx_leads_email ON leads(email);
-            CREATE INDEX IF NOT EXISTS idx_leads_name  ON leads(name);
             """
         )
         conn.commit()
@@ -232,16 +219,7 @@ def create(name: str, created_by: str = "user", **fields: Any) -> Dict[str, Any]
 
     # "New lead: Marcus Webb from Zillow" — the spec's example shape. Source is
     # only mentioned when there is one; "from None" is not a sentence.
-    #
-    # AND IT IS THE DISPLAY NAME, NOT THE SLUG. Auto-capture stores a lowercase
-    # key ("har", "zillow") because that is a stable value to query on; putting
-    # it straight into a sentence produced "New lead: Marcus Webb from har",
-    # which is exactly the telemetry voice the humanisation pass removed. The
-    # store owns this headline, so the store owns the wording. A source it does
-    # not recognise is title-cased rather than dropped — an unknown portal
-    # should read a little plain, never wrong.
-    src = SOURCE_DISPLAY.get((data.get("source") or "").strip().lower(),
-                             (data.get("source") or "").strip().title())
+    src = (data.get("source") or "").strip()
     who = "Jarvis" if created_by == "jarvis" else "You"
     headline = f"New lead: {name}" + (f" from {src}" if src else "")
     _emit(headline, f"{lead_id} · added by {who}", "lead.created",
@@ -307,55 +285,6 @@ def get_by_external(external_ref: str) -> Optional[Dict[str, Any]]:
     r = _ensure().execute("SELECT * FROM leads WHERE external_ref = ?",
                           (external_ref,)).fetchone()
     return _row(r) if r else None
-
-
-def normalise_name(name: str) -> str:
-    """The key a name match is made on.
-
-    Casefold, drop punctuation, collapse whitespace, and strip the trailing
-    noise real inquiry forms produce — "Marcus Webb (Zillow)", "Marcus Webb Jr.",
-    "MARCUS WEBB + wife". Deliberately conservative: it normalises FORM, never
-    identity. "Marc Webb" and "Marcus Webb" stay different people, because
-    guessing they are the same is how you merge two clients into one row.
-    """
-    import re as _re
-    n = (name or "").casefold()
-    n = _re.sub(r"\((?:[^)]*)\)", " ", n)          # trailing "(zillow)"
-    n = _re.sub(r"\+.*$", " ", n)                   # "+ wife", "+ husband"
-    n = _re.sub(r"\b(jr|sr|ii|iii|md|phd)\b\.?", " ", n)
-    n = _re.sub(r"[^a-z0-9 ]+", " ", n)
-    return " ".join(n.split())
-
-
-def find_by_email(email: str, archived: bool = False) -> List[Dict[str, Any]]:
-    """Every lead carrying this address. A LIST, not one row, on purpose —
-    the caller has to decide what two rows with one address mean, and that
-    decision is the whole dedupe question."""
-    addr = (email or "").strip().lower()
-    if not addr:
-        return []
-    rows = _ensure().execute(
-        "SELECT * FROM leads WHERE archived = ? AND LOWER(email) = ? "
-        "ORDER BY created_at ASC",
-        (1 if archived else 0, addr),
-    ).fetchall()
-    return [_row(r) for r in rows]
-
-
-def find_by_name(name: str, archived: bool = False) -> List[Dict[str, Any]]:
-    """Leads whose name normalises to the same key. See normalise_name."""
-    key = normalise_name(name)
-    if not key:
-        return []
-    out = []
-    for r in _ensure().execute(
-        "SELECT * FROM leads WHERE archived = ? ORDER BY created_at ASC",
-        (1 if archived else 0,),
-    ).fetchall():
-        row = _row(r)
-        if normalise_name(row.get("name") or "") == key:
-            out.append(row)
-    return out
 
 
 def query(status: Optional[str] = None, temperature: Optional[str] = None,

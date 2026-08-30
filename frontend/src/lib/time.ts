@@ -75,36 +75,3 @@ export function todayLabel(now: Date = new Date()): string {
     month: 'long',
   })
 }
-
-
-/**
- * A YYYY-MM-DD deadline as a LOCAL date.
- *
- * new Date('2026-09-30') parses as UTC midnight, which is the 29th anywhere
- * west of Greenwich for most of the day — so a deadline rendered that way is
- * off by one for every American tenant every evening. Splitting the parts and
- * building a local date is the only reading that agrees with the calendar the
- * person is looking at.
- */
-export function parseLocalDate(iso: string): Date | null {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec((iso || '').trim())
-  if (!m) return null
-  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
-  return Number.isNaN(d.getTime()) ? null : d
-}
-
-/**
- * How long a task has been open, as a phrase.
- *
- * relativeTime() answers "how long ago did this happen" and renders '3d';
- * this answers "how long has this been sitting", which is a different
- * question and deserves words. The number comes from the server (days_open,
- * computed in the tenant's zone) — this only phrases it.
- */
-export function durationOpen(days: number): string {
-  if (!Number.isFinite(days) || days <= 0) return 'open today'
-  if (days === 1) return 'open 1 day'
-  if (days < 14) return `open ${days} days`
-  const weeks = Math.round(days / 7)
-  return `open ${weeks} weeks`
-}

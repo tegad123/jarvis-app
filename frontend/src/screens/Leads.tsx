@@ -3,7 +3,7 @@ import SparkMark from '../components/SparkMark'
 import FilterChips from '../components/FilterChips'
 import { ErrorState } from '../components/States'
 import { Unauthorized, getLeads, createLead, patchLead, archiveLead } from '../lib/api'
-import { CHIP, DOT_BG, type KindSemantic } from '../lib/kinds'
+import { DOT_BG, WORD_TEXT, type KindSemantic } from '../lib/kinds'
 import type { Lead, LeadsResponse } from '../lib/types'
 
 /**
@@ -89,14 +89,10 @@ function LeadRow({
       // measures 350px while the li measures 371px. Same failure as the
       // step-2 filter chips; same fix. The parent already has min-w-0 and that
       // is NOT sufficient: the constraint has to be on the item.
-      className="min-w-0 rounded-list border border-light-border bg-light-surface p-card-x shadow-lift
-                 dark:border-dark-border dark:bg-dark-surface dark:shadow-lift-dark"
+      className="min-w-0 rounded-list border border-light-border bg-light-surface p-card-x shadow-card
+                 dark:border-dark-border dark:bg-dark-surface"
     >
       <div className="flex items-center gap-2">
-        {/* CHIP, NOT DOT-PLUS-WORD. The status was the loudest thing on the row
-            in colour terms and the quietest in area — a 7px dot and six
-            coloured glyphs. As a tinted chip it reads at a glance from across
-            the list, which is what a status is for. */}
         {/* The temperature bars and status chip were already the design; making
             them CONTROLS is the whole change. Tapping advances to the next
             value — the vocabularies are short and closed, so a cycle beats a
@@ -125,7 +121,7 @@ function LeadRow({
         <span className="min-w-0 flex-1 truncate text-row-title">{lead.name}</span>
 
         {lead.created_by === 'jarvis' && (
-          <SparkMark size={11} className="shrink-0 text-light-accent dark:text-ink-300" />
+          <SparkMark size={11} className="shrink-0 text-ink-300" />
         )}
 
         {lead.status &&
@@ -140,21 +136,25 @@ function LeadRow({
                     STATUS_CYCLE[(STATUS_CYCLE.indexOf(lead.status) + 1) % STATUS_CYCLE.length],
                 })
               }
-              className={`${CHIP[semantic]} chip-state shrink-0 disabled:opacity-50`}
+              className="flex shrink-0 items-center gap-1.5 rounded-chip disabled:opacity-50"
             >
               <span
                 aria-hidden="true"
-                className={`block h-[6px] w-[6px] shrink-0 rounded-full ${DOT_BG[semantic]}`}
+                className={`block h-[7px] w-[7px] rounded-full ${DOT_BG[semantic]}`}
               />
-              {lead.status}
+              <span className={`font-mono text-[10.5px] font-medium uppercase tracking-[0.07em] ${WORD_TEXT[semantic]}`}>
+                {lead.status}
+              </span>
             </button>
           ) : (
-            <span className={`${CHIP[semantic]} chip-state shrink-0`}>
+            <span className="flex shrink-0 items-center gap-1.5">
               <span
                 aria-hidden="true"
-                className={`block h-[6px] w-[6px] shrink-0 rounded-full ${DOT_BG[semantic]}`}
+                className={`block h-[7px] w-[7px] rounded-full ${DOT_BG[semantic]}`}
               />
-              {lead.status}
+              <span className={`font-mono text-[10.5px] font-medium uppercase tracking-[0.07em] ${WORD_TEXT[semantic]}`}>
+                {lead.status}
+              </span>
             </span>
           ))}
       </div>
@@ -193,13 +193,10 @@ function LeadRow({
 }
 
 interface Props {
-  /** Null on a break-glass operator session. Editing needs a person — see
-      auth.require_person; this only REFLECTS that, the API enforces it. */
-  personKey: string | null
   onUnauthorized: () => void
 }
 
-export default function Leads({ personKey, onUnauthorized }: Props) {
+export default function Leads({ onUnauthorized }: Props) {
   const [data, setData] = useState<LeadsResponse | null>(null)
   const [error, setError] = useState<{ message: string; detail?: string } | null>(null)
   const [filter, setFilter] = useState<FilterId>('all')
@@ -208,15 +205,10 @@ export default function Leads({ personKey, onUnauthorized }: Props) {
   const [composing, setComposing] = useState(false)
   const [newName, setNewName] = useState('')
 
-  // TWO CONDITIONS, and they fail for different reasons.
-  //   SOURCE: writes exist only against the app-native store. A sheet-backed
-  //     tenant gets the identical read-only screen — controls absent rather
-  //     than present-and-409ing, because a button that always fails is worse
-  //     than no button.
-  //   PERSON: a break-glass operator has no person key, and a lead edit is a
-  //     claim about the business that needs someone to have made it. Same line
-  //     as the operator body gate, one step further: observe, do not act.
-  const canEdit = data?.source === 'store' && personKey !== null
+  // Writes exist only against the app-native store. A sheet-backed tenant gets
+  // the identical read-only screen — the controls are absent rather than
+  // present-and-failing, because a button that always 409s is worse than none.
+  const canEdit = data?.source === 'store'
 
   const load = useCallback(async () => {
     try {

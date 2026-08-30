@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react'
 import AsteriskMark from './AsteriskMark'
 import SparkMark from './SparkMark'
 import { relativeTime } from '../lib/time'
-import { CHIP, type KindSemantic } from '../lib/kinds'
 import type { Thread } from '../lib/types'
 
 /**
@@ -11,12 +10,6 @@ import type { Thread } from '../lib/types'
  * Pinned direct line (glass tier 2) + CHANNELS section. The ghosted
  * "128 Alder Ave" teaser is the designed EMPTY state — it renders only while
  * there are no channels, and comes back if every channel is archived.
- *
- * SPARK MARK COLOUR IS PER-MODE. ink-300 is the DARK-mode accent tint; on
- * white paper it is a pale wash that reads as a smudge rather than a mark, so
- * light mode takes the full accent (ink-500). It was hardcoded to ink-300 for
- * both, which is why the light theme had almost no accent on this screen.
- * The hero keeps ink-300 in both modes — it is an ink ground either way.
  *
  * SPARK MARK MEANS "JARVIS OPENED THIS". It is shown only when
  * created_by === 'jarvis'; channels the user made get none. That is the whole
@@ -79,43 +72,34 @@ function isQuiet(t: Thread): boolean {
   return age > QUIET_AFTER_HOURS * 3600_000
 }
 
-/**
- * A count badge — "2 UPDATES", "1 ALERT".
- *
- * TONE IS READ FROM THE LABEL, not passed in, because the producer that will
- * eventually set `thread.badges` writes strings. The mockup tints "2 UPDATES"
- * amber and "1 ALERT" amber-red; an unrecognised label falls back to the
- * neutral chip rather than guessing a colour, so a future badge nobody
- * anticipated is quiet instead of wrongly alarming.
- */
 function CountChip({ label }: { label: string }) {
-  const l = label.toLowerCase()
-  const tone = /alert|overdue|late/.test(l)
-    ? 'alert'
-    : /update|new|unread/.test(l)
-      ? 'warning'
-      : 'neutral'
-  return <span className={CHIP[tone as KindSemantic]}>{label}</span>
+  return (
+    <span
+      className="rounded-chip bg-light-accent/[0.07] px-1.5 py-[3px]
+                 font-mono text-[10.5px] font-medium uppercase leading-none
+                 tracking-[0.07em] text-light-text-secondary
+                 dark:bg-white/[0.07] dark:text-dark-text-secondary"
+    >
+      {label}
+    </span>
+  )
 }
 
-/**
- * A state signal — "Going quiet", "Hot".
- *
- * Now a TINTED CHIP WITH ITS DOT rather than dot-plus-coloured-text. Same
- * reasoning as the feed's kind chip: six coloured glyphs on a card is not
- * enough coloured area to register, and the badge row was the one place the
- * design's warmth was supposed to show through.
- */
 function KindSignal({ tone, word }: { tone: 'alert' | 'success' | 'warning'; word: string }) {
   const dot = {
     alert: 'bg-light-alert dark:bg-dark-alert',
     success: 'bg-light-success dark:bg-dark-success',
     warning: 'bg-light-warning dark:bg-dark-warning',
   }[tone]
+  const text = {
+    alert: 'text-light-alert dark:text-dark-alert',
+    success: 'text-light-success dark:text-dark-success',
+    warning: 'text-light-warning dark:text-dark-warning',
+  }[tone]
   return (
-    <span className={`${CHIP[tone]} chip-state`}>
+    <span className="flex items-center gap-1.5">
       <span aria-hidden="true" className={`h-[6px] w-[6px] shrink-0 rounded-full ${dot}`} />
-      {word}
+      <span className={`text-[12px] font-semibold leading-none ${text}`}>{word}</span>
     </span>
   )
 }
@@ -199,7 +183,7 @@ function ChannelRow({
           <span className="flex items-center gap-2">
             {/* Only Jarvis-opened channels carry the spark. */}
             {thread.created_by === 'jarvis' && (
-              <SparkMark size={13} className="shrink-0 text-light-accent dark:text-ink-300" />
+              <SparkMark size={13} className="shrink-0 text-ink-300" />
             )}
             <span className="min-w-0 flex-1 truncate text-row-title">{thread.name}</span>
             {thread.last_message_at && (
@@ -279,7 +263,7 @@ function GhostedTeaser() {
                  p-card-x opacity-60 dark:border-dark-border-strong"
     >
       <div className="flex items-start gap-2">
-        <SparkMark size={16} className="mt-0.5 shrink-0 text-light-accent dark:text-ink-300" />
+        <SparkMark size={16} className="mt-0.5 shrink-0 text-ink-300" />
         <span className="min-w-0 flex-1 text-row-title">128 Alder Ave</span>
         <span
           className="shrink-0 rounded-chip border border-light-border px-2 py-0.5
@@ -330,14 +314,7 @@ export default function ConversationsList({
         <button
           type="button"
           onClick={() => onOpen(direct)}
-          // INK WASH ON THE BRAND MOMENT. Glass tier 2 alone is a neutral
-          // frost, so the one card the design wants you to notice was the same
-          // temperature as the four channel rows below it. A faint accent wash
-          // and an accent-tinted hairline keep it glass while making it read as
-          // ink — this is the pinned direct line, the product's front door.
-          className="glass-featured w-full overflow-hidden rounded-card px-4 py-3.5 text-left
-                     !border-light-accent/25 bg-light-accent/[0.045]
-                     dark:!border-dark-accent/25 dark:bg-dark-accent/[0.06]"
+          className="glass-featured w-full overflow-hidden rounded-card px-4 py-3.5 text-left"
         >
           <div className="flex items-center gap-3">
             {/* BRAND MOMENT, tier 3: the disc sits on a radial ink-300 halo with
@@ -347,9 +324,9 @@ export default function ConversationsList({
             <span
               aria-hidden="true"
               className="relative grid h-10 w-10 shrink-0 place-items-center rounded-full
-                         bg-ink-500/[0.16] text-light-accent
+                         bg-ink-500/10 text-light-accent
                          shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]
-                         dark:bg-ink-300/[0.20] dark:text-dark-accent
+                         dark:bg-ink-300/[0.14] dark:text-dark-accent
                          dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.15)]"
             >
               <span
@@ -364,7 +341,7 @@ export default function ConversationsList({
             <span className="min-w-0 flex-1">
               <span className="flex items-center gap-1.5">
                 <span className="min-w-0 truncate text-row-title">{direct.name}</span>
-                <SparkMark size={11} className="shrink-0 text-light-accent dark:text-ink-300" />
+                <SparkMark size={11} className="shrink-0 text-ink-300" />
                 <span className="flex-1" />
                 {direct.last_message_at && (
                   <span className="shrink-0 text-[11.5px] font-medium leading-none text-light-text-muted dark:text-dark-text-muted">
@@ -390,10 +367,7 @@ export default function ConversationsList({
 
       <section className="grid min-w-0 gap-2.5">
         <h3 className="flex flex-wrap items-baseline gap-x-2">
-          {/* The section label is the screen's only structural heading below
-              the title, so it carries the accent rather than being a third
-              shade of grey. */}
-          <span className="font-mono text-label-mono uppercase text-light-accent/80 dark:text-dark-accent/85">
+          <span className="font-mono text-label-mono uppercase text-light-text-secondary dark:text-dark-text-secondary">
             Channels
           </span>
           <span className="text-caption text-light-text-muted dark:text-dark-text-muted">
@@ -416,9 +390,9 @@ export default function ConversationsList({
                 // depth. shadow-card alone (a single 1px/4% drop) is invisible
                 // on warm paper and leaves the container reading as a flat
                 // rectangle on a flat ground.
-                'shadow-lift ' +
+                'shadow-[0_1px_2px_rgba(27,30,29,0.05),0_8px_20px_rgba(27,30,29,0.06)] ' +
                 'dark:divide-dark-border dark:border-dark-border dark:bg-dark-surface ' +
-                'dark:shadow-lift-dark'
+                'dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_10px_24px_rgba(0,0,0,0.35)]'
           }
         >
           {channels.length === 0 ? (

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ErrorState } from '../components/States'
 import { ApiError, Unauthorized, decideApproval, getApprovals } from '../lib/api'
-import { CHIP, DOT_BG, WORD_TEXT } from '../lib/kinds'
+import { DOT_BG, WORD_TEXT } from '../lib/kinds'
 import { relativeTime } from '../lib/time'
 import type { Approval, ConfigChange } from '../lib/types'
 
@@ -109,21 +109,15 @@ function ApprovalCard({
 
   return (
     <li className="glass-featured overflow-hidden rounded-card p-card-x">
-      {/* Same chip language as the feed: state as a tinted container, skill as
-          quiet provenance after it. An approval card is the one place in the
-          product where a person is being ASKED something, so "Needs approval"
-          reading as a grey label was the worst instance of the flat metadata
-          row — it looked like a filing status rather than a question. */}
       <div className="flex items-center gap-2">
-        <span className={`${CHIP[semantic]} shrink-0`}>
-          <span
-            aria-hidden="true"
-            className={`block h-[6px] w-[6px] shrink-0 rounded-full ${DOT_BG[semantic]}`}
-          />
+        <span
+          aria-hidden="true"
+          className={`block h-[7px] w-[7px] shrink-0 rounded-full ${DOT_BG[semantic]}`}
+        />
+        <span className={`font-mono text-label-mono uppercase ${WORD_TEXT[semantic]}`}>
           {word}
         </span>
-        <span className="min-w-0 truncate font-mono text-[10px] font-medium uppercase
-                         tracking-[0.06em] text-light-text-muted dark:text-dark-text-muted">
+        <span className="truncate font-mono text-label-mono uppercase text-light-text-muted dark:text-dark-text-muted">
           {approval.skill}
         </span>
         <time
@@ -134,8 +128,7 @@ function ApprovalCard({
         </time>
       </div>
 
-      <p className="mt-2 text-hero font-semibold tracking-[-0.006em]
-                    text-light-text-primary dark:text-dark-text-primary">
+      <p className="mt-2 text-hero text-light-text-primary dark:text-dark-text-primary">
         {approval.summary}
       </p>
 
@@ -182,10 +175,6 @@ function ApprovalCard({
           </button>
         </div>
       ) : (
-        // DECIDED APPROVALS STAY QUIET — deliberately NOT a chip. This is the
-        // footer of a settled card, and chipping it would give history the same
-        // presence as the pending question above it, which is backwards for a
-        // queue: the loud thing should be the one still waiting on you.
         <p className="mt-3 flex flex-wrap items-baseline gap-x-2 text-caption text-light-text-muted dark:text-dark-text-muted">
           <span className={`font-mono text-label-mono uppercase ${WORD_TEXT[semantic]}`}>
             {word}

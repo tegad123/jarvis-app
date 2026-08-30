@@ -3,30 +3,10 @@
  * Type: Instrument Sans (UI) · IBM Plex Mono (labels, skill names, kinds)
  * Dark mode: class strategy — semantic tokens resolve via CSS vars set on .dark
  *
- * ORIGIN: ~/jarvis-tokens_tailwind_config.js. THIS FILE IS NO LONGER A VERBATIM
- * COPY, and the note claiming it was had been false since the r2 polish pass —
- * re-copying over it, as that note instructed, would have silently reverted
- * three deliberate decisions. This list is now the record. Every divergence is
- * a value the ORIGINAL got wrong on real hardware rather than on a retina mock:
- *
- *   light.bg          #FAF8F4 -> #F3EDE2   paper the cards can lift off. At
- *                                          #FAF8F4 a #FFFFFF card differs by
- *                                          ~2% luminance and is invisible on
- *                                          an ordinary screen. (r2 took it to
- *                                          #F2EEE6; the vibrancy pass warmed
- *                                          it a further step — the red/blue
- *                                          spread goes 12 -> 17, which is what
- *                                          reads as "paper" rather than "grey".)
- *   light.border      .08 -> .13           a hairline that survives non-retina
- *   light.border-strong .15 -> .20         ditto
- *   shadow.card       1 layer -> 2         contact + soft; one layer at 4% is
- *                                          not visible on warm paper
- *
- * ADDED by the vibrancy pass (not in the original at all): the `lift` /
- * `lift-dark` shadows, because the mockup's cards float and `card` only seats
- * them. The matching chip tints live in index.css as `.chip-*` classes rather
- * than here: a chip needs background, text and border to move together, and a
- * colour scale cannot express that.
+ * SOURCE OF TRUTH: ~/jarvis-tokens_tailwind_config.js — copied verbatim.
+ * The ONLY additions are `content` and `plugins`, which Tailwind requires to
+ * run. Nothing under `theme` has been changed, added, or removed. If the
+ * tokens file changes, re-copy it; do not hand-edit the theme here.
  */
 module.exports = {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
@@ -45,13 +25,14 @@ module.exports = {
           400: '#5B82C4', 500: '#24427C', 600: '#1B3363', 700: '#142950', 900: '#0F1E38',
         },
         light: {
-          // Warm paper. Two moves from the original #FAF8F4, both deliberate:
-          // DEEPER (r2) so a #FFFFFF card has something to lift off — at
-          // #FAF8F4 the difference is ~2% luminance and invisible on an
-          // ordinary screen — and then WARMER (vibrancy), taking the red/blue
-          // spread from 12 to 17. Warmth is what makes it read as paper; depth
-          // is what makes the cards read as cards. Still Mercury, not Material.
-          bg: '#F3EDE2',
+          // Warm paper, one step DEEPER than the original #FAF8F4. At #FAF8F4
+          // a #FFFFFF card differs by ~2% luminance: on a retina mock it looks
+          // refined, on an ordinary screen it is simply invisible and every
+          // card reads as flat white on near-white. This keeps the warmth (it
+          // is still paper, not grey) while giving the surfaces something to
+          // lift OFF of. Deepened deliberately, not tinted — the register is
+          // Mercury, not Material.
+          bg: '#F2EEE6',
           surface: '#FFFFFF',       // opaque cards (feed rows, lead rows, channel lists)
           'surface-raised': 'rgba(255,255,255,0.58)', // glass featured cards (+ blur-glass)
           border: 'rgba(27,30,29,0.13)',       // was .08 — a hairline that survives a non-retina screen
@@ -123,12 +104,6 @@ module.exports = {
         'glass-dark': '0 0 0 1px rgba(255,255,255,0.05), 0 10px 28px rgba(0,0,0,0.40)',
         'hero': 'inset 0 1px 0 rgba(255,255,255,0.16), inset 0 0 48px rgba(91,130,196,0.14), 0 14px 34px rgba(15,30,56,0.22)',
         'accent-btn': '0 4px 12px rgba(36,66,124,0.30)',
-        // LIFT — the mockup's cards float rather than sit. Heavier and lower
-        // than `card`: the offset does the floating, the blur does the
-        // softness, and the tight 1px layer keeps the card seated so it does
-        // not look like it is peeling off the page.
-        'lift': '0 1px 2px rgba(27,30,29,0.05), 0 10px 24px -6px rgba(27,30,29,0.10), 0 2px 6px rgba(27,30,29,0.04)',
-        'lift-dark': 'inset 0 1px 0 rgba(255,255,255,0.055), 0 12px 28px -8px rgba(0,0,0,0.55), 0 2px 8px rgba(0,0,0,0.30)',
       },
     },
   },

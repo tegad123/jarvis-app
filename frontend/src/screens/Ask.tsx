@@ -5,18 +5,13 @@ import ConversationsList from '../components/ConversationsList'
 import MicButton, { VoiceStatus } from '../components/MicButton'
 import SpeakerToggle, { silence } from '../components/SpeakerToggle'
 import NewChannelSheet from '../components/NewChannelSheet'
-import MembersSheet from '../components/MembersSheet'
 import {
   ApiError,
   Unauthorized,
   archiveThread,
   createThread,
   getChatHistory,
-  getPeople,
-  getThreadMembers,
   getThreads,
-  addThreadMember,
-  removeThreadMember,
   renameThread,
   streamChat,
   uploadAttachment,
@@ -25,8 +20,7 @@ import {
 import { THINKING, stepName, truncateLabel } from '../lib/steps'
 import { ACCEPT_ATTR, MAX_UPLOAD_BYTES, humanSize, prepareForUpload } from '../lib/attachments'
 import type { VoiceState } from '../lib/voice'
-import type { Attachment, ChatMessage, Role, Thread, ThreadMember } from '../lib/types'
-import type { Person } from '../lib/api'
+import type { Attachment, ChatMessage, Thread } from '../lib/types'
 
 const EXAMPLE_PROMPTS = [
   'Which emails need me today?',
@@ -35,10 +29,6 @@ const EXAMPLE_PROMPTS = [
 ]
 
 interface Props {
-  /** From /api/session. Decides what this screen OFFERS; the API decides what
-      it allows. Every gate below has a server-side twin. */
-  role: Role
-  personKey: string | null
   onUnauthorized: () => void
 }
 
@@ -52,12 +42,7 @@ type Sheet =
   | { mode: 'rename'; thread: Thread }
   | null
 
-export default function Ask({ role, personKey, onUnauthorized }: Props) {
-  // An operator reaches every channel's structure and none of its content.
-  // app/auth.py:require_bodies is what actually enforces this; the flag here
-  // exists so the screen shows an honest explanation instead of a 403.
-  const structureOnly = role === 'operator'
-  const canManageMembers = role === 'owner' || role === 'admin'
+export default function Ask({ onUnauthorized }: Props) {
   const [threads, setThreads] = useState<Thread[] | null>(null)
   const [openThread, setOpenThread] = useState<Thread | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -72,16 +57,7 @@ export default function Ask({ role, personKey, onUnauthorized }: Props) {
   const [pending, setPending] = useState<Attachment[]>([])
   const [uploading, setUploading] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
-  // The turn's own check against the store. Server-generated: a receipt
-  // built from the saved row, or a correction when the reply claimed a
-  // task that was never written.
-  const [verified, setVerified] = useState<{ ok: boolean; message: string } | null>(null)
   const [voice, setVoice] = useState<VoiceState>({ phase: 'idle' })
-  const [members, setMembers] = useState<ThreadMember[] | null>(null)
-  const [membersOpen, setMembersOpen] = useState(false)
-  const [membersBusy, setMembersBusy] = useState(false)
-  const [membersError, setMembersError] = useState<string | null>(null)
-  const [people, setPeople] = useState<Person[]>([])
   // Bumped when a reply finishes; SpeakerToggle keys auto-speak off it.
   const [replyDoneAt, setReplyDoneAt] = useState(0)
 
@@ -92,16 +68,6 @@ export default function Ask({ role, personKey, onUnauthorized }: Props) {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const onUnauthorizedRef = useRef(onUnauthorized)
   onUnauthorizedRef.current = onUnauthorized
-  const structureOnlyRef = useRef(structureOnly)
-  structureOnlyRef.current = structureOnly
-
-  // The roster is needed by ANYONE who can open the members sheet, not just
-  // by someone who can edit it: without it the sheet renders raw person keys
-  // ("spencer") instead of names, which is what an operator saw. It is the
-  // same unauthenticated list the login picker uses, so this costs nothing.
-  useEffect(() => {
-    void getPeople().then(setPeople).catch(() => setPeople([]))
-  }, [])
 
   const loadThreads = useCallback(async () => {
     try {
@@ -154,23 +120,6 @@ export default function Ask({ role, personKey, onUnauthorized }: Props) {
     setNotice(null)
     setVoice({ phase: 'idle' })
     pinnedRef.current = true
-    setMembers(null)
-    setMembersError(null)
-
-    // Membership is structure, so it loads for every role including operator.
-    if (!thread.is_direct) {
-      void getThreadMembers(thread.thread_id)
-        .then(setMembers)
-        .catch((err) => {
-          if (err instanceof Unauthorized) onUnauthorizedRef.current()
-          setMembers([])
-        })
-    }
-
-    // The one thing an operator does NOT fetch. Asking and swallowing the 403
-    // would work, but it would also mean the UI's rule and the server's rule
-    // are only accidentally the same; not asking says what we intend.
-    if (structureOnlyRef.current) return
     try {
       const r = await getChatHistory(thread.thread_id)
       setMessages(r.messages.map((m) => ({ thread_id: thread.thread_id, ...m })))
@@ -179,42 +128,6 @@ export default function Ask({ role, personKey, onUnauthorized }: Props) {
       // An empty thread is the normal case; only auth failures matter here.
     }
   }, [])
-
-  const addMember = useCallback(
-    async (key: string) => {
-      if (!openThread) return
-      setMembersBusy(true)
-      setMembersError(null)
-      try {
-        setMembers(await addThreadMember(openThread.thread_id, key))
-        await loadThreads()
-      } catch (err) {
-        if (err instanceof Unauthorized) return onUnauthorizedRef.current()
-        setMembersError(err instanceof ApiError ? err.message : 'Could not add them.')
-      } finally {
-        setMembersBusy(false)
-      }
-    },
-    [openThread, loadThreads],
-  )
-
-  const dropMember = useCallback(
-    async (key: string) => {
-      if (!openThread) return
-      setMembersBusy(true)
-      setMembersError(null)
-      try {
-        setMembers(await removeThreadMember(openThread.thread_id, key))
-        await loadThreads()
-      } catch (err) {
-        if (err instanceof Unauthorized) return onUnauthorizedRef.current()
-        setMembersError(err instanceof ApiError ? err.message : 'Could not remove them.')
-      } finally {
-        setMembersBusy(false)
-      }
-    },
-    [openThread, loadThreads],
-  )
 
   const back = useCallback(() => {
     abortRef.current?.abort()
@@ -243,7 +156,6 @@ export default function Ask({ role, personKey, onUnauthorized }: Props) {
       setStep({ name: THINKING })
       toolLabels.current.clear()
       pinnedRef.current = true
-      setVerified(null)
 
       setMessages((m) => [
         ...m,
@@ -296,7 +208,6 @@ export default function Ask({ role, personKey, onUnauthorized }: Props) {
                 setStep(assistant ? null : { name: THINKING })
               }
             },
-            onVerified: (e) => setVerified({ ok: e.ok, message: e.message }),
             onDone: () => {
               setStep(null)
               setReplyDoneAt(Date.now())
@@ -437,24 +348,6 @@ export default function Ask({ role, personKey, onUnauthorized }: Props) {
     />
   )
 
-  const membersNode = membersOpen && openThread && (
-    <MembersSheet
-      channelName={openThread.name}
-      members={members ?? []}
-      people={people}
-      canManage={canManageMembers}
-      personKey={personKey}
-      busy={membersBusy}
-      error={membersError}
-      onAdd={(k) => void addMember(k)}
-      onRemove={(k) => void dropMember(k)}
-      onClose={() => {
-        setMembersOpen(false)
-        setMembersError(null)
-      }}
-    />
-  )
-
   /* ----------------------------------------------------------------- list */
 
   if (!openThread) {
@@ -515,57 +408,8 @@ export default function Ask({ role, personKey, onUnauthorized }: Props) {
           </svg>
         </button>
         <h2 className="min-w-0 flex-1 truncate text-screen-title">{openThread.name}</h2>
-
-        {/* Members live on the channel header rather than behind the overflow
-            menu: who can read a deal channel is the kind of thing you want to
-            be able to CHECK at a glance, not go looking for. Direct lines have
-            no control because they have no members, by construction. */}
-        {!openThread.is_direct && (
-          <button
-            type="button"
-            onClick={() => setMembersOpen(true)}
-            aria-label={`Members of ${openThread.name}`}
-            className="flex shrink-0 items-center gap-1.5 rounded-pill border border-light-border
-                       px-3 py-1.5 text-caption text-light-text-secondary
-                       dark:border-dark-border dark:text-dark-text-secondary"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"
-                 stroke="currentColor" strokeWidth="2" strokeLinecap="round"
-                 strokeLinejoin="round">
-              <path d="M16 19v-1a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v1" />
-              <circle cx="9.5" cy="7" r="3.5" />
-              <path d="M17 11a3 3 0 1 0 0-6M21 19v-1a3.6 3.6 0 0 0-2.5-3.4" />
-            </svg>
-            {members === null ? '—' : members.length}
-          </button>
-        )}
       </header>
 
-      {/* OPERATOR: STRUCTURE, NOT BODIES. The channel, its name and its
-          membership are all here; the conversation is not, and the screen says
-          why rather than rendering an empty thread that reads like a bug. */}
-      {structureOnly ? (
-        <div className="grid gap-3 py-6">
-          <p className="text-body text-light-text-primary dark:text-dark-text-primary">
-            Operator access shows this channel and who is in it — not what was said
-            in it.
-          </p>
-          <p className="text-body-s text-light-text-secondary dark:text-dark-text-secondary">
-            Reading messages needs the account owner to sign in. If that is genuinely
-            required, reset their PIN with them on the call.
-          </p>
-          <button
-            type="button"
-            onClick={() => setMembersOpen(true)}
-            disabled={openThread.is_direct}
-            className="justify-self-start rounded-pill border border-light-border px-4 py-2
-                       text-body-s text-light-text-secondary disabled:opacity-40
-                       dark:border-dark-border dark:text-dark-text-secondary"
-          >
-            {openThread.is_direct ? 'A private line has no members' : 'See who is in this channel'}
-          </button>
-        </div>
-      ) : (
       <div
         ref={scrollRef}
         onScroll={onScroll}
@@ -616,13 +460,7 @@ export default function Ask({ role, personKey, onUnauthorized }: Props) {
                 </li>
               ) : (
                 <li key={i} className="min-w-0">
-                  {/* INK, not muted grey. The chat interior is white text, one
-                      ink bubble and nothing else — this label appears above
-                      every assistant turn, so it is the cheapest place to get
-                      the accent onto the screen repeatedly without adding
-                      chrome. */}
-                  <p className="flex items-center gap-2 font-mono text-label-mono uppercase
-                                text-light-accent/75 dark:text-dark-accent/80">
+                  <p className="flex items-center gap-2 font-mono text-label-mono uppercase text-light-text-muted dark:text-dark-text-muted">
                     Jarvis
                     {m.content && !streaming && (
                       <SpeakerToggle
@@ -703,41 +541,8 @@ export default function Ask({ role, personKey, onUnauthorized }: Props) {
             {notice}
           </p>
         )}
-
-        {/* THE TURN'S RECEIPT, and it is not the model talking. A confirmation
-            comes from the row that was saved; a correction appears when the
-            reply above claimed a task that does not exist. Rendered apart from
-            the transcript on purpose — merged into the bubble it would read as
-            more prose from the same source that just got it wrong. */}
-        {verified && (
-          <p
-            data-testid="verified"
-            data-ok={verified.ok ? 'true' : 'false'}
-            className={[
-              'mt-3 flex items-start gap-2 whitespace-pre-line text-caption',
-              verified.ok
-                ? 'text-light-text-secondary dark:text-dark-text-secondary'
-                : 'text-light-alert dark:text-dark-alert',
-            ].join(' ')}
-          >
-            <span
-              aria-hidden="true"
-              className={[
-                'mt-1.5 block h-[7px] w-[7px] shrink-0 rounded-full',
-                verified.ok
-                  ? 'bg-light-success dark:bg-dark-success'
-                  : 'bg-light-alert dark:bg-dark-alert',
-              ].join(' ')}
-            />
-            {verified.message}
-          </p>
-        )}
       </div>
-      )}
 
-      {/* No composer for an operator: break-glass looks, it does not speak.
-          The API refuses the POST regardless (require_bodies on /api/chat). */}
-      {!structureOnly && (
       <form
         onSubmit={(e: FormEvent) => {
           e.preventDefault()
@@ -833,10 +638,8 @@ export default function Ask({ role, personKey, onUnauthorized }: Props) {
           </button>
         </div>
       </form>
-      )}
 
       {sheetNode}
-      {membersNode}
     </div>
   )
 }

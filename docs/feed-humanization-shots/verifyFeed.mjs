@@ -77,7 +77,7 @@ for (const [name, hit] of Object.entries(violations)) {
 }
 
 console.log('\n=== 3. HEADLINES READ AS SENTENCES ===')
-const verbs = /^(Filed|Created|Completed|Saved|Added|Sent|Drafted|Assigned)\b/
+const verbs = /^(Filed|Created|Completed|Saved|Added|Sent|Drafted)\b/
 const newRows = newIdx.map((i) => rows[i]).filter(Boolean)
 const withVerb = newRows.filter((r) => verbs.test(r.body)).length
 check('every humanised row starts with a plain verb', withVerb === newRows.length, `${withVerb}/${newRows.length}`)

@@ -1,7 +1,0 @@
-  feed_events=82   baseline 82
-  tasks=592   baseline 592
-  threads=5   baseline 5
-  writes_allowed=False   baseline False
-  identity_client=34dev   baseline 34dev
-  app_ping={"ok":true,"service":"jarvis-app","version":"1.0.0-skeleton"}
-  live_gateway_listeners=1
