@@ -1,0 +1,43 @@
+PRE-REBOOT SNAPSHOT  2026-08-17T02:53:02Z
+kernel: 6.8.0-124-generic
+
+--- gateway /health ---
+{"status": "ok", "platform": "hermes-agent", "version": "0.20.0"}
+--- gateway model/provider (config) ---
+  default: claude-sonnet-5
+  provider: anthropic
+--- webhook :18790 ---
+http=404
+listening=yes
+--- jarvis-app ---
+{"ok":true,"service":"jarvis-app","version":"1.0.0-skeleton"}
+--- tunnel hostnames (WILL ROTATE ON REBOOT) ---
+cloudflared-jarvis           https://ted-elder-fill-resolution.trycloudflare.com
+cloudflared-jarvis-gateway   https://consensus-prague-registration-screw.trycloudflare.com
+cloudflared-jarvis-app       https://jim-relevance-particular-representative.trycloudflare.com
+
+--- app login page through the tunnel ---
+GET https://jim-relevance-particular-representative.trycloudflare.com/ -> 200
+
+--- state files ---
+/root/.hermes/state/activity_feed.jsonl              1416 bytes  3 lines
+/root/.hermes/state/approvals.jsonl                  1350 bytes  3 lines
+/root/.hermes/state/jarvis_threads.db                4096 bytes  0 lines
+attachments: 2 files
+gmail watch_state: {
+  "last_historyId": "54003",
+  "expiration_ms": null,
+  "topic": null,
+  "last_renewed_at": null,
+  "last_push_at": null,
+  "processed_historyIds": [
+    "999888",
+    "111222",
+    "99999",
+    "99998"
+  ],
+  "processed_message_ids": [
+    "<CACU1ErP_8U6f+19cmSV8DF85pne4=vL+2FJ1c-YnD6wjHYVqEQ@mai
+
+--- swap ---
+Swap:          3.0Gi          0B       3.0Gi

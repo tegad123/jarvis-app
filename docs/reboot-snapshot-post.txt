@@ -1,0 +1,40 @@
+POST-BOOT CHECK  2026-08-17T02:56:20Z
+uptime: up 0 minutes   kernel: 6.8.0-137-generic
+
+--- waiting up to 180s for the gateway to answer ---
+gateway answered after ~3s
+
+=== SERVICE STATE ===
+UNIT                               ENABLED    ACTIVE    
+jarvis-app                         enabled    active    
+jarvis-gmail-webhook               enabled    active    
+jarvis-gmail-poller.timer          enabled    active    
+cloudflared-jarvis                 enabled    active    
+cloudflared-jarvis-gateway         enabled    active    
+cloudflared-jarvis-app             enabled    active    
+hermes-gateway (USER unit)         Failed to connect to bus: No medium found Failed to connect to bus: No medium found
+root linger: State=lingering
+Linger=yes
+
+=== ENDPOINTS ===
+gateway  /health : {"status": "ok", "platform": "hermes-agent", "version": "0.20.0"}
+app      /api/ping: {"ok":true,"service":"jarvis-app","version":"1.0.0-skeleton"}
+webhook  :18790   : listening
+
+=== TUNNEL HOSTNAMES (rotate every boot — the named-tunnel motivation) ===
+cloudflared-jarvis           https://cold-millennium-visited-tooth.trycloudflare.com
+cloudflared-jarvis-gateway   https://approaches-escape-venues-hydraulic.trycloudflare.com
+cloudflared-jarvis-app       https://laden-respectively-avatar-chicken.trycloudflare.com
+
+=== SWAP ===
+Swap:          3.0Gi          0B       3.0Gi
+NAME      TYPE SIZE USED PRIO
+/swapfile file   3G   0B   -2
+
+=== STATE FILES INTACT ===
+/root/.hermes/state/activity_feed.jsonl              1416 bytes
+/root/.hermes/state/approvals.jsonl                  1350 bytes
+/root/.hermes/state/jarvis_threads.db                4096 bytes
+attachments: 2 files
+
+POST-BOOT CHECK COMPLETE

@@ -1,0 +1,7 @@
+=== LIVE BASELINE 2026-08-20T09:00:26Z ===
+feed_events=82
+tasks=592
+threads=5
+writes_allowed=False
+app_ping={"ok":true,"service":"jarvis-app","version":"1.0.0-skeleton"}
+identity_client=34dev

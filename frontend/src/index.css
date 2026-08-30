@@ -1,0 +1,365 @@
+/* Self-hosted fonts. Fontsource ships the woff2 files inside the package, so
+   Vite fingerprints and emits them into the bundle — there is no request to a
+   font CDN at runtime. Latin subsets only; weights limited to those the type
+   scale in the tokens actually uses (sans 400/500/600/700, mono 500). */
+@import '@fontsource/instrument-sans/latin-400.css';
+@import '@fontsource/instrument-sans/latin-500.css';
+@import '@fontsource/instrument-sans/latin-600.css';
+@import '@fontsource/instrument-sans/latin-700.css';
+@import '@fontsource/ibm-plex-mono/latin-500.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-light-bg dark:bg-dark-bg
+           text-light-text-primary dark:text-dark-text-primary
+           font-sans antialiased;
+    /* The feed scrolls beneath fixed chrome; the page itself never bounces
+       horizontally at 390px. */
+    overflow-x: hidden;
+  }
+
+  /* Focus ring uses the accent token rather than the UA default. */
+  :focus-visible {
+    outline: 2px solid #24427c;
+    outline-offset: 2px;
+  }
+  .dark :focus-visible {
+    outline-color: #8fb4e8;
+  }
+
+  /* Hover lifts and chevron turns are 120ms; for anyone who has asked the OS
+     for less motion they are instant. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    ::before,
+    ::after {
+      transition-duration: 0.01ms !important;
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   SURFACE PRIMITIVES
+
+   Straight transcriptions of the GLASS SURFACE DEFINITIONS block in the tokens
+   file. The exact rgba values there are not expressible as palette utilities
+   (they are surface treatments, not colours), so they live here as the three
+   named tiers. Three tiers exist — do not add a fourth.
+   ------------------------------------------------------------------------ */
+@layer components {
+  /* --- Tier 1: CHROME (header, tab bar) ---------------------------------- */
+  .glass-chrome {
+    backdrop-filter: blur(18px) saturate(1.5);
+    -webkit-backdrop-filter: blur(18px) saturate(1.5);
+  }
+
+  .glass-chrome-header {
+    background: rgba(250, 248, 244, 0.68);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.6);
+    box-shadow: 0 1px 0 rgba(27, 30, 29, 0.05);
+  }
+  .dark .glass-chrome-header {
+    background: rgba(16, 19, 26, 0.7);
+    border-bottom-color: rgba(255, 255, 255, 0.1);
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.45);
+  }
+
+  .glass-chrome-tabbar {
+    background: rgba(255, 255, 255, 0.62);
+    border-top: 1px solid rgba(255, 255, 255, 0.55);
+    box-shadow: 0 -1px 0 rgba(27, 30, 29, 0.05);
+  }
+  /* The rail's lit edge moves from the top to the right when the bar becomes a
+     left rail at md — otherwise a vertical rail carries a horizontal highlight
+     and reads as a bar that fell over. */
+  @media (min-width: 768px) {
+    .glass-chrome-tabbar {
+      border-top: none;
+      border-right: 1px solid rgba(255, 255, 255, 0.55);
+      box-shadow: 1px 0 0 rgba(27, 30, 29, 0.05);
+    }
+    .dark .glass-chrome-tabbar {
+      border-right-color: rgba(255, 255, 255, 0.1);
+      box-shadow: 1px 0 0 rgba(0, 0, 0, 0.45);
+    }
+  }
+
+  .dark .glass-chrome-tabbar {
+    background: rgba(18, 22, 30, 0.65);
+    border-top-color: rgba(255, 255, 255, 0.1);
+    box-shadow: 0 -1px 0 rgba(0, 0, 0, 0.45);
+  }
+
+  /* --- Tier 2: FEATURED CARDS ------------------------------------------- */
+  .glass-featured {
+    position: relative;
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    background: rgba(255, 255, 255, 0.54);
+    border: 1px solid rgba(255, 255, 255, 0.68);
+    box-shadow: 0 0 0 1px rgba(27, 30, 29, 0.055);
+  }
+  .dark .glass-featured {
+    background: rgba(255, 255, 255, 0.07);
+    border-color: rgba(255, 255, 255, 0.14);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05);
+  }
+  /* 1px top highlight gradient (transparent → white .9 → transparent) */
+  .glass-featured::before {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 1px;
+    background: linear-gradient(
+      to right,
+      transparent,
+      rgba(255, 255, 255, 0.9),
+      transparent
+    );
+    pointer-events: none;
+  }
+  .dark .glass-featured::before {
+    background: linear-gradient(
+      to right,
+      transparent,
+      rgba(255, 255, 255, 0.22),
+      transparent
+    );
+  }
+
+  /* --- Tier 3: BRAND MOMENTS (login, empty states) ----------------------- */
+  .glass-moment {
+    backdrop-filter: blur(11px);
+    -webkit-backdrop-filter: blur(11px);
+    background: rgba(255, 255, 255, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.68);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8),
+      0 0 0 1px rgba(27, 30, 29, 0.06), 0 10px 28px rgba(36, 66, 124, 0.1);
+  }
+  .dark .glass-moment {
+    background: rgba(255, 255, 255, 0.07);
+    border-color: rgba(255, 255, 255, 0.14);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.15),
+      0 0 0 1px rgba(255, 255, 255, 0.05), 0 10px 28px rgba(0, 0, 0, 0.4);
+  }
+
+  /* The radial ink-300 halo a brand moment sits on. */
+  .ink-halo {
+    background: radial-gradient(
+      circle at 50% 50%,
+      rgba(143, 180, 232, 0.5) 0%,
+      rgba(143, 180, 232, 0) 70%
+    );
+  }
+  .dark .ink-halo {
+    background: radial-gradient(
+      circle at 50% 50%,
+      rgba(143, 180, 232, 0.18) 0%,
+      rgba(143, 180, 232, 0) 70%
+    );
+  }
+
+  /* --- SMOKED HERO (opaque; identical in both modes) --------------------- */
+  /* THE HERO BREATHES. A single 160deg linear ramp between two close navies
+     reads as flat fill at card size — the eye needs a light SOURCE, not a
+     gradient. Two radial washes are layered over the ramp: a warm ink-400
+     bloom off the top-left where the light would fall, and a cooler ink-300
+     lift at the lower right so the far corner does not go dead. Both are under
+     15% — at the size this renders, more turns it into a nightclub. */
+  .smoked-hero {
+    position: relative;
+    background:
+      radial-gradient(120% 140% at 12% -10%, rgba(91, 130, 196, 0.34) 0%, rgba(91, 130, 196, 0) 55%),
+      radial-gradient(90% 120% at 92% 108%, rgba(143, 180, 232, 0.16) 0%, rgba(143, 180, 232, 0) 60%),
+      linear-gradient(160deg, #16294b 0%, #0f1e38 65%);
+    border: 1px solid rgba(143, 180, 232, 0.28);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16),
+      inset 0 0 48px rgba(91, 130, 196, 0.14), 0 14px 34px rgba(15, 30, 56, 0.22);
+  }
+  .smoked-hero::before {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 1px;
+    background: linear-gradient(
+      to right,
+      transparent,
+      rgba(255, 255, 255, 0.34),
+      transparent
+    );
+    pointer-events: none;
+  }
+
+  /* --- AMBIENT BLOBS (two blurred radial fields per screen) -------------- */
+  .ambient-field {
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+    z-index: 0;
+  }
+  .ambient-blob {
+    position: absolute;
+    border-radius: 9999px;
+    filter: blur(30px);
+  }
+  .ambient-blob-a {
+    background: rgba(36, 66, 124, 0.14);
+  }
+  .ambient-blob-b {
+    background: rgba(143, 180, 232, 0.18);
+  }
+  .dark .ambient-blob-a {
+    background: rgba(70, 110, 180, 0.28);
+  }
+  .dark .ambient-blob-b {
+    background: rgba(143, 180, 232, 0.13);
+  }
+
+  /* --- CHIP LANGUAGE ------------------------------------------------------
+     The mockup's metadata is tinted CONTAINERS, not coloured text on the page
+     ground: "2 UPDATES" sits in a soft amber wash, "Going quiet" in a red one.
+     That is what stops a screen reading as grayscale-plus-one-accent — the
+     colour has AREA, not just a few coloured glyphs.
+
+     Defined here rather than as Tailwind colours because a chip needs
+     background, text and border to move together; a colour scale cannot
+     express that, and splitting them across three utilities is how the three
+     drift apart. Each tint is the SAME semantic token as the dot and the word
+     beside it, washed back — so a warning chip can never disagree with a
+     warning dot.
+
+     Alphas differ by mode on purpose: on warm paper a 12% wash reads as a
+     tint, while on near-black the same alpha vanishes, so dark runs hotter on
+     the wash and cooler on the border. */
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    border-radius: 7px;
+    padding: 3px 7px;
+    font-family: '"IBM Plex Mono"', monospace;
+    font-size: 10.5px;
+    font-weight: 600;
+    line-height: 1.25;
+    letter-spacing: 0.055em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    border: 1px solid transparent;
+  }
+
+  /* TWO CHIP REGISTERS, because the mockup has two and they mean different
+     things. A COUNT ("2 UPDATES") is metadata: mono, uppercase, tracked — it
+     is a number and a category, and mono keeps digits aligned down a list. A
+     STATE ("Going quiet", "Hot") is the app talking: sentence-case sans at
+     12px/600, exactly as the mockup draws it.
+
+     Both are tinted containers, which is the vibrancy change. Flattening them
+     into one register was the first thing I tried and it made "Going quiet"
+     shout in uppercase mono — louder than the channel name above it, and not
+     what the mockup shows. The tint is shared; the type is not. */
+  .chip-state {
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
+    padding: 3px 9px 4px;
+    border-radius: 999px;
+  }
+
+  .chip-info    { background: rgba(91,130,196,0.14);  color: #3C63A8; border-color: rgba(91,130,196,0.22); }
+  .chip-success { background: rgba(30,138,90,0.13);   color: #17754C; border-color: rgba(30,138,90,0.22); }
+  .chip-warning { background: rgba(176,122,46,0.15);  color: #8E6122; border-color: rgba(176,122,46,0.26); }
+  .chip-alert   { background: rgba(194,69,58,0.13);   color: #A93A30; border-color: rgba(194,69,58,0.24); }
+  .chip-neutral { background: rgba(27,30,29,0.055);   color: #6E7573; border-color: rgba(27,30,29,0.10); }
+
+  .dark .chip-info    { background: rgba(127,163,222,0.16); color: #A8C4EE; border-color: rgba(127,163,222,0.24); }
+  .dark .chip-success { background: rgba(59,175,124,0.16);  color: #6FCBA1; border-color: rgba(59,175,124,0.24); }
+  .dark .chip-warning { background: rgba(209,154,74,0.18);  color: #E3B472; border-color: rgba(209,154,74,0.28); }
+  .dark .chip-alert   { background: rgba(224,101,90,0.17);  color: #F08A80; border-color: rgba(224,101,90,0.28); }
+  .dark .chip-neutral { background: rgba(255,255,255,0.06);  color: #9AA1AE; border-color: rgba(255,255,255,0.10); }
+
+  /* --- PAGE GLOW ----------------------------------------------------------
+     The mockup's canvas is not a flat fill: there is a faint ink bloom behind
+     the top of the content, which is what keeps a mostly-empty screen from
+     reading as a blank sheet. Sits under the content (the ambient field owns
+     z-0; this is painted on <body>'s own backdrop) and is deliberately weaker
+     than the ambient blobs — it is the ground breathing, not a light source. */
+  .page-glow {
+    position: absolute;
+    /* HORIZONTALLY FLUSH, not bled. An earlier -20% inset on each side made
+       this 140% of the viewport and pushed the document to 440px at a 390px
+       width — the glow itself is invisible, so the only symptom was a page
+       that scrolled sideways. The bloom is a radial that fades well before
+       its own box, so widening the BOX bought nothing the gradient stops
+       could not. Any decorative layer that exceeds the viewport needs a
+       clipping parent, and this one has none by design. */
+    inset: -80px 0 auto 0;
+    height: 420px;
+    pointer-events: none;
+    background: radial-gradient(
+      90% 100% at 50% 0%,
+      rgba(36, 66, 124, 0.10) 0%,
+      rgba(36, 66, 124, 0.045) 42%,
+      rgba(36, 66, 124, 0) 74%
+    );
+  }
+  .dark .page-glow {
+    background: radial-gradient(
+      90% 100% at 50% 0%,
+      rgba(143, 180, 232, 0.12) 0%,
+      rgba(91, 130, 196, 0.055) 45%,
+      rgba(91, 130, 196, 0) 76%
+    );
+  }
+
+  /* --- DESKTOP DENSITY + HOVER (lg, 1024px and up) ------------------------
+     Below lg none of this applies; the mobile layout is byte-for-byte the
+     one that shipped.
+
+     --dot-top: where a feed row's spine dot sits, measured from the row's
+     top to the dot's top edge. It is the card's 20px inset + the 21px chip
+     row + the 8px gap + half the 18px headline line, minus half the 15px
+     dot — i.e. the dot is centred on the headline, not on the chip. The
+     spine starts at the same offset so the connector runs dot-to-dot. */
+  @media (min-width: 1024px) {
+    :root {
+      --dot-top: 50px;
+    }
+    .hover-lift {
+      transition: box-shadow 120ms ease, transform 120ms ease;
+    }
+    /* The hover shadow itself is the `shadow-glass` utility on the element:
+       a utility beats a component-layer rule, so it cannot live here. */
+    .hover-lift:hover {
+      transform: translateY(-1px);
+    }
+  }
+
+  /* --- WIRE SPINE -------------------------------------------------------- */
+  /* The vertical hairline the 13px kind dots sit on. */
+  /* INK, not neutral grey. The spine runs the height of the feed, so it is the
+     one element that can carry the accent through a whole screen without
+     shouting — which is what light mode was missing. At 8% near-black it read
+     as a smudge; at 20% ink it reads as a deliberate line and gives the light
+     theme a pulse. Dark mode keeps a white hairline: ink on near-black would
+     disappear. */
+  .wire-spine {
+    background: rgba(36, 66, 124, 0.20);
+  }
+  .dark .wire-spine {
+    background: rgba(255, 255, 255, 0.1);
+  }
+}

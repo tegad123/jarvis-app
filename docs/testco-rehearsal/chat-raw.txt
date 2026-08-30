@@ -1,0 +1,3 @@
+{"type": "delta", "text": "I"}
+{"type": "delta", "text": " don't have a specific company assigned — I'm Claude Code, your general-purpose AI assistant, ready to help with whatever you're working on."}
+{"type": "done", "finish_reason": "stop", "usage": {"prompt_tokens": 23564, "completion_tokens": 48, "total_tokens": 23612}}
