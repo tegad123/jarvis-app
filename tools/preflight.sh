@@ -19,6 +19,7 @@ cd "$repo_root"
 
 failures=()
 secret_pattern='sk''-ant-'
+skill=".cursor/skills/verify-jarvis/SKILL.md"
 
 echo "1. Branch commits"
 if ! git show-ref --verify --quiet "refs/heads/$branch"; then
@@ -88,39 +89,47 @@ for file in "${changed_files[@]}"; do
 done
 
 if [[ ${#code_files[@]} -gt 0 ]]; then
-  skill=".cursor/skills/verify-jarvis/SKILL.md"
   echo "  Applicable verification from $skill:"
   if [[ ! -f "$skill" ]]; then
-    failures+=("verify-jarvis feature map is missing: $skill")
-    echo "  FAIL: ${failures[-1]}"
+    failures+=("feature map unparseable — gate cannot name verification")
+    echo "  FAIL: feature map unparseable — gate cannot name verification ($skill missing)"
   else
-    python3 - "$skill" "${code_files[@]}" <<'PY'
+    map_out=$(python3 - "$skill" "${code_files[@]}" <<'PY'
 import re
 import sys
 from pathlib import Path
 
-skill = Path(sys.argv[1]).read_text()
+text = Path(sys.argv[1]).read_text()
 files = sys.argv[2:]
 rows = []
-for line in skill.splitlines():
-    if not line.startswith("| **"):
+in_table = False
+for line in text.splitlines():
+    if line.startswith("| Surface |"):
+        in_table = True
+        continue
+    if not in_table:
+        continue
+    if not line.startswith("|"):
+        break
+    if re.match(r"^\|[-:| ]+\|$", line):
         continue
     columns = [part.strip() for part in line.strip().strip("|").split("|")]
     if len(columns) < 3:
         continue
-    surface = re.sub(r"[*`]", "", columns[0])
+    surface = re.sub(r"[*`]", "", columns[0]).strip()
+    if not surface:
+        continue
     implementations = columns[1]
     scripts = [
         token for token in re.findall(r"`([^`]+)`", columns[2])
-        if re.search(r"(^|/)(verify[^/ ]*|roles)\.(py|mjs)(\s|$)", token)
+        if re.search(r"(^|/)(verify[^/` ]+|roles)\.(py|mjs)$", token)
+        or token.endswith("roles.py")
     ]
     rows.append((surface, implementations, scripts))
 
-broad = {
-    "app/main.py", "app/auth.py", "app/accounts.py", "app/config.py",
-    "frontend/src/App.tsx", "frontend/src/lib/api.ts",
-    "frontend/src/lib/types.ts", "frontend/src/components/TabBar.tsx",
-}
+if not rows:
+    print("FAIL: feature map unparseable — gate cannot name verification")
+    sys.exit(2)
 
 for file in files:
     matches = []
@@ -128,10 +137,11 @@ for file in files:
         tokens = re.findall(r"`([^`]+)`", implementations)
         direct = any(
             token == file
+            or token.endswith("/" + Path(file).name)
             or ("/" not in token and Path(file).name == token)
             for token in tokens
         )
-        if file in broad or direct:
+        if direct:
             matches.append((surface, scripts))
     if not matches:
         matches = [(surface, scripts) for surface, _, scripts in rows]
@@ -139,6 +149,17 @@ for file in files:
         names = ", ".join(scripts) if scripts else "(feature map names no script)"
         print(f"    {file} -> {surface}: {names}")
 PY
+    )
+    map_rc=$?
+    if [[ -n "$map_out" ]]; then
+      printf '%s\n' "$map_out"
+    fi
+    if [[ $map_rc -ne 0 ]]; then
+      failures+=("feature map unparseable — gate cannot name verification")
+      if [[ "$map_out" != *"feature map unparseable"* ]]; then
+        echo "  FAIL: feature map unparseable — gate cannot name verification"
+      fi
+    fi
   fi
 fi
 
@@ -146,16 +167,31 @@ echo "4. Ledger requirement"
 if "$app_changed"; then
   echo "  app/ changed: merge requires a before/after ledger sandwich."
   echo "  WAL-inclusive snapshot command from the skill:"
+  found_header=false
+  command_lines=()
   printing=false
-  while IFS= read -r line; do
+  while IFS= read -r line || [[ -n "$line" ]]; do
     if [[ "$line" == "# Never install sqlite3. WAL-inclusive snapshot via the venv:" ]]; then
+      found_header=true
       printing=true
+      continue
     fi
     if "$printing"; then
       [[ "$line" == '```' ]] && break
-      printf '    %s\n' "$line"
+      command_lines+=("$line")
     fi
-  done < ".cursor/skills/verify-jarvis/SKILL.md"
+  done < "$skill"
+  if ! "$found_header"; then
+    failures+=("snapshot command header not found in $skill")
+    echo "  FAIL: snapshot command header not found in $skill"
+  elif [[ ${#command_lines[@]} -eq 0 ]]; then
+    failures+=("snapshot command extraction found the header but zero command lines")
+    echo "  FAIL: snapshot command extraction found the header but zero command lines"
+  else
+    for line in "${command_lines[@]}"; do
+      printf '    %s\n' "$line"
+    done
+  fi
 else
   echo "  PASS: no app/ changes"
 fi
@@ -167,13 +203,16 @@ for file in "${changed_files[@]}"; do
     requirements.txt|package.json) dependency_changes+=("$file") ;;
   esac
 done
-if [[ ${#dependency_changes[@]} -gt 0 && "$branch" != *deps* ]]; then
+if [[ ${#dependency_changes[@]} -eq 0 ]]; then
+  echo "  PASS: no unauthorized dependency manifest changes"
+elif [[ "${PREFLIGHT_ALLOW_DEPS:-}" == "1" ]]; then
+  echo "  PASS: dependency manifest changes allowed by PREFLIGHT_ALLOW_DEPS=1:"
+  printf '    %s\n' "${dependency_changes[@]}"
+else
   for file in "${dependency_changes[@]}"; do
-    failures+=("dependency manifest changed without 'deps' in branch name: $file")
+    failures+=("dependency manifest changed: $file (set PREFLIGHT_ALLOW_DEPS=1 to allow)")
     echo "  FAIL: ${failures[-1]}"
   done
-else
-  echo "  PASS: no unauthorized dependency manifest changes"
 fi
 
 if [[ ${#failures[@]} -gt 0 ]]; then
