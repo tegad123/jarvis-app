@@ -1,0 +1,68 @@
+=== ledger-after 2026-08-30T19:40:33Z ===
+snapshot via Python sqlite3 file:...?mode=ro&immutable=1 (same method as ledger-before)
+
+--- jarvis_tasks.db status counts ---
+archived|6
+done|3
+in_progress|1
+open|19
+
+--- jarvis_leads.db archived counts ---
+0|41
+1|6
+
+--- jarvis_threads.db active threads ---
+9
+
+--- jarvis_threads.db counters ---
+digests_delivered|10
+tasks_created.manual|15
+tasks_completed|2
+tasks_completion_seconds|439
+tasks_completion_count|2
+tasks_created.chat|3
+chat_task_attempts|2
+chat_task_created|2
+tasks_created.email|1
+nudges_sent.quiet_lead|24
+leads_flagged_quiet|24
+threads_converted_to_tasks|1
+sweep_runs|443
+tasks_created.meeting|10
+meetings_ingested|2
+meeting_tasks_created|10
+meeting_tasks_assigned|10
+meeting_ask_turns|1
+showings_answered|3
+monthly_reports_posted|1
+nudges_sent.task_followup|77
+escalations|17
+
+--- jarvis_threads.db counter_days (20) ---
+leads_flagged_quiet|2026-08-30|1
+nudges_sent.quiet_lead|2026-08-30|1
+sweep_runs|2026-08-30|9
+nudges_sent.task_followup|2026-08-30|1
+digests_delivered|2026-08-29|2
+escalations|2026-08-29|10
+nudges_sent.task_followup|2026-08-29|27
+leads_flagged_quiet|2026-08-29|7
+nudges_sent.quiet_lead|2026-08-29|7
+sweep_runs|2026-08-29|114
+escalations|2026-08-28|7
+digests_delivered|2026-08-28|2
+nudges_sent.task_followup|2026-08-28|25
+leads_flagged_quiet|2026-08-28|5
+nudges_sent.quiet_lead|2026-08-28|5
+sweep_runs|2026-08-28|106
+chat_task_created|2026-08-27|1
+chat_task_attempts|2026-08-27|1
+tasks_created.chat|2026-08-27|1
+digests_delivered|2026-08-27|2
+
+--- jsonl line counts ---
+   996 /opt/testco/hermes/state/activity_feed.jsonl
+    25 /opt/testco/hermes/state/approvals.jsonl
+    10 /opt/testco/hermes/state/approvals_decisions.jsonl
+   177 /opt/testco/hermes/outbox/captured_mail.jsonl
+  1208 total

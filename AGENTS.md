@@ -61,8 +61,15 @@ A change is done when, on testco (8710):
 Not done: "the code looks right", "tests should pass", a passing build alone.
 
 ## Current known state (2026-08-30)
-- /opt/testco/jarvis-app is STALE relative to main (predates per-user auth,
-  tasks, members). Branch testco documents that snapshot. Reconciling it up
-  to main is a planned, human-supervised task — do not "helpfully" sync it.
+- /opt/testco/jarvis-app is STALE relative to main. It **has** per-user auth
+  (dana PIN login on :8710 verified 2026-08-30; source:
+  `docs/testco-baseline/BASELINE-REPORT.md`). It **lacks** the Tasks tab/API,
+  channel members, operator-role frontend, and later design passes. Branch
+  testco documents that snapshot. Reconciling it up to main is a planned,
+  human-supervised task — do not "helpfully" sync it.
+- `JARVIS_ALLOW_WRITES=1` on the running testco units is **deliberate**:
+  writes are enabled behind the `.example` recipient boundary so action
+  claims are testable. A verify assertion expecting `0` is stale, not a
+  misconfiguration (`docs/testco-baseline/BASELINE-REPORT.md`).
 - External tester (Bao) is actively testing against testco. Do not change
   testco's running build without human approval.

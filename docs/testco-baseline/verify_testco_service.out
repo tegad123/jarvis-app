@@ -1,0 +1,45 @@
+=== docs/testco-rehearsal/verify_testco_service.py ===
+started: 2026-08-30T19:39:03Z
+why_safe: skill Read-only HTTP — 8710 login + GET; pings 8700. User asked to run it as the service-level check even though it is in the stale-will-fail table (dana PIN).
+
+
+── units are up, enabled, and boot-surviving ──────────────────
+  PASS  testco-gateway.service active — active
+  PASS  testco-gateway.service enabled (starts at boot) — enabled
+  PASS  testco-gateway.service Restart=on-failure — on-failure
+  PASS  testco-app.service active — active
+  PASS  testco-app.service enabled (starts at boot) — enabled
+  PASS  testco-app.service Restart=on-failure — on-failure
+
+── naming is unambiguous in systemctl ─────────────────────────
+  PASS  `systemctl list-units 'testco-*'` shows exactly the testco stack — 2 units
+  PASS  and no testco unit appears under 'jarvis-*'
+
+── the RUNNING processes point at testco, per /proc ───────────
+  PASS  both have a main PID — gateway=226730 app=226743
+  PASS  gateway: HERMES_HOME is the testco tree — /opt/testco/hermes
+  FAIL  gateway: writes are guarded — 1
+  PASS  gateway: feed redirected (PATTERN 3 — stores emit) — /opt/testco/hermes/state/activity_feed.jsonl
+  PASS  gateway: nothing points into the scratchpad
+  PASS  app: HERMES_HOME is the testco tree — /opt/testco/hermes
+  FAIL  app: writes are guarded — 1
+  PASS  app: feed redirected (PATTERN 3 — stores emit) — /opt/testco/hermes/state/activity_feed.jsonl
+  PASS  app: nothing points into the scratchpad
+
+── NO open file descriptor reaches the live tenant ────────────
+  PASS  gateway: no fd under /root/.hermes/state or /root/jarvis-app/data — []
+  PASS  gateway: it IS holding testco files open (so the check means something) — 15 testco fds
+  PASS  app: no fd under /root/.hermes/state or /root/jarvis-app/data — []
+  PASS  app: it IS holding testco files open (so the check means something) — 3 testco fds
+
+── the two tenants serve different data ───────────────────────
+  FAIL  testco serves its own app-native leads — source=store count=41
+  FAIL  testco feed is its own (90 seeded events) — 996
+  PASS  LIVE feed still 82 — unchanged by any of this — 82
+  PASS  live app still healthy
+
+21/25 passed
+FAILED: gateway: writes are guarded; app: writes are guarded; testco serves its own app-native leads; testco feed is its own (90 seeded events)
+
+exit: 1
+finished: 2026-08-30T19:39:05Z

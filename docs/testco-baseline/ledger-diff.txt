@@ -1,0 +1,10 @@
+--- /root/jarvis-app/docs/testco-baseline/ledger-before.txt	2026-08-30 19:38:08.956449274 +0000
++++ /root/jarvis-app/docs/testco-baseline/ledger-after.txt	2026-08-30 19:40:33.219284643 +0000
+@@ -1,5 +1,5 @@
+-=== ledger-before 2026-08-30T19:38:08Z ===
+-snapshot via Python sqlite3 file:...?mode=ro&immutable=1 (sqlite3 CLI not installed)
++=== ledger-after 2026-08-30T19:40:33Z ===
++snapshot via Python sqlite3 file:...?mode=ro&immutable=1 (same method as ledger-before)
+ 
+ --- jarvis_tasks.db status counts ---
+ archived|6

@@ -84,7 +84,8 @@ guard.
 - `docs/operator-inject/verify_outbox.py` — 8710 GET
 - `docs/testco-rehearsal/verify_testco_service.py` — 8710 login + GET; pings 8700
 - `docs/verify_w3_sheet_leads.py` — **hardcoded `:8700`**, GET `/api/leads` only. Do not run for testco.
-- Playwright visual/read: `docs/testco-rehearsal/seed/verifyTestcoSeeded.mjs` (8710), `docs/testco-rehearsal/verifyTestco.mjs` (8710, empty-tenant gate), `docs/desktop-layout/verify.mjs`, `docs/verifyW3ui.mjs` (8701), `docs/hero-summary-shots/verifyHero.mjs`, `docs/feed-humanization-shots/verifyFeed.mjs`, `docs/visual-polish/verifyVisual.mjs`, `docs/visual-polish-r2/verifyResponsive.mjs`, `docs/phase5-shots/verifyApprovals.mjs`
+- Playwright visual/read: `docs/testco-rehearsal/seed/verifyTestcoSeeded.mjs` (8710), `docs/desktop-layout/verify.mjs`, `docs/verifyW3ui.mjs` (8701), `docs/hero-summary-shots/verifyHero.mjs`, `docs/feed-humanization-shots/verifyFeed.mjs`, `docs/visual-polish/verifyVisual.mjs`, `docs/visual-polish-r2/verifyResponsive.mjs`, `docs/phase5-shots/verifyApprovals.mjs`
+- `docs/testco-rehearsal/verifyTestco.mjs` — **unrunnable**. Bare `import … from 'playwright'` (ESM cannot see the hermes-agent install; `NODE_PATH` does not help) and a missing scratchpad `.env`. Do not spend a session rediscovering this (`docs/testco-baseline/BASELINE-REPORT.md`). It is also the empty-tenant / legacy-Passphrase gate, wrong for seeded PIN testco.
 
 ## 2. How to authenticate
 
@@ -174,13 +175,44 @@ counters. The script's own `PASS` output alone is not proof.
 3. **After** — same query. Assert the **delta**, not a threshold.
 4. Paste both numbers. A skipped assertion is a hole.
 
+The `sqlite3` CLI is **not installed**. `file:…?mode=ro&immutable=1` reads
+only the checkpointed file and reports **stale-low** counters (WAL on
+`jarvis_threads.db` was ~80 sweep_runs ahead on 2026-08-30). Copy
+`db`+`-wal`+`-shm` to a temp dir, then open the copy
+(`docs/testco-baseline/BASELINE-REPORT.md`).
+
 ```bash
 # Testco stores. Never query /root/.hermes/state/ as the testco ledger.
+# Never install sqlite3. WAL-inclusive snapshot via the venv:
+/root/jarvis-app/.venv/bin/python - <<'PY'
+import sqlite3, shutil
+from pathlib import Path
+T = Path("/opt/testco/hermes/state")
+S = Path("/tmp/testco-ledger-snap")
+shutil.rmtree(S, ignore_errors=True); S.mkdir()
+for name in ("jarvis_tasks.db", "jarvis_leads.db", "jarvis_threads.db"):
+    src = T / name
+    if src.exists():
+        shutil.copy2(src, S / name)
+    for suf in ("-wal", "-shm"):
+        w = T / (name + suf)
+        if w.exists():
+            shutil.copy2(w, S / (name + suf))
+def q(db, sql):
+    p = S / db
+    if not p.exists():
+        print(f"MISSING {db}"); return
+    con = sqlite3.connect(str(p))
+    rows = con.execute(sql).fetchall(); con.close()
+    if not rows: print("(0 rows)")
+    for r in rows: print("|".join("" if x is None else str(x) for x in r))
+print("--- tasks ---"); q("jarvis_tasks.db", "SELECT status, COUNT(*) FROM tasks GROUP BY status;")
+print("--- leads ---"); q("jarvis_leads.db", "SELECT archived, COUNT(*) FROM leads GROUP BY archived;")
+print("--- threads ---"); q("jarvis_threads.db", "SELECT COUNT(*) FROM threads WHERE archived=0;")
+print("--- counters ---"); q("jarvis_threads.db", "SELECT name, value FROM counters;")
+print("--- counter_days ---"); q("jarvis_threads.db", "SELECT name, day, value FROM counter_days ORDER BY day DESC LIMIT 20;")
+PY
 T=/opt/testco/hermes/state
-sqlite3 "$T/jarvis_tasks.db" "SELECT status, COUNT(*) FROM tasks GROUP BY status;"
-sqlite3 "$T/jarvis_leads.db" "SELECT archived, COUNT(*) FROM leads GROUP BY archived;"
-sqlite3 "$T/jarvis_threads.db" "SELECT COUNT(*) FROM threads WHERE archived=0; SELECT name, value FROM counters;"
-sqlite3 "$T/jarvis_threads.db" "SELECT name, day, value FROM counter_days ORDER BY day DESC LIMIT 20;"
 wc -l "$T/activity_feed.jsonl" "$T/approvals.jsonl" "$T/approvals_decisions.jsonl" \
     /opt/testco/hermes/outbox/captured_mail.jsonl
 ```
@@ -196,19 +228,34 @@ the side effects.
 
 ## 5. Known gap — stale testco
 
-`/opt/testco/jarvis-app` is **STALE vs main**. It predates per-user auth,
-tasks, and members (`AGENTS.md`). A fail on 8710 for those features means
+`/opt/testco/jarvis-app` is **STALE vs main**. It **has** per-user auth:
+dana PIN login on :8710 succeeded 2026-08-30
+(`docs/testco-baseline/BASELINE-REPORT.md`). It **lacks** the Tasks
+tab/API, channel members, operator-role frontend, and later design
+passes (`AGENTS.md`). A fail on 8710 for those missing features means
 the **deploy lacks the code**, not that main is broken. Do not "fix" by
 syncing testco. Reconciling is a human-supervised task. Bao is testing
 the running build; do not change it without approval.
+
+`JARVIS_ALLOW_WRITES=1` on the running testco units is **deliberate**
+(writes behind the `.example` boundary so action claims are testable).
+`verify_testco_service.py` asserting `==0` is a stale assertion, not a
+misconfiguration (`docs/testco-baseline/BASELINE-REPORT.md`).
 
 **Will fail on running testco because the feature is absent (not because it is broken):**
 
 | Feature | Scripts |
 |---------|---------|
-| Per-user auth (person+PIN, roles, operator label) | `verify_inject.py` (dana/priya/tester gates), `verify_outbox.py`, `verify_named_operator.py`, `verify_approval_executor.py` part 2, `verify_fullbody_fixture.py`, `verify_metrics.py` live role check, `verify_testco_service.py` (dana login), `verifyTestcoSeeded.mjs`, `docs/desktop-layout/verify.mjs`, `docs/testco-rehearsal/roles.py` |
 | Tasks | `verify_tasks_api.py`, `verify_tasks_chat.py` §(a), `verifyTasksUI.mjs`, `mutate_tasks.py` |
 | Members / W3 scoping | `verify_w3_scope.py`, `verifyW3ui.mjs`, `verifyTestcoSeeded.mjs` (dana/omar/priya channel scope), `roles.py` |
+| Operator-role frontend | `verify_outbox.py`, `verify_named_operator.py`, `verify_inject.py` (operator inject + role gates) |
+
+Basic PIN login is **not** in this table. `verify_testco_service.py`
+(dana login), `verify_approval_executor.py` part 2,
+`verify_fullbody_fixture.py`, `verify_metrics.py` live role check, and
+`docs/desktop-layout/verify.mjs` were listed here as “auth absent”;
+the baseline proved person+PIN works on 8710, so a fail there is not a
+stale-deploy gap.
 
 In-process suites that import **this repo** (`/root/jarvis-app`) and a
 scratch box do **not** hit the stale deploy: `verify_chat_honesty.py`,
@@ -217,8 +264,10 @@ scratch box do **not** hit the stale deploy: `verify_chat_honesty.py`,
 `verify_config_apply.py`, `verify_lead_capture.py`. They prove current
 `app/` code, not `/opt/testco/jarvis-app`.
 
-`verifyTestco.mjs` expects a **fresh empty** tenant and **legacy
-Passphrase** login — wrong for today's seeded PIN testco.
+`docs/testco-rehearsal/verifyTestco.mjs` is **unrunnable** (bare
+`playwright` import + missing scratchpad env) and also expects a fresh
+empty tenant with legacy Passphrase — do not rediscover this
+(`docs/testco-baseline/BASELINE-REPORT.md`).
 
 `verify_w3_auth.py` / `verify_w3_sheet_leads.py` target **live 8700**, not
 stale testco.
@@ -234,7 +283,10 @@ stale testco.
    `/usr/local/lib/hermes-agent/node_modules/playwright/index.mjs`
    (as `verifyTasksUI.mjs` does). Many `verify*.mjs` take the URL as
    `argv[2]` with **no default** — pass `http://127.0.0.1:8710` explicitly
-   or they will not run; never pass 8700.
+   or they will not run; never pass 8700. Skip
+   `docs/testco-rehearsal/verifyTestco.mjs` — unrunnable (bare playwright
+   import + missing scratchpad env;
+   `docs/testco-baseline/BASELINE-REPORT.md`).
 7. Tasks API role matrix: `docs/tasks/tasks_sandbox.sh start` then
    `verify_tasks_api.py` on **8711**. That sandbox copies testco
    accounts/threads and uses **current** `/root/jarvis-app` code — it is

@@ -1,0 +1,71 @@
+=== ledger-after WAL-inclusive copy 2026-08-30T19:40:33Z ===
+copied db+wal+shm to /tmp/testco-ledger-after then queried (sqlite3 CLI not installed; mode=ro without immutable fails on WAL)
+
+--- jarvis_tasks.db status counts ---
+archived|6
+done|3
+in_progress|1
+open|19
+
+--- jarvis_leads.db archived counts ---
+0|41
+1|6
+
+--- jarvis_threads.db active threads ---
+9
+
+--- jarvis_threads.db counters ---
+digests_delivered|11
+tasks_created.manual|15
+tasks_completed|4
+tasks_completion_seconds|761161
+tasks_completion_count|4
+tasks_created.chat|3
+chat_task_attempts|2
+chat_task_created|2
+tasks_created.email|1
+nudges_sent.quiet_lead|29
+leads_flagged_quiet|29
+threads_converted_to_tasks|1
+sweep_runs|522
+tasks_created.meeting|10
+meetings_ingested|3
+meeting_tasks_created|10
+meeting_tasks_assigned|10
+meeting_ask_turns|1
+showings_answered|3
+monthly_reports_posted|1
+nudges_sent.task_followup|87
+escalations|17
+digest_replies_resolved|14
+tasks_completed_late|1
+tasks_completed_no_deadline|1
+
+--- jarvis_threads.db counter_days (20) ---
+tasks_completed_no_deadline|2026-08-30|1
+digests_delivered|2026-08-30|1
+meetings_ingested|2026-08-30|1
+tasks_completed_late|2026-08-30|1
+tasks_completion_count|2026-08-30|2
+tasks_completion_seconds|2026-08-30|760722
+tasks_completed|2026-08-30|2
+digest_replies_resolved|2026-08-30|14
+leads_flagged_quiet|2026-08-30|6
+nudges_sent.quiet_lead|2026-08-30|6
+sweep_runs|2026-08-30|88
+nudges_sent.task_followup|2026-08-30|11
+digests_delivered|2026-08-29|2
+escalations|2026-08-29|10
+nudges_sent.task_followup|2026-08-29|27
+leads_flagged_quiet|2026-08-29|7
+nudges_sent.quiet_lead|2026-08-29|7
+sweep_runs|2026-08-29|114
+escalations|2026-08-28|7
+digests_delivered|2026-08-28|2
+
+--- jsonl line counts ---
+   996 /opt/testco/hermes/state/activity_feed.jsonl
+    25 /opt/testco/hermes/state/approvals.jsonl
+    10 /opt/testco/hermes/state/approvals_decisions.jsonl
+   177 /opt/testco/hermes/outbox/captured_mail.jsonl
+  1208 total
