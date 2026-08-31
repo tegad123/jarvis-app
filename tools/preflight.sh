@@ -18,6 +18,7 @@ repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || {
 cd "$repo_root"
 
 failures=()
+secret_pattern='sk''-ant-'
 
 echo "1. Branch commits"
 if ! git show-ref --verify --quiet "refs/heads/$branch"; then
@@ -49,18 +50,18 @@ for file in "${changed_files[@]}"; do
      [[ "$file" =~ \.(service|socket|timer|target|path|mount|automount|slice)$ ]]; then
     forbidden_failures+=("forbidden systemd unit path: $file")
   fi
-  if [[ "$file" == *sk-ant-* ]]; then
-    forbidden_failures+=("forbidden sk-ant- pattern in path: $file")
+  if [[ "$file" == *"$secret_pattern"* ]]; then
+    forbidden_failures+=("forbidden $secret_pattern pattern in path: $file")
   fi
 done
 
-mapfile -t secret_files < <(git diff --name-only -G'sk-ant-' "main..$branch" --)
+mapfile -t secret_files < <(git diff --name-only -G"$secret_pattern" "main..$branch" --)
 for file in "${secret_files[@]}"; do
-  forbidden_failures+=("forbidden sk-ant- pattern in diff: $file")
+  forbidden_failures+=("forbidden $secret_pattern pattern in diff: $file")
 done
 
 if [[ ${#forbidden_failures[@]} -eq 0 ]]; then
-  echo "  PASS: no forbidden paths or sk-ant- patterns"
+  echo "  PASS: no forbidden paths or $secret_pattern patterns"
 else
   for reason in "${forbidden_failures[@]}"; do
     failures+=("$reason")
