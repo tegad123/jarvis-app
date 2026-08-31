@@ -1,18 +1,18 @@
-# [PRODUCT]
+# Yamin
 
-[PRODUCT] is an AI admin assistant for real estate agents and their teams. It watches the tenant's Gmail and Google Calendar and turns routine admin work into tasks, calendar events, and drafts. This page is the product description for people considering the service and for reviewers of our Google API access.
+Yamin is an AI admin assistant for real estate agents and their teams. It watches the tenant's Gmail and Google Calendar and turns routine admin work into tasks, calendar events, and drafts. This page is the product description for people considering the service and for reviewers of our Google API access.
 
 [Privacy policy](privacy.md) · [Terms of service](terms.md)
 
 ## Who it is for
 
-[PRODUCT] is for a real estate team that already works in Gmail and Google Calendar. The tenant is the brokerage or team that signs up. Staff on that tenant share a task list. Clients of that team are not users of [PRODUCT].
+Yamin is for a real estate team that already works in Gmail and Google Calendar. The tenant is the brokerage or team that signs up. Staff on that tenant share a task list. Clients of that team are not users of Yamin.
 
 ## What it does
 
 These functions are in production.
 
-**Unanswered mail becomes a task.** The app watches the tenant's inbox. When an important email sits unanswered past a window the tenant chooses, [PRODUCT] opens a tracked task with a deadline.
+**Unanswered mail becomes a task.** The app watches the tenant's inbox. When an important email sits unanswered past a window the tenant chooses, Yamin opens a tracked task with a deadline.
 
 **Showing requests.** Showing requests that arrive through ShowingSmart get an automatic reply containing the property information the tenant prepared for that listing, and a calendar event. These replies are pre-approved by the tenant: the tenant writes and approves the property-info content up front, and the app matches the request to the right property and sends it. Other client-facing messages wait for staff sign-off.
 
@@ -32,12 +32,12 @@ Google data used by the app stays in the tenant's own Gmail, Calendar, Sheets, a
 
 ## How onboarding works
 
-A person on our side works with the tenant for about two weeks to match [PRODUCT] to that team's workflow: which inbox to watch, how long to wait before unanswered mail becomes a task, who gets the digest, and which lead sheet to use if the team keeps leads in Google Sheets.
+A person on our side works with the tenant for about two weeks to match Yamin to that team's workflow: which inbox to watch, how long to wait before unanswered mail becomes a task, who gets the digest, and which lead sheet to use if the team keeps leads in Google Sheets.
 
 After that, human support continues. The tenant can change the wait window and related settings as their workflow changes.
 
 ## Privacy and terms
 
-Google API access is described in the [privacy policy](privacy.md), including each OAuth scope and what it is used for. Use of [PRODUCT] is governed by the [terms of service](terms.md).
+Google API access is described in the [privacy policy](privacy.md), including each OAuth scope and what it is used for. Use of Yamin is governed by the [terms of service](terms.md).
 
-Questions: [SUPPORT_EMAIL]
+Questions: support@yamin.io
