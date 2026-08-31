@@ -10,7 +10,7 @@ Contact: [SUPPORT_EMAIL]
 
 ## The service
 
-[PRODUCT] watches a real estate team's connected Gmail and Google Calendar. It opens tasks from unanswered mail, composes ShowingSmart property-info replies for staff sign-off, places showings and forwarded invites on the calendar, turns meeting transcripts into assigned tasks, sends a daily task digest, keeps a shared team task list, and tracks leads with quiet-lead nudges.
+[PRODUCT] watches a real estate team's connected Gmail and Google Calendar. It opens tasks from unanswered mail, sends ShowingSmart property-info replies using content the tenant prepared and approved in advance, places showings and forwarded invites on the calendar, turns meeting transcripts into assigned tasks, sends a daily task digest, keeps a shared team task list, and tracks leads with quiet-lead nudges.
 
 The service is provided to the tenant, the brokerage or team that signs up, and to staff the tenant invites. Clients of that team are not users of [PRODUCT].
 

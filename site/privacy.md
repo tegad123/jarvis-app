@@ -42,9 +42,9 @@ Full scope: `https://www.googleapis.com/auth/gmail.send`
 
 - Sending the daily task digest to the tenant's staff.
 - Sending quiet-lead nudges to the tenant's staff.
-- Sending a ShowingSmart property-info reply after staff sign-off, when that reply goes to someone outside the team.
+- Sending a ShowingSmart property-info reply to the requesting agent, using property information the tenant prepared and approved in advance.
 
-Client-facing mail is not sent until a staff member approves the draft.
+Showing-request replies use tenant-pre-approved content and send automatically on a matching request. Other client-facing mail is not sent until a staff member approves the draft. Sends and approval decisions are recorded.
 
 ### Calendar events (`calendar.events`)
 
