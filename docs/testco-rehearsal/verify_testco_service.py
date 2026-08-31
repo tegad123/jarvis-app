@@ -32,6 +32,41 @@ def open_files(pid):
             pass
     return out
 
+def safe_write_boundary(env):
+    runtime = Path(env.get("JARVIS_RUNTIME_CONFIG", ""))
+    skills = Path(env.get("JARVIS_SKILLS_ROOT", ""))
+    try:
+        safety = json.loads(runtime.read_text()).get("safety", {})
+    except (OSError, json.JSONDecodeError):
+        return False, f"runtime={runtime}"
+    raw = safety.get("outbound_recipient_suffix", [])
+    suffixes = [raw] if isinstance(raw, str) else list(raw or [])
+    suffixes = [str(s).strip().lower() for s in suffixes if str(s).strip()]
+    reserved = (".example", ".test", ".invalid", ".localhost",
+                "example.com", "example.net", "example.org")
+    violations = [s for s in suffixes
+                  if not any(s == r or s.endswith(r) for r in reserved)]
+    boundary = skills / "_shared" / "outbound_boundary.py"
+    safe = (
+        env.get("JARVIS_ALLOW_WRITES") == "1"
+        and safety.get("allow_writes") is True
+        and ".example" in suffixes
+        and "example.com" in suffixes
+        and not violations
+        and boundary.is_file()
+    )
+    return safe, f"writes={env.get('JARVIS_ALLOW_WRITES')} suffixes={suffixes}"
+
+def readable_jsonl_rows(path):
+    rows = 0
+    for line in Path(path).read_text(errors="replace").splitlines():
+        try:
+            if isinstance(json.loads(line), dict):
+                rows += 1
+        except json.JSONDecodeError:
+            pass
+    return rows
+
 print("\n── units are up, enabled, and boot-surviving ──────────────────")
 for unit in ("testco-gateway.service", "testco-app.service"):
     st = subprocess.run(["systemctl", "is-active", unit], capture_output=True, text=True).stdout.strip()
@@ -59,8 +94,9 @@ for label, pid in (("gateway", gpid), ("app", apid)):
     env = environ(pid)
     ck(f"{label}: HERMES_HOME is the testco tree",
        env.get("HERMES_HOME") == "/opt/testco/hermes", env.get("HERMES_HOME"))
-    ck(f"{label}: writes are guarded", env.get("JARVIS_ALLOW_WRITES") == "0",
-       env.get("JARVIS_ALLOW_WRITES"))
+    boundary_safe, boundary_detail = safe_write_boundary(env)
+    ck(f"{label}: writes are enabled behind the reserved recipient boundary",
+       boundary_safe, boundary_detail)
     ck(f"{label}: feed redirected (PATTERN 3 — stores emit)",
        env.get("JARVIS_ACTIVITY_FEED", "").startswith("/opt/testco/"),
        env.get("JARVIS_ACTIVITY_FEED"))
@@ -90,10 +126,16 @@ subprocess.run(["curl", "-s", "-c", tjar, "-X", "POST", "http://127.0.0.1:8710/a
                 "-d", json.dumps({"person_key": "dana", "pin": tpins["dana"]})],
                capture_output=True)
 tl = json.loads(api(8710, "/api/leads", tjar))
-ck("testco serves its own app-native leads", tl.get("source") == "store" and tl.get("count") == 40,
+ck("testco serves a non-empty, internally consistent app-native lead list",
+   tl.get("source") == "store" and tl.get("count", 0) > 0
+   and tl.get("count") == len(tl.get("leads", [])),
    f"source={tl.get('source')} count={tl.get('count')}")
 tf = json.loads(api(8710, "/api/feed?limit=1000", tjar))
-ck("testco feed is its own (90 seeded events)", tf.get("total") == 90, str(tf.get("total")))
+testco_feed = readable_jsonl_rows("/opt/testco/hermes/state/activity_feed.jsonl")
+ck("testco feed API matches its living tenant ledger",
+   tf.get("total", 0) > 0 and tf.get("total") == testco_feed
+   and len(tf.get("events", [])) == min(testco_feed, 1000),
+   f"api={tf.get('total')} ledger={testco_feed} returned={len(tf.get('events', []))}")
 
 live_feed = sum(1 for l in open("/root/.hermes/state/activity_feed.jsonl") if l.strip())
 ck("LIVE feed still 82 — unchanged by any of this", live_feed == 82, str(live_feed))
