@@ -28,6 +28,11 @@ emails and texts to real clients. Act accordingly.
    restarted when verification requires it.
 6. No new dependencies, schema migrations, or send-path changes without an
    explicit human yes in the conversation.
+7. After any commit, merge, or branch operation, run `git log --oneline -1`
+   (or `git branch -v` for branch ops) and paste the actual output in your
+   report. A report claiming a commit without its hash from the log is
+   unverified. Do not report a task complete on the strength of having
+   run `git commit` — report it complete on the strength of the log.
 
 ## Engineering principles (these are law, learned from real failures here)
 - A fallback that does not announce itself is a false green. Every fallback
@@ -43,6 +48,8 @@ emails and texts to real clients. Act accordingly.
 - Isolating the database is not isolating the side effects.
 - UI sentences are backend specifications. If the screen says "the sheet
   stays the place you edit", the API must enforce exactly that.
+- A claimed commit without its hash in the log is the false-green pattern
+  applied to git. The report is not the ledger; git log is the ledger.
 
 ## Multi-tenant invariants
 - Every tenant-scoped query carries tenant identity. No exceptions.
