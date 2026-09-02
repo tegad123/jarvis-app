@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import html
+import json
 import logging
 import os
 import re
@@ -31,6 +32,10 @@ SCOPES = (
 )
 SHOWING_TITLE = "Showing \u2014 123 Main St"
 HANDLED_LABEL = "Yamin/Handled"
+SHEET_STORE = Path("/root/.hermes/yamin_demo_sheet.json")
+SHEET_TITLE = "Lead Tracker (Yamin)"
+SHEET_HEADERS = ["Name", "Property", "Status", "Last Touch"]
+DEMO_LEAD_ROW = ["Yamin Demo", "123 Main St", "Contacted"]
 
 os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
 os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
@@ -72,11 +77,77 @@ def token_path() -> Path:
     return Path(raw)
 
 
-def sheet_id() -> str:
-    raw = os.environ.get("YAMIN_DEMO_SHEET_ID", "")
-    if not raw:
-        raise DemoError("YAMIN_DEMO_SHEET_ID is not set")
-    return raw
+def stored_sheet_id() -> str:
+    if not SHEET_STORE.is_file():
+        return ""
+    try:
+        data = json.loads(SHEET_STORE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return ""
+    sid = data.get("spreadsheet_id") if isinstance(data, dict) else ""
+    return sid.strip() if isinstance(sid, str) else ""
+
+
+def persist_sheet_id(sid: str) -> None:
+    SHEET_STORE.parent.mkdir(parents=True, exist_ok=True)
+    SHEET_STORE.write_text(json.dumps({"spreadsheet_id": sid}) + "\n", encoding="utf-8")
+    SHEET_STORE.chmod(0o600)
+
+
+def resolve_sheet_id() -> tuple[str, str]:
+    stored = stored_sheet_id()
+    if stored:
+        return stored, "stored app-created id"
+    env = os.environ.get("YAMIN_DEMO_SHEET_ID", "").strip()
+    if env:
+        return env, "YAMIN_DEMO_SHEET_ID"
+    return "", ""
+
+
+def http_status(exc: HttpError) -> int:
+    code = getattr(exc, "status_code", None)
+    if code is not None:
+        return int(code)
+    return int(exc.resp.status)
+
+
+def sheets_service(creds: Credentials):
+    return build("sheets", "v4", credentials=creds, cache_discovery=False)
+
+
+def append_lead_row(sheets, sid: str, row: list[str]) -> dict:
+    return sheets.spreadsheets().values().append(
+        spreadsheetId=sid,
+        range="A1",
+        valueInputOption="USER_ENTERED",
+        insertDataOption="INSERT_ROWS",
+        body={"values": [row]},
+    ).execute()
+
+
+def create_lead_tracker(sheets) -> str:
+    created = sheets.spreadsheets().create(
+        body={"properties": {"title": SHEET_TITLE}},
+    ).execute()
+    sid = created["spreadsheetId"]
+    today = date.today().isoformat()
+    sheets.spreadsheets().values().update(
+        spreadsheetId=sid,
+        range="A1",
+        valueInputOption="USER_ENTERED",
+        body={
+            "values": [
+                SHEET_HEADERS,
+                ["Seed lead", "100 Oak Ave", "New", today],
+            ]
+        },
+    ).execute()
+    persist_sheet_id(sid)
+    return sid
+
+
+def sheet_id_line(sid: str, how: str) -> str:
+    return f"Sheet id: {html.escape(sid)} ({html.escape(how)})"
 
 
 def page(title: str, body: str) -> HTMLResponse:
@@ -413,21 +484,26 @@ def demo_showing() -> HTMLResponse:
 @app.post("/demo/sheet", response_class=HTMLResponse)
 def demo_sheet() -> HTMLResponse:
     def action(creds: Credentials) -> str:
-        sid = sheet_id()
+        sheets = sheets_service(creds)
         today = date.today().isoformat()
-        row = ["Yamin Demo", "123 Main St", "Contacted", today]
-        sheets = build("sheets", "v4", credentials=creds, cache_discovery=False)
-        updated = sheets.spreadsheets().values().append(
-            spreadsheetId=sid,
-            range="A1",
-            valueInputOption="USER_ENTERED",
-            insertDataOption="INSERT_ROWS",
-            body={"values": [row]},
-        ).execute()
-        rng = html.escape(updated.get("updates", {}).get("updatedRange", ""))
+        row = DEMO_LEAD_ROW + [today]
+        sid, how = resolve_sheet_id()
+        updated = None
+        if sid:
+            try:
+                updated = append_lead_row(sheets, sid, row)
+            except HttpError as exc:
+                if http_status(exc) not in (403, 404):
+                    raise
+                sid = ""
+        if not sid:
+            sid = create_lead_tracker(sheets)
+            how = "newly created, stored"
+            updated = append_lead_row(sheets, sid, row)
+        rng = html.escape((updated or {}).get("updates", {}).get("updatedRange", ""))
         return (
             f"Appended lead row: {html.escape(', '.join(row))}. "
-            f"Updated range {rng}."
+            f"Updated range {rng}.<br>{sheet_id_line(sid, how)}"
         )
     return _run(action)
 
@@ -435,10 +511,15 @@ def demo_sheet() -> HTMLResponse:
 @app.post("/demo/drive", response_class=HTMLResponse)
 def demo_drive() -> HTMLResponse:
     def action(creds: Credentials) -> str:
-        sid = sheet_id()
+        sid, how = resolve_sheet_id()
+        if not sid:
+            raise DemoError("no lead sheet yet; run Update lead sheet first")
         drive = build("drive", "v3", credentials=creds, cache_discovery=False)
         meta = drive.files().get(fileId=sid, fields="id,name,modifiedTime").execute()
         name = html.escape(meta.get("name", ""))
         modified = html.escape(meta.get("modifiedTime", ""))
-        return f"Lead file: {name}<br>Modified: {modified}"
+        return (
+            f"Lead file: {name}<br>Modified: {modified}<br>"
+            f"{sheet_id_line(sid, how)}"
+        )
     return _run(action)
