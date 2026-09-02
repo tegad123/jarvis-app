@@ -116,6 +116,18 @@ def init() -> None:
             f"CREATE UNIQUE INDEX IF NOT EXISTS {_EMAIL_INDEX} "
             "ON accounts(lower(email)) WHERE email IS NOT NULL"
         )
+        # Per-attempt OAuth state. Consume-on-use; many in-flight nonces;
+        # survives a worker restart. Not oauth_demo's single _oauth_state slot.
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS oauth_states (
+                nonce       TEXT PRIMARY KEY,
+                purpose     TEXT NOT NULL,
+                expires_at  INTEGER NOT NULL,
+                consumed_at TEXT
+            );
+            """
+        )
         conn.commit()
         _initialised = True
     backfill_emails_from_identity()
@@ -185,6 +197,49 @@ def roster() -> List[Dict[str, Any]]:
 def get(person_key: str) -> Optional[Dict[str, Any]]:
     r = _ensure().execute("SELECT * FROM accounts WHERE person_key = ?", (person_key,)).fetchone()
     return dict(r) if r else None
+
+
+def get_by_email(email: str) -> Optional[Dict[str, Any]]:
+    """The account that Google sign-in will map, or None. Does not create one."""
+    addr = normalize_email(email)
+    if not addr:
+        return None
+    r = _ensure().execute(
+        "SELECT * FROM accounts WHERE lower(email) = ?", (addr,)
+    ).fetchone()
+    return dict(r) if r else None
+
+
+def mark_login(person_key: str) -> None:
+    _ensure().execute(
+        "UPDATE accounts SET last_login=? WHERE person_key=?", (_now(), person_key)
+    )
+    _ensure().commit()
+
+
+def put_oauth_state(nonce: str, purpose: str, expires_at: int) -> None:
+    conn = _ensure()
+    conn.execute(
+        "INSERT OR REPLACE INTO oauth_states (nonce, purpose, expires_at, consumed_at) "
+        "VALUES (?,?,?,NULL)",
+        (nonce, purpose, int(expires_at)),
+    )
+    conn.commit()
+
+
+def consume_oauth_state(nonce: str, purpose: str) -> bool:
+    """True once, if this nonce exists, matches purpose, is unexpired, unused."""
+    import time as _time
+    if not nonce:
+        return False
+    conn = _ensure()
+    cur = conn.execute(
+        "UPDATE oauth_states SET consumed_at=? "
+        "WHERE nonce=? AND purpose=? AND consumed_at IS NULL AND expires_at >= ?",
+        (_now(), nonce, purpose, int(_time.time())),
+    )
+    conn.commit()
+    return cur.rowcount == 1
 
 
 def set_pin(person_key: str, role: Optional[str] = None) -> str:

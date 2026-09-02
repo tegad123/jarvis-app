@@ -36,6 +36,7 @@ from fastapi.responses import FileResponse, StreamingResponse  # noqa: E402
 from app import approvals as approvals_mod  # noqa: E402
 from app import attachments as attachments_mod  # noqa: E402
 from app import accounts as accounts_mod  # noqa: E402
+from app import google_oauth  # noqa: E402
 from app import auth, chat as chat_mod, config, health, whoami  # noqa: E402
 from app import feed as feed_mod  # noqa: E402
 from app import leads as leads_mod  # noqa: E402
@@ -217,6 +218,39 @@ def login(body: LoginRequest, request: Request, response: Response):
     return {"ok": True, "session": {"iat": session["iat"]},
             "person_key": None, "role": "operator", "operator": valid,
             "expires_in": config.SESSION_MAX_AGE}
+
+
+@app.get("/api/auth/google/start")
+def google_login_start(request: Request, response: Response):
+    """OpenID staff sign-in. Sets a signed state cookie, redirects to Google or the mock."""
+    return google_oauth.start_login(request, response)
+
+
+@app.get("/api/auth/google/mock/authorize")
+def google_mock_authorize(
+    request: Request,
+    state: Optional[str] = Query(None),
+    email: Optional[str] = Query(None),
+):
+    return google_oauth.mock_authorize(request, email, state)
+
+
+@app.post("/api/auth/google/mock/token")
+async def google_mock_token(request: Request):
+    if not config.oauth_mock():
+        raise HTTPException(status_code=404, detail="Not found.")
+    form = await request.form()
+    code = str(form.get("code") or "")
+    try:
+        return google_oauth.mock_token_response(code)
+    except KeyError:
+        raise HTTPException(status_code=400, detail="That PIN is not right.")
+
+
+@app.get("/oauth/callback")
+def oauth_callback(request: Request, response: Response):
+    """Google redirect. Login purpose only in this slice (no mailbox connect)."""
+    return google_oauth.callback_login(request, response)
 
 
 @app.post("/api/logout")

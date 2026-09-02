@@ -56,6 +56,7 @@ export default function Login({ onAuthenticated }: Props) {
   // login screen that offers it first teaches everyone to share one secret —
   // which is the thing this release exists to end.
   const [breakGlass, setBreakGlass] = useState(false)
+  const [pinOpen, setPinOpen] = useState(false)
 
   useEffect(() => {
     void getPeople().then((p) => {
@@ -157,12 +158,37 @@ export default function Login({ onAuthenticated }: Props) {
                 <p className="mt-1 text-body-s text-light-text-secondary dark:text-dark-text-secondary">
                   {breakGlass
                     ? 'Operator access — for support and recovery.'
-                    : who
-                      ? 'Enter your PIN to continue.'
-                      : 'Choose who you are.'}
+                    : pinOpen
+                      ? (who ? 'Enter your PIN to continue.' : 'Choose who you are.')
+                      : 'Continue with Google, or sign in with a PIN.'}
                 </p>
               </div>
             </div>
+
+            {!breakGlass && (
+              <div className="mt-5 grid gap-3 lg:mt-8">
+                <button
+                  type="button"
+                  onClick={() => { window.location.href = '/api/auth/google/start' }}
+                  className="w-full rounded-pill bg-light-accent px-5 py-3 text-body
+                             font-semibold text-white shadow-accent-btn
+                             lg:transition-[opacity,box-shadow,transform] lg:duration-[120ms]
+                             lg:hover:-translate-y-px lg:hover:shadow-glass
+                             dark:bg-dark-accent-fill"
+                >
+                  Continue with Google
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setPinOpen((v) => !v); setError(null) }}
+                  aria-expanded={pinOpen}
+                  className="text-caption text-light-text-muted underline-offset-2
+                             hover:underline dark:text-dark-text-muted lg:mx-auto lg:block"
+                >
+                  {pinOpen ? 'Hide PIN sign-in' : 'Sign in with PIN'}
+                </button>
+              </div>
+            )}
 
             {/* THE PICKER. A small team on a private deployment, so a list of
                 names is friendlier and less error-prone than typing a key. It
@@ -174,7 +200,7 @@ export default function Login({ onAuthenticated }: Props) {
                 one long title made the column, and every row in it, wider
                 than the card. Rows are 100% of the card's content box, and the
                 text truncates instead of pushing. */}
-            {!breakGlass && people && people.length > 0 && (
+            {!breakGlass && pinOpen && people && people.length > 0 && (
               <ul
                 className="mt-5 grid grid-cols-[minmax(0,1fr)] gap-2
                            lg:mt-8 lg:grid-cols-[repeat(2,minmax(0,1fr))] lg:gap-3"
@@ -228,6 +254,7 @@ export default function Login({ onAuthenticated }: Props) {
               </ul>
             )}
 
+            {(breakGlass || pinOpen) && (
             <form onSubmit={submit} className="mt-4 grid gap-3 lg:mt-6">
               <label htmlFor="passphrase" className="sr-only">
                 {breakGlass ? 'Operator passphrase' : 'PIN'}
@@ -321,6 +348,7 @@ export default function Login({ onAuthenticated }: Props) {
                 </p>
               )}
             </form>
+            )}
 
             {/* Break-glass, deliberately understated. Bottom-centre on desktop. */}
             <button
