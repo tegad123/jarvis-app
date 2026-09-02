@@ -101,3 +101,30 @@ GATEWAY_URL = get("HERMES_API_URL", "http://127.0.0.1:8642").rstrip("/")
 # guards a single shared passphrase, so unbounded guessing is not acceptable.
 LOGIN_MAX_FAILURES = int(get("APP_LOGIN_MAX_FAILURES", "10"))
 LOGIN_WINDOW_SECONDS = int(get("APP_LOGIN_WINDOW_SECONDS", "300"))
+
+# Public origin for OAuth redirect_uri. Scheme + host, no trailing slash.
+# Required to START Google login; never guessed from request.base_url.
+OAUTH_STATE_COOKIE = get("APP_OAUTH_STATE_COOKIE", "jarvis_oauth_state")
+OAUTH_STATE_MAX_AGE = int(get("APP_OAUTH_STATE_MAX_AGE", "600"))
+
+
+def public_origin() -> Optional[str]:
+    """APP_PUBLIC_ORIGIN or None. Missing is a loud refuse, not a guess."""
+    raw = get("APP_PUBLIC_ORIGIN")
+    if not raw:
+        return None
+    return raw.rstrip("/")
+
+
+def oauth_mock() -> bool:
+    """Testco (and boxed tests) use a local fake instead of accounts.google.com."""
+    return (get("APP_GOOGLE_OAUTH_MOCK") or "").strip().lower() in ("1", "true", "yes")
+
+
+def oauth_client_path() -> Optional[Path]:
+    """Path to the OAuth client JSON. Path only — never log contents."""
+    raw = get("YAMIN_OAUTH_CLIENT") or get("GOOGLE_OAUTH_CLIENT")
+    if not raw:
+        return None
+    path = Path(raw).expanduser()
+    return path if path.is_file() else None
