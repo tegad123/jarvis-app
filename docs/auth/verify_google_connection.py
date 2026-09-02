@@ -153,13 +153,22 @@ def blob_values(obj, acc=None):
 
 
 def jar_without_session(src, dst):
+    """Keep oauth state; drop jarvis_session, including #HttpOnly_ rows.
+
+    curl writes HttpOnly cookies as '#HttpOnly_<host>\\t...\\tname\\tvalue'.
+    Treating those lines as comments would leave the staff session in the jar
+    and the no-cookie canary would be a false green (or a false leak).
+    """
     lines = pathlib.Path(src).read_text().splitlines()
     out = []
     for line in lines:
-        if not line.strip() or line.startswith("#"):
+        stripped = line.lstrip()
+        http_only = stripped.startswith("#HttpOnly_")
+        if not line.strip() or (stripped.startswith("#") and not http_only):
             out.append(line)
             continue
-        parts = line.split("\t")
+        raw = stripped[len("#HttpOnly_"):] if http_only else stripped
+        parts = raw.split("\t")
         if len(parts) >= 6 and parts[5] == "jarvis_session":
             continue
         out.append(line)
@@ -287,7 +296,7 @@ _, n_before_ns, _ = snap_connection()
 code, body, _ = curl(cb, jar_nostaff)
 body_s = body if isinstance(body, str) else json.dumps(body)
 ck("connect callback without staff cookie stores nothing",
-   SIGNIN_AGAIN in body_s.lower(),
+   code in (401, 403) and SIGNIN_AGAIN in body_s.lower(),
    f"HTTP {code}")
 _, n_after_ns, _ = snap_connection()
 ck("no-staff-cookie callback did not write a row",

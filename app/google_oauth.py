@@ -110,7 +110,7 @@ def _partial_grant_page() -> HTMLResponse:
     )
 
 
-def _signin_again_page() -> HTMLResponse:
+def _signin_again_page(status_code: int = 401) -> HTMLResponse:
     return HTMLResponse(
         "<!doctype html><meta charset=utf-8><title>Sign in again</title>"
         "<body style='font-family:sans-serif;max-width:36em;margin:4em auto'>"
@@ -118,7 +118,7 @@ def _signin_again_page() -> HTMLResponse:
         "<p>Connecting Gmail needs an owner or admin session. Sign in, then "
         "start Connect Google again. Nothing was stored.</p>"
         "<p><a href='/'>Back</a></p>",
-        status_code=401,
+        status_code=status_code,
     )
 
 
@@ -358,16 +358,6 @@ def _read_state_cookie(request: Request) -> Optional[dict]:
         return None
 
 
-def _staff_session(request: Request) -> Optional[dict]:
-    raw = request.cookies.get(config.COOKIE_NAME)
-    if not raw:
-        return None
-    try:
-        return auth.current_session(jarvis_session=raw)
-    except HTTPException:
-        return None
-
-
 def _scope_set(raw: str) -> set:
     out = set()
     for part in (raw or "").split():
@@ -443,16 +433,20 @@ def _callback_login(request: Request, code: str, q_state: str, origin: str):
 def _callback_connect(request: Request, code: str, q_state: str, origin: str):
     if not accounts.consume_oauth_state(q_state, PURPOSE_CONNECT):
         return _fail_response(request, status_code=401)
-    sess = _staff_session(request)
-    if sess is None:
-        resp = _signin_again_page()
+    # FIRST after consume: same gates as GET /api/google/connect/start.
+    # Missing/invalid → 401; member/operator → 403. Do not exchange the code.
+    raw = request.cookies.get(config.COOKIE_NAME)
+    if not raw:
+        resp = _signin_again_page(401)
         _clear_state_cookie(resp)
         return resp
     try:
+        sess = auth.current_session(jarvis_session=raw)
         auth.require_person(sess)
         auth.require_admin(sess)
-    except HTTPException:
-        resp = _signin_again_page()
+    except HTTPException as exc:
+        code_out = exc.status_code if exc.status_code in (401, 403) else 401
+        resp = _signin_again_page(code_out)
         _clear_state_cookie(resp)
         return resp
 
