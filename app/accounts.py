@@ -126,6 +126,17 @@ def init() -> None:
                 expires_at  INTEGER NOT NULL,
                 consumed_at TEXT
             );
+            CREATE TABLE IF NOT EXISTS google_connection (
+                id            INTEGER PRIMARY KEY CHECK (id = 1),
+                google_email  TEXT,
+                scopes        TEXT,
+                token_cipher  BLOB,
+                status        TEXT NOT NULL,
+                connected_by  TEXT,
+                connected_at  TEXT,
+                refreshed_at  TEXT,
+                last_error    TEXT
+            );
             """
         )
         conn.commit()

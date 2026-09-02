@@ -15,7 +15,7 @@ anything without editing it.
 
 import os
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 HERMES_HOME = Path(os.environ.get("HERMES_HOME", "~/.hermes")).expanduser()
 ENV_PATH = HERMES_HOME / ".env"
@@ -128,3 +128,16 @@ def oauth_client_path() -> Optional[Path]:
         return None
     path = Path(raw).expanduser()
     return path if path.is_file() else None
+
+
+def google_token_key_list() -> Optional[List[str]]:
+    """Fernet keys from APP_GOOGLE_TOKEN_KEY (comma-separated new,old).
+
+    Returns the list, or None if unset. Never logs the values. Connect routes
+    call config.require when they need the key; PIN login never does.
+    """
+    raw = get("APP_GOOGLE_TOKEN_KEY")
+    if not raw:
+        return None
+    keys = [k.strip() for k in raw.split(",") if k.strip()]
+    return keys or None
