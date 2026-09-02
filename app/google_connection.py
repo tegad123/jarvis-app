@@ -1,0 +1,213 @@
+"""Tenant Google mailbox connection: one encrypted row per accounts DB.
+
+Decrypt happens ONLY inside build_credentials. Status GET never touches the
+cipher. A missing APP_GOOGLE_TOKEN_KEY is a connect-route failure, not a PIN
+login failure — this module is not imported by the PIN path.
+
+Never log cipher bytes, refresh tokens, or the Fernet key.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
+
+from cryptography.fernet import Fernet, InvalidToken, MultiFernet
+
+from . import accounts, config
+
+log = logging.getLogger(__name__)
+
+STATUS_CONNECTED = "connected"
+STATUS_NEEDS_REAUTH = "needs_reauth"
+STATUS_DISCONNECTED = "disconnected"
+
+COUNTER_DECRYPT_FAILED = "google_connection_decrypt_failed"
+
+
+class ConnectionCipherError(Exception):
+    """Cipher missing or undecryptable. Never a silent None."""
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _fernet() -> MultiFernet:
+    """Encrypt with the first key; decrypt tries all (rotation window)."""
+    keys = config.google_token_key_list()
+    if not keys:
+        raise RuntimeError(
+            "APP_GOOGLE_TOKEN_KEY is not set. Add it to the environment "
+            f"(or {config.ENV_PATH}) and restart. Connect routes cannot run."
+        )
+    return MultiFernet([Fernet(k.encode("ascii")) for k in keys])
+
+
+def encrypt_tokens(payload: Dict[str, Any]) -> bytes:
+    """Fernet blob. Callers must not log payload or the result."""
+    blob = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return _fernet().encrypt(blob)
+
+
+def _decrypt_tokens(cipher: bytes) -> Dict[str, Any]:
+    """Private. The public decrypt door is build_credentials."""
+    raw = _fernet().decrypt(bytes(cipher))
+    data = json.loads(raw.decode("utf-8"))
+    if not isinstance(data, dict):
+        raise ConnectionCipherError("google connection cipher payload is not an object")
+    return data
+
+
+def _bump_decrypt_failed() -> None:
+    try:
+        from . import threads as threads_mod
+        threads_mod.bump_counter(COUNTER_DECRYPT_FAILED)
+    except Exception:
+        log.error("google_connection: decrypt-failed counter bump failed")
+
+
+def _mark_last_error(kind: str) -> None:
+    try:
+        conn = accounts._ensure()
+        conn.execute(
+            "UPDATE google_connection SET last_error=?, status=? WHERE id=1",
+            (kind, STATUS_NEEDS_REAUTH),
+        )
+        conn.commit()
+    except Exception:
+        log.error("google_connection: could not record last_error class")
+
+
+def get_row() -> Optional[Dict[str, Any]]:
+    r = accounts._ensure().execute(
+        "SELECT * FROM google_connection WHERE id = 1"
+    ).fetchone()
+    return dict(r) if r else None
+
+
+def row_count() -> int:
+    n = accounts._ensure().execute(
+        "SELECT COUNT(*) AS n FROM google_connection"
+    ).fetchone()
+    return int(n["n"] if n["n"] is not None else 0)
+
+
+def status_public() -> Dict[str, Any]:
+    """The GET /api/google/connection body. No token-ish keys, no cipher."""
+    row = get_row()
+    if not row or not row.get("token_cipher"):
+        return {
+            "status": STATUS_DISCONNECTED,
+            "google_email": None,
+            "connected_at": None,
+        }
+    return {
+        "status": row.get("status") or STATUS_DISCONNECTED,
+        "google_email": row.get("google_email"),
+        "connected_at": row.get("connected_at"),
+    }
+
+
+def put_connected(
+    *,
+    google_email: str,
+    scopes: str,
+    token_cipher: bytes,
+    connected_by: str,
+) -> None:
+    """Replace the single row. Caller encrypts first."""
+    now = _now()
+    conn = accounts._ensure()
+    conn.execute("DELETE FROM google_connection")
+    conn.execute(
+        """INSERT INTO google_connection
+           (id, google_email, scopes, token_cipher, status, connected_by,
+            connected_at, refreshed_at, last_error)
+           VALUES (1, ?, ?, ?, ?, ?, ?, NULL, NULL)""",
+        (google_email, scopes, token_cipher, STATUS_CONNECTED, connected_by, now),
+    )
+    conn.commit()
+
+
+def clear() -> None:
+    """Disconnect: drop the row (ledger 1→0). Cipher is gone, not zeroed in place."""
+    conn = accounts._ensure()
+    conn.execute("DELETE FROM google_connection")
+    conn.commit()
+
+
+def write_refreshed_cipher(token_cipher: bytes) -> None:
+    """After credentials.refresh — new cipher, refreshed_at. Encrypt happened outside."""
+    conn = accounts._ensure()
+    conn.execute(
+        "UPDATE google_connection SET token_cipher=?, refreshed_at=?, last_error=NULL "
+        "WHERE id=1",
+        (token_cipher, _now()),
+    )
+    conn.commit()
+
+
+def build_credentials():
+    """THE decrypt site. Raises ConnectionCipherError; never returns None.
+
+    Slice 6 will hand this to google_creds. Slice 4 exists so a corrupt cipher
+    cannot fail closed as a silent missing connection.
+    """
+    row = get_row()
+    if not row or not row.get("token_cipher"):
+        log.error("google_connection: build_credentials: no cipher (row_missing=%s)",
+                  row is None)
+        raise ConnectionCipherError("google connection cipher missing")
+    try:
+        payload = _decrypt_tokens(row["token_cipher"])
+    except InvalidToken as exc:
+        _bump_decrypt_failed()
+        _mark_last_error("decrypt_failed")
+        log.error("google_connection: decrypt failed (InvalidToken)")
+        raise ConnectionCipherError("google connection token cannot be decrypted") from exc
+    except ConnectionCipherError:
+        _bump_decrypt_failed()
+        _mark_last_error("decrypt_failed")
+        log.error("google_connection: decrypt failed (payload)")
+        raise
+    except Exception as exc:
+        _bump_decrypt_failed()
+        _mark_last_error(type(exc).__name__)
+        log.error("google_connection: decrypt failed (%s)", type(exc).__name__)
+        raise ConnectionCipherError("google connection token cannot be decrypted") from exc
+
+    refresh = payload.get("refresh_token") or ""
+    access = payload.get("access_token") or ""
+    if not refresh and not access:
+        _bump_decrypt_failed()
+        _mark_last_error("empty_payload")
+        log.error("google_connection: decrypted payload had no tokens")
+        raise ConnectionCipherError("google connection cipher payload empty")
+
+    from google.oauth2.credentials import Credentials
+
+    expiry = None
+    raw_exp = payload.get("expiry")
+    if isinstance(raw_exp, str) and raw_exp:
+        try:
+            expiry = datetime.fromisoformat(raw_exp)
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
+        except ValueError:
+            expiry = None
+
+    scopes = payload.get("scopes") or []
+    if isinstance(scopes, str):
+        scopes = scopes.split()
+    return Credentials(
+        token=access or None,
+        refresh_token=refresh or None,
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id="mock" if config.oauth_mock() else None,
+        client_secret="mock" if config.oauth_mock() else None,
+        scopes=list(scopes) if scopes else None,
+        expiry=expiry,
+    )

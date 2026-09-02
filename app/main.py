@@ -36,6 +36,7 @@ from fastapi.responses import FileResponse, StreamingResponse  # noqa: E402
 from app import approvals as approvals_mod  # noqa: E402
 from app import attachments as attachments_mod  # noqa: E402
 from app import accounts as accounts_mod  # noqa: E402
+from app import google_connection as google_conn_mod  # noqa: E402
 from app import google_oauth  # noqa: E402
 from app import auth, chat as chat_mod, config, health, whoami  # noqa: E402
 from app import feed as feed_mod  # noqa: E402
@@ -231,8 +232,10 @@ def google_mock_authorize(
     request: Request,
     state: Optional[str] = Query(None),
     email: Optional[str] = Query(None),
+    purpose: Optional[str] = Query(None),
+    grant: Optional[str] = Query(None),
 ):
-    return google_oauth.mock_authorize(request, email, state)
+    return google_oauth.mock_authorize(request, email, state, purpose, grant)
 
 
 @app.post("/api/auth/google/mock/token")
@@ -249,8 +252,35 @@ async def google_mock_token(request: Request):
 
 @app.get("/oauth/callback")
 def oauth_callback(request: Request, response: Response):
-    """Google redirect. Login purpose only in this slice (no mailbox connect)."""
-    return google_oauth.callback_login(request, response)
+    """Google redirect. Dispatches on signed-state purpose (login vs connect)."""
+    return google_oauth.callback(request, response)
+
+
+@app.get("/api/google/connect/start")
+def google_connect_start(
+    request: Request,
+    response: Response,
+    sess: dict = Depends(auth.current_session),
+):
+    """Five-scope tenant connect. Owner or admin person session required."""
+    auth.require_person(sess)
+    auth.require_admin(sess)
+    return google_oauth.start_connect(request, response, sess)
+
+
+@app.get("/api/google/connection")
+def google_connection_get(sess: dict = Depends(auth.current_session)):
+    """Status only. No token, refresh, client_secret, or cipher fields."""
+    auth.require_person(sess)
+    auth.require_admin(sess)
+    return google_conn_mod.status_public()
+
+
+@app.post("/api/google/connection/disconnect")
+def google_connection_disconnect(sess: dict = Depends(auth.current_session)):
+    auth.require_person(sess)
+    auth.require_admin(sess)
+    return google_oauth.disconnect(sess)
 
 
 @app.post("/api/logout")
@@ -960,6 +990,11 @@ def get_health(sess: dict = Depends(auth.current_session)):
     # place to look. They are informational and never affect the status.
     try:
         report["counters"] = threads_mod.all_counters()
+    except Exception:
+        pass
+    # Connection *status* only — never the cipher or refresh token.
+    try:
+        report["google_connection"] = google_conn_mod.status_public()
     except Exception:
         pass
     # A failing subsystem is reported with 503 so monitoring does not have to
