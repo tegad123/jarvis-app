@@ -33,7 +33,7 @@ Role gates and `require_bodies` stay as written in `app/auth.py`. This plan does
 
 One connection per tenant. Owner or admin starts it. Tokens are the tenant's mailbox grant, not a staff login. A member who signs in with Google does not thereby connect the team's Gmail.
 
-Google granular consent can return a subset of those five. The connect callback MUST compare the granted scope string against all five requested scopes. On a partial grant, do not write `status=connected` and do not store a cipher. Reject with a visible page that says all five permissions are required.
+Google granular consent can return a subset of those five. The connect callback MUST compare the granted scope string against all five requested scopes. On a partial grant, do not write a row and do not store a cipher. Reject with a visible page that says all five permissions are required.
 
 Same OAuth client is allowed. Same callback path is allowed. The signed `state` value names the purpose (`login` vs `connect`) so the handler cannot confuse them. That state is not a single process-wide slot: see Route inventory for per-attempt nonce, expiry, consume-on-use, and why `app/oauth_demo.py`'s `_oauth_state` must not be copied.
 
@@ -139,7 +139,7 @@ The signed state cookie carries a per-attempt random nonce, the purpose (`login`
 
 Login purpose: map email to the account row, then MUST check `accounts.disabled` before `issue_cookie`. Disabled, unknown email, and missing row all fail with the same generic message as a wrong PIN (no enumeration).
 
-Connect purpose: after the token exchange, compare the granted scope string against all five requested scopes. A partial grant is rejected with a visible "all five permissions are required" page. Do not write `status=connected` and do not store a cipher.
+Connect purpose: after the token exchange, compare the granted scope string against all five requested scopes. A partial grant is rejected with a visible "all five permissions are required" page. Do not write any `google_connection` row and do not store a cipher.
 
 Changed:
 
@@ -244,7 +244,7 @@ Unrelated to auth; do not "fix" them in these PRs.
 - Mock Google login for `dana@testco.example.com` issues a person session `person_key=dana`, `role=owner`.
 - After that mock Google login, hit one `require_bodies`-gated endpoint and assert the response is identical to the same call on a dana PIN session. Parity is proven by invocation, not inferred from shared `issue_cookie`.
 - Replay: complete one mock login, resend the identical callback URL; the second attempt must fail with 401/400 and issue no session cookie.
-- Mock token endpoint returns 4 of 5 connection scopes: the `google_connection` row must not read `connected` (reject page; no cipher stored).
+- Mock token endpoint returns 4 of 5 connection scopes: the `google_connection` row count must stay 0 (reject page; no row, no cipher).
 
 **Absence (PIN and operator still exist):**
 
@@ -276,7 +276,7 @@ Each slice is one branch, one human yes if it migrates schema or adds venv packa
 
 3. **Staff Google login, PIN fallback UI.** OpenID start + `/oauth/callback` login purpose + `Login.tsx` button order. Mock token endpoint for tests. `APP_PUBLIC_ORIGIN` required to start. No five-scope connect yet. Verify: new `verify_auth_google.py` PIN/operator/people canaries plus mock Google login, disabled-account Google 401, callback replay 401/400, and `require_bodies` parity vs dana PIN. Flag: `google-auth-oauthlib` in the shared venv.
 
-4. **Tenant connection store + APIs.** Encrypted `google_connection`, connect start (five scopes), callback connect purpose, status GET, disconnect POST. No Settings tab yet; curl is enough. Verify: member 403, operator 403, owner mock-connect writes one row, disconnect clears cipher, status JSON has no secrets, mock 4-of-5 scopes does not write `status=connected`.
+4. **Tenant connection store + APIs.** Encrypted `google_connection`, connect start (five scopes), callback connect purpose, status GET, disconnect POST. No Settings tab yet; curl is enough. Verify: member 403, operator 403, owner mock-connect writes one row, disconnect clears cipher, status JSON has no secrets, mock 4-of-5 scopes leaves `google_connection` row count at 0.
 
 5. **Settings tab + Connect Google card.** Frontend only plus the GET the card needs (already in 4). Hidden for member and operator. Server gates already in 4. Verify: UI not required for merge if 4's API tests are green; a Playwright smoke can wait.
 
