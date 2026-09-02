@@ -64,7 +64,11 @@ def skip(name, why):
 # ── (a) the real Ask round trip ──────────────────────────────────────────────
 print("── (a) THE REAL ASK ROUND TRIP (live gateway, real model) ─────")
 LIVE_TASKS = pathlib.Path("/opt/testco/hermes/state/jarvis_tasks.db")
-PHRASE = "Track this: call the title company about 118 Alderwood"
+# Unique per run so the skill cannot DUPLICATE-SKIP against the seeded
+# Aug-26 Alderwood task (tk_913e2ee0e84f). Matching below keys on this
+# token, not "alderwood", so that old row cannot false-green the check.
+RUN_TOKEN = os.urandom(4).hex()
+PHRASE = f"Track this: call the title company about 118 Alderwood run {RUN_TOKEN}"
 
 if args.stub:
     skip("a task asked for in the Ask tab appears in the list",
@@ -121,7 +125,7 @@ else:
         found = None
         while time.time() - started < args.timeout:
             for r in rows():
-                if r["task_id"] not in before_ids and "alderwood" in (r["title"] or "").lower():
+                if r["task_id"] not in before_ids and RUN_TOKEN in (r["title"] or "").lower():
                     found = r; break
             if found:
                 break
@@ -137,7 +141,7 @@ else:
             msgs = hist.get("messages") or []
             last = " ".join(m.get("content", "") for m in msgs[-3:] if m.get("role") == "assistant")
             ck("   and the transcript confirms it back to the person",
-               "alderwood" in last.lower() or "task" in last.lower(), last[:110])
+               RUN_TOKEN in last.lower() or "task" in last.lower(), last[:110])
 
 # ── (b) the deterministic skill path ─────────────────────────────────────────
 print("\n── (b) THE SKILL PATH, EXACTLY (boxed, no model) ──────────────")
