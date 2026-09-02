@@ -38,7 +38,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--base", default=os.environ.get("TASKS_BASE", "http://127.0.0.1:8710"))
 ap.add_argument("--pins", default="/opt/testco/SEEDED_PINS.json")
 ap.add_argument("--stub", action="store_true", help="skip the real model round trip")
-ap.add_argument("--timeout", type=int, default=120)
+ap.add_argument("--timeout", type=int, default=300)
 args = ap.parse_args()
 
 HERE = pathlib.Path(__file__).resolve().parent
