@@ -182,8 +182,10 @@ jar_forge = str(SCR / "forge.jar")
 pathlib.Path(jar_forge).unlink(missing_ok=True)
 code, d, heads = curl("/oauth/callback?state=forged&code=x", jar_forge)
 ck("forged state is 401/400", code in (400, 401), f"HTTP {code} {d}")
+forged_session = cookie_set(heads, "jarvis_session")
 ck("forged state issues no session cookie",
-   not cookie_set(heads, "jarvis_session"), "session cookie was set")
+   not forged_session,
+   "no jarvis_session Set-Cookie" if not forged_session else "session cookie was set")
 
 print("\n── presence: mock Google login as dana ────────────────────")
 jar_g = str(SCR / "dana-google.jar")
@@ -212,7 +214,8 @@ code_p, hist_p, _ = curl("/api/chat/history?thread_id=direct", jar_pin)
 ck("Google session and PIN session both reach require_bodies (200)",
    code_g == 200 and code_p == 200, f"g={code_g} pin={code_p}")
 ck("require_bodies response is identical to the dana PIN session",
-   hist_g == hist_p, "bodies differed")
+   hist_g == hist_p,
+   "identical" if hist_g == hist_p else "bodies differed")
 
 print("\n── presence: replay rejected ──────────────────────────────")
 jar_replay = str(SCR / "replay.jar")
