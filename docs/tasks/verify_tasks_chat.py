@@ -109,13 +109,13 @@ else:
             conn.close()
 
     before_ids = {r["task_id"] for r in rows()}
-    code, threads = call("/api/threads")
+    # A fresh channel — not `direct`, which has weeks of test history that
+    # makes the model turn miss the 120s cap (history=26, 0 tool calls).
+    code, created = call("/api/threads", "POST",
+                         {"name": f"verify-tasks-chat-{RUN_TOKEN}"})
     tid = None
-    for t in (threads.get("threads") or []):
-        if t.get("direct_for") or t.get("is_direct"):
-            tid = t["thread_id"]; break
-    if tid is None and (threads.get("threads") or []):
-        tid = threads["threads"][0]["thread_id"]
+    if code == 201 and isinstance(created, dict):
+        tid = (created.get("thread") or {}).get("thread_id")
     ck("found a thread to talk in", tid is not None, str(tid))
 
     if tid:
