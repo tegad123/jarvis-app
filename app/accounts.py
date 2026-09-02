@@ -31,6 +31,7 @@ PINS
 
 import hashlib
 import hmac
+import logging
 import os
 import secrets
 import sqlite3
@@ -56,6 +57,9 @@ ROLES = ("owner", "admin", "member")
 # Unambiguous alphabet — no 0/O/1/l/I. Matches the provisioner's passphrase form.
 _ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
 _PBKDF2_ROUNDS = 240_000
+_EMAIL_INDEX = "idx_accounts_email_lower"
+
+log = logging.getLogger(__name__)
 
 _local = threading.local()
 _INIT_LOCK = threading.Lock()
@@ -105,8 +109,16 @@ def init() -> None:
             );
             """
         )
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(accounts)")}
+        if "email" not in cols:
+            conn.execute("ALTER TABLE accounts ADD COLUMN email TEXT")
+        conn.execute(
+            f"CREATE UNIQUE INDEX IF NOT EXISTS {_EMAIL_INDEX} "
+            "ON accounts(lower(email)) WHERE email IS NOT NULL"
+        )
         conn.commit()
         _initialised = True
+    backfill_emails_from_identity()
 
 
 def _ensure() -> sqlite3.Connection:
@@ -163,6 +175,7 @@ def roster() -> List[Dict[str, Any]]:
             "title": rec.get("title") or "",
             "role": (acct or {}).get("role") or default_role(key),
             "has_pin": bool((acct or {}).get("pin_hash")),
+            "has_email": bool((acct or {}).get("email")),
             "disabled": bool((acct or {}).get("disabled")),
             "last_login": (acct or {}).get("last_login"),
         })
@@ -203,6 +216,91 @@ def set_pin(person_key: str, role: Optional[str] = None) -> str:
     )
     conn.commit()
     return pin
+
+
+def normalize_email(raw: Optional[str]) -> Optional[str]:
+    """One login address: trimmed, lowercased. Empty becomes None (SQL NULL)."""
+    if raw is None:
+        return None
+    s = str(raw).strip().lower()
+    return s or None
+
+
+def set_email(person_key: str, email: str) -> Dict[str, Any]:
+    """Set or fix the login address. Does not mint an account from Google.
+
+    A person already in the registry may get an email-only row (no PIN).
+    Unique index on lower(email) refuses a second person the same address.
+    """
+    people = identity.load().get("people") or {}
+    if person_key not in people:
+        raise AccountError(
+            f"'{person_key}' is not in identity.people. Add them to the registry first — "
+            f"an account is a credential attached to an identity, never a new identity."
+        )
+    if "assistant" in (people[person_key].get("roles") or []):
+        raise AccountError("The assistant does not log in.")
+    addr = normalize_email(email)
+    if not addr:
+        raise AccountError("email is empty.")
+
+    now = _now()
+    role = (get(person_key) or {}).get("role") or default_role(person_key)
+    conn = _ensure()
+    try:
+        conn.execute(
+            """INSERT INTO accounts
+               (person_key, role, pin_hash, pin_salt, disabled, created_at, updated_at, email)
+               VALUES (?,?,NULL,NULL,0,?,?,?)
+               ON CONFLICT(person_key) DO UPDATE SET
+                 email = excluded.email, updated_at = excluded.updated_at""",
+            (person_key, role, now, now, addr),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        raise AccountError("that email is already assigned")
+    return get(person_key)
+
+
+def backfill_emails_from_identity() -> Dict[str, List[str]]:
+    """Copy identity.people[key].email[0] onto account rows whose email is NULL.
+
+    Duplicate login addresses skip-and-log and the run continues. Never aborts
+    mid-run. Does not insert new account rows (no auto-create from a profile).
+    """
+    filled: List[str] = []
+    skipped: List[str] = []
+    people = identity.load().get("people") or {}
+    conn = _connect()
+    rows = conn.execute(
+        "SELECT person_key FROM accounts WHERE email IS NULL"
+    ).fetchall()
+    for row in rows:
+        key = row["person_key"]
+        rec = people.get(key) or {}
+        emails = rec.get("email") or []
+        if not emails:
+            continue
+        addr = normalize_email(emails[0] if isinstance(emails, list) else emails)
+        if not addr:
+            continue
+        try:
+            conn.execute(
+                "UPDATE accounts SET email=?, updated_at=? WHERE person_key=? AND email IS NULL",
+                (addr, _now(), key),
+            )
+            conn.commit()
+            filled.append(key)
+        except sqlite3.IntegrityError:
+            conn.rollback()
+            log.warning(
+                "accounts email backfill: skip %s — duplicate login address",
+                key,
+            )
+            skipped.append(key)
+            continue
+    return {"filled": filled, "skipped": skipped}
 
 
 def set_role(person_key: str, role: str) -> Dict[str, Any]:
