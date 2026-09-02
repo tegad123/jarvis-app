@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import base64
 import html
+import logging
 import os
+import re
 from datetime import date, datetime, timedelta, timezone
 from email.mime.text import MIMEText
 from email.utils import parseaddr
@@ -31,9 +33,22 @@ SHOWING_TITLE = "Showing \u2014 123 Main St"
 HANDLED_LABEL = "Yamin/Handled"
 
 os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
+os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
+
+log = logging.getLogger(__name__)
+
+_SECRET_QUERY = re.compile(
+    r"(client_secret|access_token|refresh_token|id_token|code)=([^&\s]+)",
+    re.I,
+)
+_SECRET_JSON = re.compile(
+    r'("(?:client_secret|access_token|refresh_token|id_token)"\s*:\s*")[^"]*"',
+    re.I,
+)
 
 app = FastAPI(title="Yamin", docs_url=None, redoc_url=None)
 _oauth_state = ""
+_code_verifier = ""
 
 
 class DemoError(Exception):
@@ -155,12 +170,26 @@ def connected_body(result: str = "", error: str = "") -> str:
 """
 
 
-def make_flow() -> Flow:
-    return Flow.from_client_secrets_file(
-        str(client_path()),
-        scopes=list(SCOPES),
-        redirect_uri=REDIRECT_URI,
-    )
+def redact_secrets(text: str) -> str:
+    text = _SECRET_QUERY.sub(r"\1=[redacted]", text)
+    return _SECRET_JSON.sub(r'\1[redacted]"', text)
+
+
+def public_exc(exc: BaseException) -> str:
+    return redact_secrets(f"{type(exc).__name__}: {exc}")
+
+
+def make_flow(*, state: str | None = None, code_verifier: str | None = None) -> Flow:
+    kwargs: dict = {
+        "scopes": list(SCOPES),
+        "redirect_uri": REDIRECT_URI,
+    }
+    if state:
+        kwargs["state"] = state
+    if code_verifier:
+        kwargs["code_verifier"] = code_verifier
+        kwargs["autogenerate_code_verifier"] = False
+    return Flow.from_client_secrets_file(str(client_path()), **kwargs)
 
 
 def save_creds(creds: Credentials) -> None:
@@ -260,7 +289,7 @@ def home() -> HTMLResponse:
 
 @app.get("/oauth/start")
 def oauth_start():
-    global _oauth_state
+    global _oauth_state, _code_verifier
     try:
         flow = make_flow()
     except DemoError as exc:
@@ -271,26 +300,29 @@ def oauth_start():
         access_type="offline",
         prompt="consent",
     )
+    _code_verifier = flow.code_verifier or ""
     return RedirectResponse(authorization_url, status_code=302)
 
 
 @app.get("/oauth/callback", response_class=HTMLResponse)
 def oauth_callback(request: Request) -> HTMLResponse:
-    global _oauth_state
+    global _oauth_state, _code_verifier
     if request.query_params.get("error"):
         return page("Yamin", connect_body("Google returned an error; connect was not completed"))
     state = request.query_params.get("state", "")
     if not _oauth_state or state != _oauth_state:
         return page("Yamin", connect_body("OAuth state mismatch; start connect again"))
     try:
-        flow = make_flow()
+        flow = make_flow(state=state, code_verifier=_code_verifier or None)
         flow.fetch_token(authorization_response=str(request.url))
         save_creds(flow.credentials)
     except DemoError as exc:
         return page("Yamin", connect_body(str(exc)))
-    except Exception:
-        return page("Yamin", connect_body("Could not finish the OAuth exchange"))
+    except Exception as exc:
+        log.exception("OAuth token exchange failed")
+        return page("Yamin", connect_body(public_exc(exc)))
     _oauth_state = ""
+    _code_verifier = ""
     return page("Yamin", connected_body(result="Google account connected."))
 
 
