@@ -29,6 +29,7 @@ import argparse
 import json
 import os
 import pathlib
+import random
 import sqlite3
 import subprocess
 import sys
@@ -38,7 +39,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--base", default=os.environ.get("TASKS_BASE", "http://127.0.0.1:8710"))
 ap.add_argument("--pins", default="/opt/testco/SEEDED_PINS.json")
 ap.add_argument("--stub", action="store_true", help="skip the real model round trip")
-ap.add_argument("--timeout", type=int, default=120)
+ap.add_argument("--timeout", type=int, default=300)
 args = ap.parse_args()
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -64,7 +65,25 @@ def skip(name, why):
 # ── (a) the real Ask round trip ──────────────────────────────────────────────
 print("── (a) THE REAL ASK ROUND TRIP (live gateway, real model) ─────")
 LIVE_TASKS = pathlib.Path("/opt/testco/hermes/state/jarvis_tasks.db")
-PHRASE = "Track this: call the title company about 118 Alderwood"
+# Unique per run so the skill cannot DUPLICATE-SKIP against seeded titles
+# (e.g. the Aug-26 Alderwood task). The street string is the matcher; it
+# lives in the Ask text. A hex run token in the message made the model
+# treat the phrase as a stray fragment and refuse to file the task.
+RUN_TOKEN = os.urandom(4).hex()
+_VERBS = (
+    "email the appraiser about",
+    "schedule the inspection for",
+    "order the survey for",
+)
+_STREETS = (
+    "Meridian St",
+    "Harborline Ave",
+    "Westridge Ln",
+    "Copperleaf Dr",
+    "Ashbourne Ct",
+)
+STREET = f"{random.randint(1000, 9999)} {random.choice(_STREETS)}"
+PHRASE = f"Track this: {random.choice(_VERBS)} {STREET}"
 
 if args.stub:
     skip("a task asked for in the Ask tab appears in the list",
@@ -105,13 +124,13 @@ else:
             conn.close()
 
     before_ids = {r["task_id"] for r in rows()}
-    code, threads = call("/api/threads")
+    # A fresh channel — not `direct`, which has weeks of test history that
+    # makes the model turn miss the 120s cap (history=26, 0 tool calls).
+    code, created = call("/api/threads", "POST",
+                         {"name": f"verify-tasks-chat-{RUN_TOKEN}"})
     tid = None
-    for t in (threads.get("threads") or []):
-        if t.get("direct_for") or t.get("is_direct"):
-            tid = t["thread_id"]; break
-    if tid is None and (threads.get("threads") or []):
-        tid = threads["threads"][0]["thread_id"]
+    if code == 201 and isinstance(created, dict):
+        tid = (created.get("thread") or {}).get("thread_id")
     ck("found a thread to talk in", tid is not None, str(tid))
 
     if tid:
@@ -121,7 +140,7 @@ else:
         found = None
         while time.time() - started < args.timeout:
             for r in rows():
-                if r["task_id"] not in before_ids and "alderwood" in (r["title"] or "").lower():
+                if r["task_id"] not in before_ids and STREET.lower() in (r["title"] or "").lower():
                     found = r; break
             if found:
                 break
@@ -137,7 +156,7 @@ else:
             msgs = hist.get("messages") or []
             last = " ".join(m.get("content", "") for m in msgs[-3:] if m.get("role") == "assistant")
             ck("   and the transcript confirms it back to the person",
-               "alderwood" in last.lower() or "task" in last.lower(), last[:110])
+               STREET.lower() in last.lower() or "task" in last.lower(), last[:110])
 
 # ── (b) the deterministic skill path ─────────────────────────────────────────
 print("\n── (b) THE SKILL PATH, EXACTLY (boxed, no model) ──────────────")
