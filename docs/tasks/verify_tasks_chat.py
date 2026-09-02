@@ -29,6 +29,7 @@ import argparse
 import json
 import os
 import pathlib
+import random
 import sqlite3
 import subprocess
 import sys
@@ -64,11 +65,25 @@ def skip(name, why):
 # ── (a) the real Ask round trip ──────────────────────────────────────────────
 print("── (a) THE REAL ASK ROUND TRIP (live gateway, real model) ─────")
 LIVE_TASKS = pathlib.Path("/opt/testco/hermes/state/jarvis_tasks.db")
-# Unique per run so the skill cannot DUPLICATE-SKIP against the seeded
-# Aug-26 Alderwood task (tk_913e2ee0e84f). Matching below keys on this
-# token, not "alderwood", so that old row cannot false-green the check.
+# Unique per run so the skill cannot DUPLICATE-SKIP against seeded titles
+# (e.g. the Aug-26 Alderwood task). The street string is the matcher; it
+# lives in the Ask text. A hex run token in the message made the model
+# treat the phrase as a stray fragment and refuse to file the task.
 RUN_TOKEN = os.urandom(4).hex()
-PHRASE = f"Track this: call the title company about 118 Alderwood run {RUN_TOKEN}"
+_VERBS = (
+    "email the appraiser about",
+    "schedule the inspection for",
+    "order the survey for",
+)
+_STREETS = (
+    "Meridian St",
+    "Harborline Ave",
+    "Westridge Ln",
+    "Copperleaf Dr",
+    "Ashbourne Ct",
+)
+STREET = f"{random.randint(1000, 9999)} {random.choice(_STREETS)}"
+PHRASE = f"Track this: {random.choice(_VERBS)} {STREET}"
 
 if args.stub:
     skip("a task asked for in the Ask tab appears in the list",
@@ -125,7 +140,7 @@ else:
         found = None
         while time.time() - started < args.timeout:
             for r in rows():
-                if r["task_id"] not in before_ids and RUN_TOKEN in (r["title"] or "").lower():
+                if r["task_id"] not in before_ids and STREET.lower() in (r["title"] or "").lower():
                     found = r; break
             if found:
                 break
@@ -141,7 +156,7 @@ else:
             msgs = hist.get("messages") or []
             last = " ".join(m.get("content", "") for m in msgs[-3:] if m.get("role") == "assistant")
             ck("   and the transcript confirms it back to the person",
-               RUN_TOKEN in last.lower() or "task" in last.lower(), last[:110])
+               STREET.lower() in last.lower() or "task" in last.lower(), last[:110])
 
 # ── (b) the deterministic skill path ─────────────────────────────────────────
 print("\n── (b) THE SKILL PATH, EXACTLY (boxed, no model) ──────────────")
