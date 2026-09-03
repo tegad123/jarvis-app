@@ -33,7 +33,7 @@ outbound_suffix_policy: production    # scratch uses RFC 2606 capture; productio
 skill_loadout: base                   # name of a loadout in slice 4; plus optional enables
 skill_loadout_optional: []
 
-skills_origin_sha: e14b70eeb49fab876fa403ec6525bf55d3e64946
+skills_origin_sha: 15ea39dcc0499f3fc9cb792411e9234f394d8785
 curator_packs: omit                   # omit | defaults
 
 writes_posture: blocked               # blocked | captured | live
