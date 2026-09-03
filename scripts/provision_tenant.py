@@ -212,17 +212,23 @@ def posture_rules(manifest: dict) -> Dict[str, Any]:
         if not https:
             die("writes_posture=live requires https public_origin")
 
-    cookie = "0" if loopback else "1"
-    if posture == "live":
+    # Scratch (captured + loopback HTTP): cookie 0 so PIN login works.
+    # Production templates (blocked | live): cookie 1 even on a loopback drill.
+    if posture == "captured":
+        cookie = "0"
+        if not loopback:
+            die("writes_posture=captured requires a loopback public_origin (APP_COOKIE_SECURE=0)")
+    else:
         cookie = "1"
-    if loopback and cookie != "0":
-        die("loopback origin requires APP_COOKIE_SECURE=0")
+        if posture == "live" and not https:
+            die("writes_posture=live requires https public_origin")
 
     return {
         "posture": posture,
         "writes_armed": writes_armed,
         "cookie": cookie,
         "loopback": loopback,
+        "oauth_template": "oauth.scratch.conf" if posture == "captured" else "oauth.production.conf",
         "suffixes": suffixes,
     }
 
@@ -576,6 +582,10 @@ def common_map(manifest: dict, posture: dict, fernet: str, force: str) -> Dict[s
         "FERNET_KEY": fernet,
         "OAUTH_CLIENT": str(OAUTH_CLIENT),
         "POSTURE": posture["posture"],
+        "OAUTH_TEMPLATE": posture["oauth_template"],
+        "BACKUP_ROOT": str((manifest.get("backup") or {}).get("destination")
+                           or Path("/root/backups") / slug),
+        "BACKUP_KEEP": str((manifest.get("backup") or {}).get("keep_daily") or 14),
     }
 
 
@@ -601,8 +611,13 @@ def install_units(manifest: dict, mapping: Dict[str, str]) -> None:
     })
     write_file(UNIT_DIR / f"{slug}-app.service", fill(read_template("app.service"), mapping))
     write_file(UNIT_DIR / f"{slug}-gateway.service", fill(read_template("gateway.service"), mapping))
+    oauth_tmpl = mapping.get("OAUTH_TEMPLATE") or "oauth.scratch.conf"
     dropin = UNIT_DIR / f"{slug}-app.service.d" / "oauth.conf"
-    write_file(dropin, fill(read_template("oauth.conf"), mapping), 0o600)
+    write_file(dropin, fill(read_template(oauth_tmpl), mapping), 0o600)
+    write_file(UNIT_DIR / f"{slug}-backup.service", fill(read_template("backup.service"), mapping))
+    write_file(UNIT_DIR / f"{slug}-backup.timer", fill(read_template("backup.timer"), mapping))
+    logrotate = Path("/etc/logrotate.d") / f"jarvis-{slug}"
+    write_file(logrotate, fill(read_template("logrotate.conf"), mapping))
     write_file(UNIT_DIR / f"{slug}-task-digest.service", fill(read_template("digest.service"), mapping))
     write_file(UNIT_DIR / f"{slug}-task-digest.timer", fill(read_template("digest.timer"), mapping))
     boots = list(sched.get("sweep_on_boot_sec") or list(SWEEP_BOOT_DEFAULTS))
@@ -755,6 +770,12 @@ def provision(manifest_path: Path) -> None:
     run_provision_client(skills_clone, cfg, hermes)
     stamp_identity_mailbox(skills_clone, manifest)
     runtime = json.loads((skills_clone / "_shared" / "runtime.json").read_text())
+    # Dual source: runtime.safety.allow_writes matches JARVIS_ALLOW_WRITES.
+    # provision_client refused true in its *input*; the provisioner patches the
+    # stamped output so captured/blocked/live stay in sync with the unit env.
+    runtime.setdefault("safety", {})["allow_writes"] = bool(posture["writes_armed"])
+    (skills_clone / "_shared" / "runtime.json").write_text(json.dumps(runtime, indent=2) + "\n")
+    log(f"runtime.safety.allow_writes={runtime['safety']['allow_writes']} (synced to env)")
     if (runtime.get("gateway") or {}).get("base_url") != f"http://127.0.0.1:{int(ports['gateway'])}":
         die("runtime gateway.base_url does not equal HERMES_API_URL target")
     if (runtime.get("paths") or {}).get("app_root") != str(jarvis):
@@ -773,11 +794,18 @@ def provision(manifest_path: Path) -> None:
         log("another gateway run is on this host; gateway unit will use --force")
     mapping = common_map(manifest, posture, fernet, force)
     install_units(manifest, mapping)
+    write_file(opt / "ONBOARDING-MAILBOX.md", (TEMPLATES / "ONBOARDING-MAILBOX.md").read_text())
     print_ingress(slug, manifest["public_origin"])
 
     run(["systemctl", "daemon-reload"])
     run(["systemctl", "enable", "--now", f"{slug}-app.service", f"{slug}-gateway.service"])
-    log(f"enabled {slug}-app and {slug}-gateway (timers left disabled)")
+    for unit in (f"{slug}-app.service", f"{slug}-gateway.service"):
+        r = subprocess.run(["systemctl", "is-active", unit], capture_output=True, text=True)
+        st = (r.stdout or "").strip() or "unknown"
+        if st != "active":
+            die(f"{unit} is {st} after enable --now — preflight/start failed (see journalctl -u {unit})")
+    run(["systemctl", "enable", "--now", f"{slug}-backup.timer"])
+    log(f"enabled {slug}-app, {slug}-gateway, and {slug}-backup.timer")
 
 
 def teardown(slug: str, yes: bool) -> None:
@@ -805,6 +833,10 @@ def teardown(slug: str, yes: bool) -> None:
         elif p.exists():
             p.unlink()
             log(f"removed {p}")
+    lr = Path("/etc/logrotate.d") / f"jarvis-{slug}"
+    if lr.exists():
+        lr.unlink()
+        log(f"removed {lr}")
     subprocess.run(["systemctl", "daemon-reload"], check=True)
     subprocess.run(["systemctl", "reset-failed"], check=False)
     if opt.exists():
@@ -819,6 +851,49 @@ def teardown(slug: str, yes: bool) -> None:
     if tree_hits:
         die("teardown incomplete:\n  " + "\n  ".join(tree_hits))
     log("teardown complete")
+
+
+def print_units(manifest_path: Path, posture_override: str | None) -> None:
+    """Render unit templates to stdout. No secrets. No writes."""
+    manifest = load_yaml(manifest_path)
+    check_slug(manifest.get("slug"))
+    if posture_override:
+        if posture_override not in ("production", "scratch"):
+            die("--posture must be production | scratch")
+        if posture_override == "production":
+            manifest = dict(manifest)
+            manifest["writes_posture"] = "blocked"
+            safety = dict(manifest.get("safety") or {})
+            safety["allow_writes"] = False
+            # Production print: no capture suffix in the rendered picture.
+            if posture_override == "production":
+                safety["outbound_recipient_suffix"] = []
+            manifest["safety"] = safety
+            if str(manifest.get("public_origin") or "").startswith("http://"):
+                # Show the production cookie template; origin stays what the file says.
+                pass
+        else:
+            manifest = dict(manifest)
+            manifest["writes_posture"] = "captured"
+    posture = posture_rules(manifest)
+    mapping = common_map(manifest, posture, "[minted-at-stamp]", " --force")
+    mapping.update({
+        "DIGEST_ON_BOOT": "120",
+        "DIGEST_TICK": "300",
+        "DIGEST_ACCURACY": "30",
+        "SWEEP_TICK": "1800",
+        "SWEEP_ACCURACY": "60",
+        "METRICS_CALENDAR": "*-*-* 08:30:00",
+        "METRICS_ACCURACY": "5m",
+        "SWEEP": "stale_email",
+        "SWEEP_ON_BOOT": "180",
+    })
+    print(f"# print-units posture={posture['posture']} cookie={posture['cookie']} "
+          f"writes_armed={posture['writes_armed']} oauth={posture['oauth_template']}")
+    for name in ("app.service", "gateway.service", posture["oauth_template"],
+                 "preflight.sh", "backup.service", "backup.timer"):
+        print(f"\n##### {name} #####")
+        print(fill(read_template(name), mapping))
 
 
 def check_only(manifest_path: Path) -> None:
@@ -851,6 +926,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--teardown", metavar="SLUG")
     ap.add_argument("--yes", action="store_true", help="confirm teardown")
     ap.add_argument("--check-collisions", action="store_true")
+    ap.add_argument("--print-units", action="store_true")
+    ap.add_argument("--posture", choices=("production", "scratch"),
+                    help="with --print-units: render production or scratch templates")
     ap.add_argument("--import-from", metavar="HERMES_HOME",
                     help="reserved (slice 5); exits without copying")
     ap.add_argument("--apply-ingress", action="store_true",
@@ -865,6 +943,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
     if args.teardown:
         teardown(args.teardown, args.yes)
+        return 0
+    if args.print_units:
+        if not args.manifest:
+            die("--print-units requires --manifest")
+        print_units(args.manifest, args.posture)
         return 0
     if not args.manifest:
         die("--manifest is required unless --teardown")

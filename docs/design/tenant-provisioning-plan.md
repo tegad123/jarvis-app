@@ -586,29 +586,38 @@ Client / concierge:
 
 ### WAL-inclusive backups
 
-Scheduled (systemd timer per tenant or one host timer that iterates `/opt/*/hermes`):
+Scheduled (systemd timer per tenant: `{slug}-backup.timer`):
 
-- `sqlite3` backup or `.backup` / `VACUUM INTO` **after** a WAL checkpoint, for `jarvis_accounts.db`, `jarvis_leads.db`, `jarvis_tasks.db`, `jarvis_threads.db`, `sweeps.db`, and optionally `state.db` / `kanban.db`.
+- Python `sqlite3.Connection.backup()` after copying `db`+`-wal`+`-shm` aside (the verify-jarvis ledger procedure). The `sqlite3` CLI is not installed and is not used. Files: `jarvis_accounts.db`, `jarvis_leads.db`, `jarvis_tasks.db`, `jarvis_threads.db`, `sweeps.db`, and optionally `state.db` / `kanban.db` when present.
 - Copy JSONL (`activity_feed`, approvals) as files.
-- Destination and retention are manifest knobs. Do not write backups into the tenant tree that the app serves.
-- Prove restore on `clientzero` before claiming the timer works: backup, teardown-adjacent copy, open the restored DB, row count matches.
+- Destination `/root/backups/{slug}/` (manifest `backup.destination` / `backup.keep_daily`). Do not write backups into the tenant tree the app serves.
+- Retention: **14 daily** stamp directories (plan did not fix N; slice 3 chooses 14).
+- Restore: `scripts/RESTORE.md` next to `scripts/backup_tenant.py`. Prove restore on `clientzero` before claiming the timer works: backup, copy to a scratch dir, one DB sha256-identical.
 
 Testco has none of this. Live has none of this.
 
 ### Log rotation
 
-- journald: `SystemMaxUse` / per-unit `LogRateLimit` in a drop-in — host-level, human-yes if it changes global journald.
-- JSONL: rotate `activity_feed.jsonl` (and approvals) by size/age; the app must open by path so rotation is copytruncate or a reopen signal. If reopen is a code change, that is a separate PR with a human yes.
+- journald: this host's `/etc/systemd/journald.conf` leaves `SystemMaxUse=` and `RateLimit*` at **compile-time defaults** (empty overrides). systemd's defaults are ~10% of the journal filesystem capped at 4G (`SystemMaxUse`), `RateLimitIntervalSec=30s` / `RateLimitBurst=10000`. No per-unit `LogRateLimit` drop-in. Changing global journald is human-yes; this slice does not.
+- Hermes **file** logs (`HERMES_HOME/logs/*.log`): logrotate drop-in `/etc/logrotate.d/jarvis-{slug}`, copytruncate, weekly, 8 rotations. That is the only new file-log rotation.
+- JSONL: `activity_feed.jsonl` / approvals are **not** rotated here. The app opens by path; copytruncate or a reopen signal would be a separate PR with a human yes.
 
-### Monitoring beyond `/api/health`
+### Monitoring — what exists vs what is deferred
 
-Ship as a checklist in the template, not a new SaaS:
+**Exists today (no new SaaS in this slice):**
 
-- `GET /api/health` and `/api/health/summary` on the tenant origin (external probe later).
-- `state/gateway.heartbeat` age.
-- journald `is-failed` for `{slug}-app` and `{slug}-gateway`.
-- cost-guard pause counter.
-- sweep/digest feed heartbeats (absence of a heartbeat after 2× tick is the alert, not a green empty feed).
+- `GET /api/health` and `GET /api/health/summary` on the tenant origin (summary is owner/admin/operator).
+- `threads` counters (including announcing `tenant_config_fallback.*`).
+- ExecStartPre preflight (HERMES_HOME, writes vs boundary, production inversion).
+- `state/gateway.heartbeat` written by the gateway.
+- journald for `{slug}-app` / `{slug}-gateway` (`is-active` / `is-failed`).
+
+**Deferred (honest: not built):**
+
+- External uptime checks against the public origin.
+- Alerting on heartbeat age, cost-guard pause, sweep/digest silence after 2× tick.
+- Prometheus / a paging service.
+- Per-unit journald `LogRateLimit` (host-level, human-yes).
 
 No obligation to install Prometheus in this slice.
 

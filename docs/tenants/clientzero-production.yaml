@@ -1,0 +1,141 @@
+# Production-posture drill on scratch ports. No RFC 2606 capture suffix.
+# APP_COOKIE_SECURE=1 (production oauth template). Writes-guard ON (blocked).
+# Addresses avoid .example so production preflight can pass.
+
+slug: clientzero
+display_name: Client Zero
+business_description: a fictional scratch brokerage used to prove tenant provisioning
+timezone: America/Chicago
+
+assistant_address: nova@cz.local
+agent_display_name: Nova
+mailbox_strategy: dedicated_account
+
+ports:
+  app: 8720
+  gateway: 8662
+  hooks: 18792
+
+public_origin: http://127.0.0.1:8720
+
+sheet_id: ""
+
+boundary_domains:
+  - cz.local
+outbound_suffix_policy: production
+
+skill_loadout: base
+skill_loadout_optional: []
+
+skills_origin_sha: 7427d22fc033fec73fd416abb3f4626fbd59ade8
+curator_packs: omit
+
+writes_posture: blocked
+venv: shared
+
+backup:
+  destination: /root/backups/clientzero
+  keep_daily: 14
+
+
+digest:
+  times_local: ["05:00", "15:00"]
+  default_assignee: ""
+
+sweeps:
+  stale_email_hours: 24
+  email_grace_days: 2
+  task_quiet_hours: 24
+  task_escalate_after: 3
+  lead_quiet_days: 3
+  hot_lead_quiet_days: 1
+  lead_nudge_backoff_days: 3
+  min_interval_minutes: 30
+
+schedule:
+  digest_tick_seconds: 300
+  sweep_tick_seconds: 1800
+  metrics_calendar: "*-*-* 08:30:00"
+  digest_on_boot_sec: 120
+  sweep_on_boot_sec: [180, 240, 300]
+  digest_accuracy_sec: 30
+  sweep_accuracy_sec: 60
+  metrics_accuracy: 5m
+
+email_router:
+  lookback_days: 7
+  recording_subject_prefix: "PLAUD:"
+  deal_channel_prefix: "deals-"
+email_monitor:
+  lookback_days: 14
+gmail_push_trigger:
+  webhook_port: 18792
+  mailbox: ""
+  gcp_project: ""
+  pubsub_topic: ""
+  pubsub_subscription: ""
+  tunnel_hostname: ""
+cost_guard:
+  spend_warn_usd: 20
+  spend_pause_usd: 30
+leads:
+  source: store
+  export_enabled: false
+  export_sheet_id: ""
+tasks:
+  source: store
+lead_reply:
+  sheet_id: ""
+  exclude_tabs: ["SEND LOG", "OLD LEADS"]
+google_calendar:
+  default_calendar_id: ""
+email_to_calendar:
+  calendar_id: ""
+  always_attendee: ""
+meeting_briefing:
+  owner_person: ""
+owner_email_voice:
+  voice_corpus_path: ""
+feed:
+  team_destinations: ["ops", "deals"]
+safety:
+  outbound_recipient_suffix: []
+  allow_writes: false
+gateway:
+  base_url: http://127.0.0.1:8662
+paths:
+  app_root: /opt/clientzero/jarvis-app
+
+# Fixture roster + discord destinations required by provision_client.py.
+# These are RFC 2606 identities, not a real guild.
+platform:
+  primary: discord
+  discord:
+    guild_id: "999111222333444555"
+people:
+  owner:
+    name: Owner
+    display_name: Owner
+    title: owner
+    roles: ["owner"]
+    email: ["owner@cz.local"]
+    platform_ids:
+      discord: ["999111222333444999"]
+  assistant:
+    name: Nova
+    display_name: Nova
+    title: assistant
+    roles: ["assistant"]
+    email: ["nova@cz.local"]
+    platform_ids:
+      discord: []
+destinations:
+  ops:
+    name: ops
+    discord: "999111222333444001"
+  tasks:
+    name: tasks
+    discord: "999111222333444002"
+  assistant:
+    name: assistant
+    discord: "999111222333444003"
