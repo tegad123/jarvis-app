@@ -13,6 +13,8 @@ one in-memory value for the whole process.
 from __future__ import annotations
 
 import logging
+import os
+import re
 import secrets
 import time
 import urllib.error
@@ -28,6 +30,16 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from . import accounts, auth, config, google_connection, threads as threads_mod
 
 log = logging.getLogger(__name__)
+
+# Google expands OpenID scopes (email/profile → userinfo.email/userinfo.profile).
+# oauthlib then raises Warning("Scope has changed ...") unless this is set.
+# Required on the live cutover drop-in as well as testco.
+_RELAX_SCOPE_ENV = "OAUTHLIB_RELAX_TOKEN_SCOPE"
+
+# Strip token-ish query values if an exception message includes a URL or body.
+_REDACT = re.compile(
+    r"(?i)\b(code|access_token|refresh_token|id_token|client_secret)=[^\s&]+"
+)
 
 LOGIN_SCOPES = ("openid", "email", "profile")
 CONNECT_SCOPES = (
@@ -145,14 +157,33 @@ def _fail_response(request: Request, status_code: int = 401) -> JSONResponse:
     return resp
 
 
-def _mint_state(purpose: str) -> Tuple[str, str]:
+def _begin_state(purpose: str) -> Tuple[str, int]:
     nonce = secrets.token_urlsafe(32)
     expires_at = int(time.time()) + config.OAUTH_STATE_MAX_AGE
     accounts.put_oauth_state(nonce, purpose, expires_at)
-    token = _state_serializer().dumps(
-        {"nonce": nonce, "purpose": purpose, "exp": expires_at}
-    )
-    return nonce, token
+    return nonce, expires_at
+
+
+def _sign_state_cookie(
+    nonce: str,
+    purpose: str,
+    expires_at: int,
+    code_verifier: Optional[str] = None,
+) -> str:
+    """Signed state cookie. code_verifier is PKCE, never logged."""
+    payload: Dict[str, Any] = {
+        "nonce": nonce,
+        "purpose": purpose,
+        "exp": expires_at,
+    }
+    if code_verifier:
+        payload["code_verifier"] = code_verifier
+    return _state_serializer().dumps(payload)
+
+
+def _mint_state(purpose: str, code_verifier: Optional[str] = None) -> Tuple[str, str]:
+    nonce, expires_at = _begin_state(purpose)
+    return nonce, _sign_state_cookie(nonce, purpose, expires_at, code_verifier)
 
 
 def start_login(request: Request, response: Response):
@@ -169,8 +200,9 @@ def start_login(request: Request, response: Response):
     if not mock and config.oauth_client_path() is None:
         return _missing_client_page()
 
-    nonce, token = _mint_state(PURPOSE_LOGIN)
+    nonce, expires_at = _begin_state(PURPOSE_LOGIN)
     redirect_uri = f"{origin}/oauth/callback"
+    verifier = None
     if mock:
         loc = f"{origin}/api/auth/google/mock/authorize?{urlencode({'state': nonce})}"
     else:
@@ -185,6 +217,10 @@ def start_login(request: Request, response: Response):
             prompt="select_account",
             include_granted_scopes="false",
         )
+        verifier = flow.code_verifier
+        if not verifier:
+            log.error("google login: Flow produced no code_verifier")
+    token = _sign_state_cookie(nonce, PURPOSE_LOGIN, expires_at, verifier)
     redir = RedirectResponse(loc, status_code=302)
     _set_state_cookie(redir, token)
     return redir
@@ -201,8 +237,9 @@ def start_connect(request: Request, response: Response, sess: dict):
     if not mock and config.oauth_client_path() is None:
         return _missing_client_page()
 
-    nonce, token = _mint_state(PURPOSE_CONNECT)
+    nonce, expires_at = _begin_state(PURPOSE_CONNECT)
     redirect_uri = f"{origin}/oauth/callback"
+    verifier = None
     if mock:
         loc = (
             f"{origin}/api/auth/google/mock/authorize?"
@@ -221,6 +258,10 @@ def start_connect(request: Request, response: Response, sess: dict):
             prompt="consent",
             include_granted_scopes="false",
         )
+        verifier = flow.code_verifier
+        if not verifier:
+            log.error("google connect: Flow produced no code_verifier")
+    token = _sign_state_cookie(nonce, PURPOSE_CONNECT, expires_at, verifier)
     redir = RedirectResponse(loc, status_code=302)
     _set_state_cookie(redir, token)
     return redir
@@ -290,17 +331,40 @@ def _exchange_mock(code: str) -> Dict[str, Any]:
     return rec
 
 
-def _exchange_google_login(code: str, origin: str) -> str:
+def _relax_token_scope() -> None:
+    os.environ.setdefault(_RELAX_SCOPE_ENV, "1")
+
+
+def _safe_exc_text(exc: BaseException) -> str:
+    """Exception text with token-ish query values stripped. Never log .token."""
+    return _REDACT.sub(r"\1=<redacted>", str(exc))
+
+
+def _log_exchange_failure(op: str, exc: BaseException) -> None:
+    log.exception(
+        "%s token exchange failed (%s: %s)",
+        op,
+        type(exc).__name__,
+        _safe_exc_text(exc),
+    )
+
+
+def _exchange_google_login(
+    code: str, origin: str, code_verifier: Optional[str] = None,
+) -> str:
     from google.auth.transport import requests as greq
     from google.oauth2 import id_token as gid
     from google_auth_oauthlib.flow import Flow
 
+    _relax_token_scope()
     redirect_uri = f"{origin}/oauth/callback"
     flow = Flow.from_client_secrets_file(
         str(config.oauth_client_path()),
         scopes=list(LOGIN_SCOPES),
         redirect_uri=redirect_uri,
     )
+    if code_verifier:
+        flow.code_verifier = code_verifier
     flow.fetch_token(code=code)
     raw = flow.credentials.id_token
     if not raw:
@@ -313,15 +377,20 @@ def _exchange_google_login(code: str, origin: str) -> str:
     return email
 
 
-def _exchange_google_connect(code: str, origin: str) -> Dict[str, Any]:
+def _exchange_google_connect(
+    code: str, origin: str, code_verifier: Optional[str] = None,
+) -> Dict[str, Any]:
     from google_auth_oauthlib.flow import Flow
 
     redirect_uri = f"{origin}/oauth/callback"
+    _relax_token_scope()
     flow = Flow.from_client_secrets_file(
         str(config.oauth_client_path()),
         scopes=list(CONNECT_SCOPES),
         redirect_uri=redirect_uri,
     )
+    if code_verifier:
+        flow.code_verifier = code_verifier
     flow.fetch_token(code=code)
     creds = flow.credentials
     granted = " ".join(creds.scopes or [])
@@ -396,25 +465,28 @@ def callback(request: Request, response: Response):
         return _fail_response(request, status_code=400)
     purpose = cookie.get("purpose")
     if purpose == PURPOSE_LOGIN:
-        return _callback_login(request, code, q_state, origin)
+        return _callback_login(request, code, q_state, origin, cookie)
     if purpose == PURPOSE_CONNECT:
-        return _callback_connect(request, code, q_state, origin)
+        return _callback_connect(request, code, q_state, origin, cookie)
     return _fail_response(request, status_code=400)
 
 
-def _callback_login(request: Request, code: str, q_state: str, origin: str):
+def _callback_login(
+    request: Request, code: str, q_state: str, origin: str, cookie: dict,
+):
     if not accounts.consume_oauth_state(q_state, PURPOSE_LOGIN):
         return _fail_response(request, status_code=401)
     if not code:
         return _fail_response(request, status_code=400)
 
+    verifier = (cookie.get("code_verifier") or "").strip() or None
     try:
         if config.oauth_mock():
             email = _exchange_mock(code)["email"]
         else:
-            email = _exchange_google_login(code, origin)
-    except Exception:
-        log.info("google login: token exchange failed")
+            email = _exchange_google_login(code, origin, code_verifier=verifier)
+    except Exception as exc:
+        _log_exchange_failure("google login", exc)
         return _fail_response(request, status_code=401)
 
     acct = accounts.get_by_email(email)
@@ -430,7 +502,9 @@ def _callback_login(request: Request, code: str, q_state: str, origin: str):
     return redir
 
 
-def _callback_connect(request: Request, code: str, q_state: str, origin: str):
+def _callback_connect(
+    request: Request, code: str, q_state: str, origin: str, cookie: dict,
+):
     if not accounts.consume_oauth_state(q_state, PURPOSE_CONNECT):
         return _fail_response(request, status_code=401)
     # FIRST after consume: same gates as GET /api/google/connect/start.
@@ -457,6 +531,7 @@ def _callback_connect(request: Request, code: str, q_state: str, origin: str):
     if not code:
         return _fail_response(request, status_code=400)
 
+    verifier = (cookie.get("code_verifier") or "").strip() or None
     try:
         if config.oauth_mock():
             rec = _exchange_mock(code)
@@ -469,10 +544,12 @@ def _callback_connect(request: Request, code: str, q_state: str, origin: str):
                 "expiry": None,
             }
         else:
-            payload = _exchange_google_connect(code, origin)
+            payload = _exchange_google_connect(
+                code, origin, code_verifier=verifier,
+            )
             granted = payload.get("scopes") or ""
-    except Exception:
-        log.info("google connect: token exchange failed")
+    except Exception as exc:
+        _log_exchange_failure("google connect", exc)
         return _fail_response(request, status_code=401)
 
     if not granted_all_five(granted):
@@ -498,8 +575,12 @@ def _callback_connect(request: Request, code: str, q_state: str, origin: str):
             token_cipher=cipher,
             connected_by=auth.person_of(sess),
         )
-    except Exception:
-        log.info("google connect: encrypt/store failed")
+    except Exception as exc:
+        log.exception(
+            "google connect: encrypt/store failed (%s: %s)",
+            type(exc).__name__,
+            _safe_exc_text(exc),
+        )
         return _fail_response(request, status_code=401)
 
     redir = RedirectResponse("/", status_code=302)

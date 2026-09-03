@@ -177,6 +177,56 @@ ck("start sets a signed state cookie",
    cookie_set(heads, "jarvis_oauth_state"),
    heads.split("set-cookie:", 1)[-1][:40] if "set-cookie:" in heads.lower() else "none")
 
+os.environ.setdefault("HERMES_HOME", str(HOME))
+os.environ.setdefault("JARVIS_ACCOUNTS_DB", str(ACCOUNTS))
+os.environ.setdefault("JARVIS_SKILLS_ROOT",
+                      "/opt/testco/skills/openclaw-imports")
+os.environ.setdefault("JARVIS_IDENTITY_CONFIG",
+                      "/opt/testco/skills/openclaw-imports/_shared/identity.json")
+sys.path.insert(0, "/root/jarvis-app")
+from app import google_oauth, config as app_config  # noqa: E402
+
+
+def _state_cookie_value(jar_path):
+    """Read jarvis_oauth_state from a curl jar. HttpOnly rows included."""
+    for line in pathlib.Path(jar_path).read_text().splitlines():
+        stripped = line.lstrip()
+        http_only = stripped.startswith("#HttpOnly_")
+        if not line.strip() or (stripped.startswith("#") and not http_only):
+            continue
+        raw = stripped[len("#HttpOnly_"):] if http_only else stripped
+        parts = raw.split("\t")
+        if len(parts) >= 7 and parts[5] == "jarvis_oauth_state":
+            return parts[6]
+    return None
+
+
+_state_raw = _state_cookie_value(jar_start)
+_state_keys = []
+_has_verifier = False
+if _state_raw:
+    try:
+        _state_payload = google_oauth._state_serializer().loads(
+            _state_raw, max_age=app_config.OAUTH_STATE_MAX_AGE,
+        )
+        _state_keys = sorted(_state_payload)
+        _has_verifier = bool(
+            isinstance(_state_payload.get("code_verifier"), str)
+            and _state_payload.get("code_verifier")
+        )
+    except Exception as exc:
+        _state_keys = [type(exc).__name__]
+if "/api/auth/google/mock/authorize" in loc:
+    ck("mock start state cookie has nonce/purpose/exp and no code_verifier",
+       set(_state_keys) >= {"exp", "nonce", "purpose"}
+       and "code_verifier" not in _state_keys,
+       f"keys={_state_keys}")
+else:
+    ck("real-mode start state cookie carries code_verifier",
+       set(_state_keys) >= {"code_verifier", "exp", "nonce", "purpose"}
+       and _has_verifier,
+       f"keys={_state_keys}")
+
 print("\n── presence: forged state ─────────────────────────────────")
 jar_forge = str(SCR / "forge.jar")
 pathlib.Path(jar_forge).unlink(missing_ok=True)
