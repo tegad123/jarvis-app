@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import AmbientField from './components/AmbientField'
 import Chrome from './components/Chrome'
-import TabBar, { type TabId } from './components/TabBar'
+import TabBar, { canSeeSettings, type TabId } from './components/TabBar'
 import Approvals from './screens/Approvals'
 import Ask from './screens/Ask'
 import Feed from './screens/Feed'
 import Leads from './screens/Leads'
 import Login from './screens/Login'
+import Settings from './screens/Settings'
 import Tasks from './screens/Tasks'
 import { Unauthorized, getSession, logout } from './lib/api'
 import { applyTheme, initialTheme, type Theme } from './lib/theme'
@@ -60,6 +61,13 @@ export default function App() {
     setAuth({ status: 'out' })
     setTab('feed')
   }, [])
+
+  const onTab = useCallback((next: TabId) => {
+    if (next === 'settings' && auth.status === 'in' && !canSeeSettings(auth.role)) {
+      return
+    }
+    setTab(next)
+  }, [auth])
 
   if (auth.status === 'checking') {
     return (
@@ -135,10 +143,17 @@ export default function App() {
         {tab === 'leads' && (
           <Leads personKey={auth.personKey} onUnauthorized={() => setAuth({ status: 'out' })} />
         )}
+
+        {tab === 'settings' && canSeeSettings(auth.role) && (
+          <Settings
+            role={auth.role}
+            onUnauthorized={() => setAuth({ status: 'out' })}
+          />
+        )}
        </div>
       </main>
 
-      <TabBar active={tab} onChange={setTab} />
+      <TabBar active={tab} onChange={onTab} role={auth.role} />
     </div>
   )
 }

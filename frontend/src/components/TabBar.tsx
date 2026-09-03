@@ -1,6 +1,13 @@
 import AsteriskMark from './AsteriskMark'
+import type { Role } from '../lib/types'
 
-export type TabId = 'feed' | 'ask' | 'approvals' | 'leads' | 'tasks'
+export type TabId = 'feed' | 'ask' | 'approvals' | 'leads' | 'tasks' | 'settings'
+
+/** Settings is owner/admin only. Members see no tab. Operators observe; they
+ *  do not connect or disconnect the tenant mailbox. */
+export function canSeeSettings(role: Role): boolean {
+  return role === 'owner' || role === 'admin'
+}
 
 /**
  * Frosted tab bar — glass tier 1, same treatment as the header.
@@ -9,6 +16,7 @@ export type TabId = 'feed' | 'ask' | 'approvals' | 'leads' | 'tasks'
 interface Props {
   active: TabId
   onChange: (tab: TabId) => void
+  role: Role
 }
 
 const ICON = { width: 22, height: 22, viewBox: '0 0 24 24', fill: 'none' } as const
@@ -68,9 +76,23 @@ const TABS: { id: TabId; label: string; icon: JSX.Element }[] = [
       </svg>
     ),
   },
+  {
+    id: 'settings',
+    label: 'Settings',
+    icon: (
+      <svg {...ICON} aria-hidden="true">
+        <circle cx="12" cy="12" r="3" {...S} />
+        <path
+          d="M12 4.5v1.4M12 18.1V19.5M7.05 7.05l1 1M15.95 15.95l1 1M4.5 12H5.9M18.1 12H19.5M7.05 16.95l1-1M15.95 8.05l1-1"
+          {...S}
+        />
+      </svg>
+    ),
+  },
 ]
 
-export default function TabBar({ active, onChange }: Props) {
+export default function TabBar({ active, onChange, role }: Props) {
+  const tabs = TABS.filter((t) => t.id !== 'settings' || canSeeSettings(role))
   return (
     // ONE nav, two shapes. Bottom bar on mobile (thumb reach); a narrow LEFT
     // RAIL from md up, because a full-width bar pinned to the bottom of a
@@ -98,7 +120,7 @@ export default function TabBar({ active, onChange }: Props) {
                    md:h-full md:flex-col md:justify-start md:gap-1 md:px-2 md:pb-2 md:pt-[96px]
                    lg:h-auto lg:gap-0.5 lg:px-3 lg:pt-0"
       >
-        {TABS.map((t) => {
+        {tabs.map((t) => {
           const on = t.id === active
           return (
             <li key={t.id} className="flex-1 md:flex-none">
