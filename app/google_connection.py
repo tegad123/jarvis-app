@@ -103,12 +103,19 @@ def status_public() -> Dict[str, Any]:
             "status": STATUS_DISCONNECTED,
             "google_email": None,
             "connected_at": None,
+            "refreshed_at": None,
         }
     return {
         "status": row.get("status") or STATUS_DISCONNECTED,
         "google_email": row.get("google_email"),
         "connected_at": row.get("connected_at"),
+        "refreshed_at": row.get("refreshed_at"),
     }
+
+
+def mark_needs_reauth(kind: str) -> None:
+    """Public door for google_creds refresh failure. Kind is a class, not a body."""
+    _mark_last_error(kind)
 
 
 def put_connected(
@@ -173,6 +180,10 @@ def build_credentials():
         _mark_last_error("decrypt_failed")
         log.error("google_connection: decrypt failed (payload)")
         raise
+    except RuntimeError:
+        # Missing APP_GOOGLE_TOKEN_KEY is a connect-path failure, not a corrupt cipher.
+        log.error("google_connection: token key missing or unusable")
+        raise
     except Exception as exc:
         _bump_decrypt_failed()
         _mark_last_error(type(exc).__name__)
@@ -194,8 +205,9 @@ def build_credentials():
     if isinstance(raw_exp, str) and raw_exp:
         try:
             expiry = datetime.fromisoformat(raw_exp)
-            if expiry.tzinfo is None:
-                expiry = expiry.replace(tzinfo=timezone.utc)
+            # google-auth compares expiry to utcnow() as naive UTC.
+            if expiry.tzinfo is not None:
+                expiry = expiry.astimezone(timezone.utc).replace(tzinfo=None)
         except ValueError:
             expiry = None
 

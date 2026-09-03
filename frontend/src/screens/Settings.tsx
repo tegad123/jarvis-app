@@ -12,8 +12,8 @@ import type { GoogleConnectionStatus, Role } from '../lib/types'
  * courtesy on top of that, never instead of it. Members and operators do not
  * see the tab and do not render this card.
  *
- * Status GET returns status / google_email / connected_at only. This page
- * never asks for a token, refresh token, or client secret.
+ * Status GET returns status / google_email / connected_at / refreshed_at only.
+ * This page never asks for a token, refresh token, or client secret.
  */
 
 interface Props {
@@ -26,27 +26,32 @@ type Phase = 'idle' | 'disconnecting' | 'disconnected'
 function statusCopy(
   conn: GoogleConnectionStatus | null,
   phase: Phase,
-): { status: string; time: string | null } {
+): { status: string; time: string | null; timeAbs: string | null } {
   if (phase === 'disconnecting') {
-    return { status: 'Disconnecting…', time: null }
+    return { status: 'Disconnecting…', time: null, timeAbs: null }
   }
   if (phase === 'disconnected' || conn?.status === 'disconnected') {
     return {
       status: phase === 'disconnected' ? 'Disconnected' : 'Never connected',
       time: null,
+      timeAbs: null,
     }
   }
   if (conn?.status === 'needs_reauth') {
-    return { status: 'Needs reauth', time: null }
+    return { status: 'Needs reauth', time: null, timeAbs: null }
   }
   if (conn?.status === 'connected') {
-    const ts = conn.connected_at
+    const ts = conn.refreshed_at || conn.connected_at
+    if (!ts) return { status: 'Connected', time: null, timeAbs: null }
     return {
       status: 'Connected',
-      time: ts ? `Connected ${relativeTime(ts)}` : null,
+      time: conn.refreshed_at
+        ? `Last refreshed ${relativeTime(conn.refreshed_at)}`
+        : `Connected ${relativeTime(conn.connected_at as string)}`,
+      timeAbs: ts,
     }
   }
-  return { status: 'Never connected', time: null }
+  return { status: 'Never connected', time: null, timeAbs: null }
 }
 
 export default function Settings({ role, onUnauthorized }: Props) {
@@ -100,7 +105,7 @@ export default function Settings({ role, onUnauthorized }: Props) {
     try {
       await disconnectGoogleConnection()
       setPhase('disconnected')
-      setConn({ status: 'disconnected', google_email: null, connected_at: null })
+      setConn({ status: 'disconnected', google_email: null, connected_at: null, refreshed_at: null })
     } catch (err) {
       setPhase('idle')
       if (err instanceof Unauthorized) {
@@ -143,10 +148,10 @@ export default function Settings({ role, onUnauthorized }: Props) {
             {mailbox}
           </p>
         )}
-        {copy.time && conn?.connected_at && (
+        {copy.time && copy.timeAbs && (
           <p
             className="mt-1 text-caption text-light-text-muted dark:text-dark-text-muted"
-            title={absoluteTime(conn.connected_at)}
+            title={absoluteTime(copy.timeAbs)}
           >
             {copy.time}
           </p>
