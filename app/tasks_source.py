@@ -33,16 +33,20 @@ def _tc():
 
 def source() -> str:
     explicit = (os.environ.get("JARVIS_TASKS_SOURCE") or "").strip().lower()
-    if explicit in ("store", "legacy"):
-        return explicit
     try:
         tc = _tc()
         configured = (tc.get("skills.tasks.source", "") or "").strip().lower()
+        if explicit in ("store", "legacy") and configured in ("store", "legacy") and explicit != configured:
+            tc.announce_mismatch("skills.tasks.source", "JARVIS_TASKS_SOURCE", configured, explicit)
+        if explicit in ("store", "legacy"):
+            return explicit
         if configured in ("store", "legacy"):
             return configured
         leads = (tc.get("skills.leads.source", "") or "").strip().lower()
         return "store" if leads == "store" else "legacy"
     except Exception:
+        if explicit in ("store", "legacy"):
+            return explicit
         # No readable config is not an app-native tenant. Conservative on
         # purpose: writing tasks into a store nobody reads is a silent loss.
         return "legacy"

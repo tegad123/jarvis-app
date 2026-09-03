@@ -14,6 +14,7 @@ anything without editing it.
 """
 
 import os
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -95,7 +96,32 @@ COOKIE_NAME = get("APP_COOKIE_NAME", "jarvis_session")
 # default. Set APP_COOKIE_SECURE=0 only for a plain-HTTP loopback test.
 COOKIE_SECURE = get("APP_COOKIE_SECURE", "1") not in ("0", "false", "no")
 
-GATEWAY_URL = get("HERMES_API_URL", "http://127.0.0.1:8642").rstrip("/")
+def gateway_url() -> str:
+    """HERMES_API_URL (env or tenant .env), else runtime gateway.base_url. Never :8642."""
+    env = (get("HERMES_API_URL") or "").strip().rstrip("/")
+    if env:
+        os.environ["HERMES_API_URL"] = env
+    try:
+        p = str(SHARED)
+        if p not in sys.path:
+            sys.path.insert(0, p)
+        import tenant_config as tc
+        return tc.gateway_url()
+    except Exception:
+        if env:
+            return env
+        raise RuntimeError(
+            "gateway.base_url required unless HERMES_API_URL is set "
+            "(never silent :8642)"
+        )
+
+
+# Resolved at import. Empty only if neither env nor runtime can say — callers
+# that hit the gateway will fail loudly rather than talk to live :8642.
+try:
+    GATEWAY_URL = gateway_url()
+except Exception:
+    GATEWAY_URL = (os.environ.get("HERMES_API_URL") or "").rstrip("/")
 
 # Login throttle. This endpoint is publicly reachable through the tunnel and
 # guards a single shared passphrase, so unbounded guessing is not acceptable.
