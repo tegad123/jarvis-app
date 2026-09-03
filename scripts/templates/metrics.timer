@@ -1,0 +1,10 @@
+[Unit]
+Description=Tick the {{DISPLAY_NAME}} monthly usage report
+
+[Timer]
+OnCalendar={{METRICS_CALENDAR}}
+Persistent=true
+AccuracySec={{METRICS_ACCURACY}}
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,27 @@
+[Unit]
+Description={{DISPLAY_NAME}} — {{SWEEP}} sweep
+After={{SLUG}}-app.service
+Wants={{SLUG}}-app.service
+
+[Service]
+Type=oneshot
+WorkingDirectory={{SKILLS}}/sweeps
+ExecStartPre={{PREFLIGHT}}
+ExecStart={{VENV_PYTHON}} {{SKILLS}}/sweeps/scripts/sweep_tick.py --sweep {{SWEEP}}
+Environment=HERMES_HOME={{HERMES_HOME}}
+Environment=HOME={{OPT}}
+Environment=PYTHONUNBUFFERED=1
+Environment=JARVIS_SKILLS_ROOT={{SKILLS}}
+Environment=JARVIS_RUNTIME_CONFIG={{SKILLS}}/_shared/runtime.json
+Environment=JARVIS_IDENTITY_CONFIG={{SKILLS}}/_shared/identity.json
+Environment=JARVIS_TASKS_DB={{HERMES_HOME}}/state/jarvis_tasks.db
+Environment=JARVIS_THREADS_DB={{HERMES_HOME}}/state/jarvis_threads.db
+Environment=JARVIS_LEADS_DB={{HERMES_HOME}}/state/jarvis_leads.db
+Environment=JARVIS_ACTIVITY_FEED={{HERMES_HOME}}/state/activity_feed.jsonl
+Environment=JARVIS_TASKS_SOURCE=store
+{{WRITES_LINE}}
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

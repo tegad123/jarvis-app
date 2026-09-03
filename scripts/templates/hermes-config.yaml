@@ -1,0 +1,10 @@
+# Tenant-neutral Hermes config. Port is the manifest gateway port.
+# No API keys. No live platform tokens.
+database:
+  journal_mode: wal
+platforms:
+  api_server:
+    host: 127.0.0.1
+    port: {{GATEWAY_PORT}}
+curator:
+  enabled: false

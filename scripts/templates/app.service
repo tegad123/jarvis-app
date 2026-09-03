@@ -1,0 +1,38 @@
+[Unit]
+Description={{DISPLAY_NAME}} — Jarvis app backend (FastAPI, 127.0.0.1:{{APP_PORT}})
+After=network-online.target {{SLUG}}-gateway.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory={{JARVIS_APP}}
+ExecStartPre={{PREFLIGHT}}
+ExecStart={{VENV_PYTHON}} -m app.main
+Restart=on-failure
+RestartSec=5
+
+# EVERY STORE NAMED EXPLICITLY. No 8642. No /root/jarvis-app fallbacks.
+# HOME=/opt/{slug} — never HOME=/root (live-fallback hazard).
+Environment=HERMES_HOME={{HERMES_HOME}}
+Environment=HOME={{OPT}}
+Environment=PYTHONUNBUFFERED=1
+Environment=APP_HOST=127.0.0.1
+Environment=APP_PORT={{APP_PORT}}
+Environment=JARVIS_SKILLS_ROOT={{SKILLS}}
+Environment=HERMES_API_URL=http://127.0.0.1:{{GATEWAY_PORT}}
+Environment=JARVIS_RUNTIME_CONFIG={{SKILLS}}/_shared/runtime.json
+Environment=JARVIS_IDENTITY_CONFIG={{SKILLS}}/_shared/identity.json
+Environment=JARVIS_ACTIVITY_FEED={{HERMES_HOME}}/state/activity_feed.jsonl
+Environment=JARVIS_TASKS_DB={{HERMES_HOME}}/state/jarvis_tasks.db
+Environment=JARVIS_THREADS_DB={{HERMES_HOME}}/state/jarvis_threads.db
+Environment=JARVIS_LEADS_DB={{HERMES_HOME}}/state/jarvis_leads.db
+Environment=JARVIS_ACCOUNTS_DB={{HERMES_HOME}}/state/jarvis_accounts.db
+Environment=JARVIS_APPROVALS={{HERMES_HOME}}/state/approvals.jsonl
+Environment=JARVIS_APPROVAL_DECISIONS={{HERMES_HOME}}/state/approvals_decisions.jsonl
+Environment=JARVIS_ATTACHMENTS_DIR={{JARVIS_APP}}/data/attachments
+Environment=JARVIS_LEADS_SOURCE=store
+Environment=JARVIS_TASKS_SOURCE=store
+{{WRITES_LINE}}
+
+[Install]
+WantedBy=multi-user.target

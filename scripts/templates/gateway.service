@@ -1,0 +1,24 @@
+[Unit]
+Description={{DISPLAY_NAME}} — Hermes agent gateway (127.0.0.1:{{GATEWAY_PORT}})
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory={{OPT}}
+ExecStartPre={{PREFLIGHT}}
+ExecStart={{HERMES_PYTHON}} -m hermes_cli.main gateway run{{GATEWAY_FORCE}}
+Restart=on-failure
+RestartSec=10
+
+Environment=HERMES_HOME={{HERMES_HOME}}
+Environment=HOME={{OPT}}
+Environment=PYTHONUNBUFFERED=1
+Environment=JARVIS_SKILLS_ROOT={{SKILLS}}
+Environment=JARVIS_RUNTIME_CONFIG={{SKILLS}}/_shared/runtime.json
+Environment=JARVIS_IDENTITY_CONFIG={{SKILLS}}/_shared/identity.json
+Environment=JARVIS_ACTIVITY_FEED={{HERMES_HOME}}/state/activity_feed.jsonl
+{{WRITES_LINE}}
+
+[Install]
+WantedBy=multi-user.target
