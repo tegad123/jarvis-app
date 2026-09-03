@@ -57,16 +57,26 @@ for f in "$RUNTIME" "$SKILLS/_shared/identity.json" "$SKILLS/_shared/channels.js
     fail "prior-tenant term found in reachable config: $f"
   fi
   if [ "$POSTURE" = "live" ] || [ "$POSTURE" = "blocked" ]; then
-    if grep -qiE 'testco|FIXTURE-' "$f"; then
-      fail "scratch/testco leftover in reachable config: $f"
+    if grep -qiE "$PROD_FORBID" "$f"; then
+      fail "production leftover (.example / testco / FIXTURE-) in reachable config: $f"
     fi
   fi
 done
 
-# ── writes vs boundary
+# Production refuses mock / sheet-fixture flags (env or unit-shaped leftovers).
+if [ "$POSTURE" = "live" ] || [ "$POSTURE" = "blocked" ]; then
+  case "${APP_GOOGLE_OAUTH_MOCK:-}" in
+    1|true|yes|TRUE) fail "production posture refuses APP_GOOGLE_OAUTH_MOCK=$APP_GOOGLE_OAUTH_MOCK" ;;
+  esac
+  if [ -n "${JARVIS_SHEET_FIXTURE:-}" ]; then
+    fail "production posture refuses JARVIS_SHEET_FIXTURE"
+  fi
+fi
+
+# ── writes vs boundary (dual source: env is the kill switch; posture must match)
 if [ "${JARVIS_ALLOW_WRITES:-0}" = "1" ]; then
   if [ "$POSTURE" = "live" ] || [ "$POSTURE" = "blocked" ]; then
-    fail "JARVIS_ALLOW_WRITES=1 is not a $POSTURE posture — writes-guard must stay on"
+    fail "JARVIS_ALLOW_WRITES=1 is not a $POSTURE posture — writes-guard must stay on (testco combination refused)"
   fi
   SUFFIX=$(JARVIS_RUNTIME_CONFIG="$RUNTIME" python3 -c "
 import sys; sys.path.insert(0,'$SKILLS/_shared')
@@ -90,15 +100,18 @@ for addr in ('probe@34dev.com', 'probe@gmail.com', 'probe@cqhouston.com'):
 ob.check('probe@fixture.example', announce=False)
 " >/dev/null 2>&1 || fail "the boundary did not behave correctly on a live probe"
 else
+  if [ "$POSTURE" = "captured" ]; then
+    fail "writes_posture=captured but JARVIS_ALLOW_WRITES is not 1"
+  fi
   # Production + reserved suffix pretending to be live is the testco clone hazard.
-  if [ "$POSTURE" = "live" ]; then
+  if [ "$POSTURE" = "live" ] || [ "$POSTURE" = "blocked" ]; then
     LIVE_CHECK=$(JARVIS_RUNTIME_CONFIG="$RUNTIME" python3 -c "
 import sys; sys.path.insert(0,'$SKILLS/_shared')
 import outbound_boundary as ob
 print(','.join(ob.suffixes()))
 " 2>&1) || true
     if echo "$LIVE_CHECK" | grep -qiE '\.example|example\.com'; then
-      fail "writes_posture=live but runtime still has an RFC 2606 capture suffix"
+      fail "production posture but runtime still has an RFC 2606 capture suffix"
     fi
   fi
   SUFFIX="none"

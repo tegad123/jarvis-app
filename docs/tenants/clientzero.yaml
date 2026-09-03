@@ -36,6 +36,11 @@ curator_packs: omit
 writes_posture: captured
 venv: shared
 
+backup:
+  destination: /root/backups/clientzero
+  keep_daily: 14
+
+
 digest:
   times_local: ["05:00", "15:00"]
   default_assignee: ""
