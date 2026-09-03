@@ -64,8 +64,8 @@ def _tz():
             sys.path.insert(0, p)
         import tenant_config as tc
         from zoneinfo import ZoneInfo
-        name = (tc.get("client.timezone", "") or "").strip()
-        return ZoneInfo(name) if name else timezone.utc
+        name = tc.timezone_name()
+        return ZoneInfo(name)
     except Exception:
         return timezone.utc
 

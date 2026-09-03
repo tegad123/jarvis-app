@@ -1,0 +1,130 @@
+# Tenant ops manifest — schema example (not a live tenant).
+# The provisioner (slice 2) reads this file. Secrets stay out: session secret,
+# passphrase, Fernet key, API keys. The provisioner generates or prompts.
+#
+# Do not fork two sources for timezone, sheet_id, or assistant_address.
+# public_origin and ports stay here (and process env); they do NOT go in
+# runtime.json (auth-connect plan: one origin, one process, one tenant).
+#
+# Agent name is tenant-chosen. Address shape: {agent_name}@{clientdomain}.
+
+slug: acmerealty
+display_name: Acme Realty
+business_description: a fictional brokerage used as the provisioning-schema example
+timezone: America/Chicago
+
+assistant_address: sofia@acmerealty.com
+agent_display_name: Sofia
+mailbox_strategy: dedicated_account   # only v1 value; send_as_alias is rejected
+
+ports:
+  app: 8720
+  gateway: 8662
+  hooks: 18792
+
+public_origin: https://acmerealty.app.yamin.io   # feeds APP_PUBLIC_ORIGIN; not runtime.json
+
+sheet_id: ""                          # real; empty allowed until wired
+
+boundary_domains:
+  - acmerealty.com
+outbound_suffix_policy: production    # scratch uses RFC 2606 capture; production does not
+
+skill_loadout: base                   # name of a loadout in slice 4; plus optional enables
+skill_loadout_optional: []
+
+skills_origin_sha: e14b70eeb49fab876fa403ec6525bf55d3e64946
+curator_packs: omit                   # omit | defaults
+
+writes_posture: blocked               # blocked | captured | live
+venv: shared                          # shared | per-tenant (per-tenant is human-yes)
+
+# Digest / sweep / schedule knobs (also stamped into runtime.json).
+digest:
+  times_local: ["05:00", "15:00"]     # skills.task-manager.digest_times_local
+  lookback_days: 30
+  cutoff_hours: 48
+  transport: gmail_api
+  default_assignee: ""
+
+sweeps:
+  stale_email_hours: 24
+  email_grace_days: 2
+  task_quiet_hours: 24
+  task_escalate_after: 3
+  lead_quiet_days: 3
+  hot_lead_quiet_days: 1
+  lead_nudge_backoff_days: 3
+  min_interval_minutes: 30
+  lead_revival_hours: 48
+
+schedule:
+  digest_tick_seconds: 300
+  sweep_tick_seconds: 1800
+  metrics_calendar: "*-*-* 08:30:00"
+  digest_on_boot_sec: 120
+  sweep_on_boot_sec: [180, 240, 300]
+  digest_accuracy_sec: 30
+  sweep_accuracy_sec: 60
+  metrics_accuracy: 5m
+
+# Remaining tenant-preference knobs that live in runtime.json via tenant_config.
+email_router:
+  lookback_days: 7
+  recording_subject_prefix: "PLAUD:"
+  deal_channel_prefix: "deals-"
+email_monitor:
+  lookback_days: 14
+gmail_push_trigger:
+  webhook_port: 18792                 # must equal ports.hooks; unset refuses to bind
+  mailbox: ""                         # blank → identity.assistant_address
+  gcp_project: ""
+  pubsub_topic: ""
+  pubsub_subscription: ""
+  tunnel_hostname: ""
+  watchdog_lookback_hours: 2
+  poll_seconds: 60                    # live-only poller; required in tc before any new poller unit
+cost_guard:
+  spend_warn_usd: 20
+  spend_pause_usd: 30
+  session_check_minutes: 15           # hermes-cron; no systemd unit
+  context_check_minutes: 30
+  daily_spend_check_minutes: 120
+  prune_cron: "0 8 * * *"             # UTC
+showingsmart_autoreply:
+  past_window_hours: 24
+  default_duration_hours: 1
+crm_weekly_brief:
+  local_time: "Monday 08:00"          # documentation-only until a timer is sliced
+metrics:
+  retention_days: 180
+leads:
+  source: store
+  export_enabled: false
+  export_sheet_id: ""
+tasks:
+  source: store
+lead_reply:
+  sheet_id: ""
+  exclude_tabs: ["SEND LOG", "OLD LEADS"]
+google_calendar:
+  default_calendar_id: ""
+email_to_calendar:
+  calendar_id: ""
+  always_attendee: ""
+meeting_intake:
+  subject_prefix: "Meeting:"
+  max_transcript_chars: 12000
+meeting_briefing:
+  owner_person: ""
+owner_email_voice:
+  voice_corpus_path: ""
+feed:
+  team_destinations: ["ops", "deals"]
+safety:
+  outbound_recipient_suffix: []       # production: none; scratch: [".example", "example.com"]
+  allow_writes: false                 # runtime kill switch is JARVIS_ALLOW_WRITES
+gateway:
+  base_url: http://127.0.0.1:8662     # must equal HERMES_API_URL; never silent 8642
+paths:
+  app_root: /opt/acmerealty/jarvis-app   # required; no /root/jarvis-app fallback

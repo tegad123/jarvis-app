@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -95,6 +96,20 @@ def row_count() -> int:
     return int(n["n"] if n["n"] is not None else 0)
 
 
+def _announce_mailbox_match(google_email: Optional[str]) -> None:
+    """google_connection.google_email vs identity.assistant_address. Mismatch announces."""
+    try:
+        p = str(config.SHARED)
+        if p not in sys.path:
+            sys.path.insert(0, p)
+        import identity
+        import tenant_config as tc
+        addr = (identity.load().get("assistant_address") or "").strip()
+        tc.announce_assistant_mailbox_mismatch(google_email or "", addr)
+    except Exception:
+        log.warning("google_connection: mailbox-match check failed", exc_info=True)
+
+
 def status_public() -> Dict[str, Any]:
     """The GET /api/google/connection body. No token-ish keys, no cipher."""
     row = get_row()
@@ -105,9 +120,11 @@ def status_public() -> Dict[str, Any]:
             "connected_at": None,
             "refreshed_at": None,
         }
+    email = row.get("google_email")
+    _announce_mailbox_match(email)
     return {
         "status": row.get("status") or STATUS_DISCONNECTED,
-        "google_email": row.get("google_email"),
+        "google_email": email,
         "connected_at": row.get("connected_at"),
         "refreshed_at": row.get("refreshed_at"),
     }
@@ -137,6 +154,7 @@ def put_connected(
         (google_email, scopes, token_cipher, STATUS_CONNECTED, connected_by, now),
     )
     conn.commit()
+    _announce_mailbox_match(google_email)
 
 
 def clear() -> None:

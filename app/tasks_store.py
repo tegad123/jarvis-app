@@ -218,8 +218,8 @@ def _tzinfo():
         _shared()
         import tenant_config as tc
         from zoneinfo import ZoneInfo
-        name = (tc.get("client.timezone", "") or "").strip()
-        return ZoneInfo(name) if name else timezone.utc
+        name = tc.timezone_name()
+        return ZoneInfo(name)
     except Exception:
         return timezone.utc
 
@@ -228,7 +228,7 @@ def tz_name() -> str:
     try:
         _shared()
         import tenant_config as tc
-        return (tc.get("client.timezone", "") or "").strip() or "UTC"
+        return tc.timezone_name()
     except Exception:
         return "UTC"
 

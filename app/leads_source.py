@@ -35,9 +35,11 @@ TEMPERATURE_RANK = {"hot": 3, "warm": 2, "cold": 1}
 
 def source() -> str:
     explicit = (os.environ.get("JARVIS_LEADS_SOURCE") or "").strip().lower()
+    configured = (tc.get("skills.leads.source", "") or "").strip().lower()
+    if explicit in ("sheet", "store") and configured in ("sheet", "store") and explicit != configured:
+        tc.announce_mismatch("skills.leads.source", "JARVIS_LEADS_SOURCE", configured, explicit)
     if explicit in ("sheet", "store"):
         return explicit
-    configured = (tc.get("skills.leads.source", "") or "").strip().lower()
     if configured in ("sheet", "store"):
         return configured
     return "sheet" if tc.get("skills.lead-reply.sheet_id", "") else "store"
