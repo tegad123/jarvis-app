@@ -524,6 +524,14 @@ def run_provision_client(skills_clone: Path, cfg: dict, hermes_home: Path) -> No
     env = os.environ.copy()
     env["HERMES_HOME"] = str(hermes_home)
     env["HOME"] = str(hermes_home.parent)
+    # Origin clones may still carry another tenant's identity/runtime (testco at
+    # the slice-1 pin). This is a fresh /opt/{slug} stamp — drop those files so
+    # provision_client writes this tenant without --force on a live tree.
+    for name in ("identity.json", "channels.json", "runtime.json"):
+        p = skills_clone / "_shared" / name
+        if p.exists():
+            log(f"removing clone-baked {name} before provision_client")
+            p.unlink()
     log(f"running provision_client.py --config {cfg_path}")
     subprocess.run(
         [str(SHARED_VENV), str(skills_clone / "_shared" / "provision_client.py"),
