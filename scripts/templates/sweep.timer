@@ -1,0 +1,10 @@
+[Unit]
+Description=Tick the {{DISPLAY_NAME}} {{SWEEP}} sweep
+
+[Timer]
+OnBootSec={{SWEEP_ON_BOOT}}
+OnUnitActiveSec={{SWEEP_TICK}}
+AccuracySec={{SWEEP_ACCURACY}}
+
+[Install]
+WantedBy=timers.target

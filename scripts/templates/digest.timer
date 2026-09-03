@@ -1,0 +1,10 @@
+[Unit]
+Description=Tick the {{DISPLAY_NAME}} task digest
+
+[Timer]
+OnBootSec={{DIGEST_ON_BOOT}}
+OnUnitActiveSec={{DIGEST_TICK}}
+AccuracySec={{DIGEST_ACCURACY}}
+
+[Install]
+WantedBy=timers.target

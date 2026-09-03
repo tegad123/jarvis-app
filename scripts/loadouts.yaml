@@ -1,0 +1,39 @@
+# Slice 4 loadout the provisioner reads. SKILLS_MANIFEST.md stays the comment.
+# The skills origin at the slice-2 pin does not yet carry LOADOUTS.yaml; this
+# file is that list, copied from docs/design/tenant-provisioning-plan.md slice 4.
+# If a clone at skills_origin_sha contains LOADOUTS.yaml, the provisioner
+# prefers that file.
+
+base:
+  - email-router
+  - sweeps
+  - task-manager
+  - email-monitor
+  - email-to-calendar
+  - google-calendar
+  - read-email
+  - owner-email
+  - owner-email-voice
+  - lead-reply
+  - showing-notifications
+  - meeting-briefing
+  - call-action-items
+  - cost-guard
+  - universal-bridge
+  - gmail-push-trigger
+
+optional:
+  - crm-contact-suggest
+  - crm-weekly-brief
+  - discord-recording-handler
+  - showingsmart-autoreply
+  - meeting-intake
+  - read-pdf
+  - excel-xlsx
+  - create-presentation
+
+excluded:
+  - har-deal-tracker
+  - shopify-stock-monitor
+  - jarvis-render
+  - gbrain-memory
