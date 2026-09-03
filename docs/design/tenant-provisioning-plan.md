@@ -39,16 +39,20 @@ Taken from the running units, `/opt/testco`, `/etc/cloudflared/config.yml`, and 
   fixtures/                 # sheet JSON, xlsx, digest/meeting/showingsmart .eml files
   hermes/                   # HERMES_HOME
   jarvis-app/               # separate git checkout of this repo (can lag main)
-  skills/                   # separate git repo; hermes/skills → symlink here
+                            # has its own .venv/ that units do NOT use
+  skills/                   # HERMES skill root (not only openclaw-imports)
+  skills/openclaw-imports/  # Jarvis product skills (own git repo)
 ```
 
-`/opt/testco/hermes/skills` is a symlink to `/opt/testco/skills`, not a copy.
+`/opt/testco/hermes/skills` is a symlink to `/opt/testco/skills`, not a copy. That parent also holds Hermes curator packs (`apple`, `creative`, `github`, `productivity`, `research`, `mlops`, `media`, `software-development`, `autonomous-ai-agents`, `email`, plus empty `secrets/`). `JARVIS_SKILLS_ROOT` points at `…/openclaw-imports`; the gateway sees the whole parent via `HERMES_HOME/skills`. A provisioner that clones only `openclaw-imports` still needs a defined policy for those curator packs (copy from hermes-agent defaults, omit, or symlink) — they are not Jarvis product and must-NOT-copy from testco's dirty tree.
+
+`/opt/testco/jarvis-app/tools/preflight.sh` is branch/PR hygiene for agents. It is **not** the systemd ExecStartPre gate (`testco_preflight.sh`).
 
 ### HERMES_HOME (`/opt/testco/hermes`)
 
 | Path | What it is | Copy class |
 |------|------------|------------|
-| `.env` | Tenant secrets (`APP_SESSION_SECRET`, `APP_PASSPHRASE`, model/API keys). Mock OAuth is **not** here. | must-NOT-copy (generate fresh) |
+| `.env` | Tenant secrets. Keys present (values not recorded): `APP_SESSION_SECRET`, `API_SERVER_KEY`, `APP_PORT`, `HERMES_API_URL`, `APP_PASSPHRASE`, `APP_OPERATOR_LABEL`, `APP_OPERATOR_PASSPHRASES`. Mock OAuth is **not** here. | must-NOT-copy (generate fresh) |
 | `.env.pre-*` | Rotation backups | must-NOT-copy |
 | `config.yaml` | Hermes agent config (model, WAL journal_mode, personalities, platforms). Tenant-neutral structure; paths and platform ids are not. | templated-per-tenant |
 | `auth.json` | Gateway OAuth-provider login state (nous device tokens, etc.) | must-NOT-copy |
@@ -113,7 +117,7 @@ Unit comment still says "no cloudflared". That is **stale**: the named yamin tun
 
 Environment: `HERMES_HOME`, `HOME`, `PYTHONUNBUFFERED`, `JARVIS_SKILLS_ROOT`, `JARVIS_RUNTIME_CONFIG`, `JARVIS_IDENTITY_CONFIG`, `JARVIS_ACTIVITY_FEED`, `JARVIS_ALLOW_WRITES=1`.
 
-`--force` exists because a live gateway already occupies the host and Hermes refuses a second instance (stated hazard: shared kanban DB). A different `HERMES_HOME` already separates kanban. On a dedicated droplet there is no first gateway and no `--force`. A third tenant on *this* host still needs `--force`.
+`--force` exists because a live gateway already occupies the host and Hermes refuses a second instance (stated hazard: shared kanban DB). That live process is **not** a system unit named `jarvis-gateway`: it is the **user** unit `hermes-gateway.service` (`/root/.config/systemd/user/hermes-gateway.service`, WD `/root/.hermes`, listens **8642**, no `--force`). A different `HERMES_HOME` already separates kanban. On a dedicated droplet there is no first gateway and no `--force`. A third tenant on *this* host still needs `--force`.
 
 Shared interpreter: `/usr/local/lib/hermes-agent/venv` is one hermes-agent install for live + testco + any new tenant. Same class of risk as the app venv.
 
@@ -129,7 +133,7 @@ Shared interpreter: `/usr/local/lib/hermes-agent/venv` is one hermes-agent insta
 
 Sweep/digest oneshots also set `JARVIS_TASKS_SOURCE=store` and the three DB paths + feed.
 
-Live contrast (do not copy onto a new yamin-stack tenant without a decision): `jarvis-app.service` `:8700`; `JARVIS_SKILLS_ROOT=/root/.hermes/skills/openclaw-imports`; secrets from `~/.hermes/.env` not `EnvironmentFile`; `jarvis-gmail-webhook.service` (port 18790); `jarvis-gmail-poller.timer` every 60s; three `cloudflared-jarvis-*` quick tunnels. Testco has **no** gmail-poller or webhook systemd unit; `hooks.yamin.io` still points at `127.0.0.1:18791`.
+Live contrast (do not copy onto a new yamin-stack tenant without a decision): `jarvis-app.service` `:8700`; user unit `hermes-gateway.service` `:8642`; `JARVIS_SKILLS_ROOT=/root/.hermes/skills/openclaw-imports`; secrets from `~/.hermes/.env` not `EnvironmentFile`; `jarvis-gmail-webhook.service` (port 18790, **inactive/disabled**); `jarvis-gmail-poller.timer` every 60s (**inactive/disabled**); three `cloudflared-jarvis-*` quick tunnels (`cloudflared-jarvis.service` still targets `:18790`). Testco has **no** gmail-poller or webhook systemd unit; `hooks.yamin.io` still points at `127.0.0.1:18791`. No `EnvironmentFile=` on the matching system units.
 
 ### Preflight (`/opt/testco/testco_preflight.sh`)
 
@@ -206,7 +210,9 @@ Scratch `clientzero` unused-port recommendation (confirm with `ss` at verify tim
 - custom skills present in JSON but `enabled: false` (`har-deal-tracker`, `shopify-stock-monitor`, `jarvis-render`)
 - `recording-handler` enabled (directory on disk is `discord-recording-handler`)
 
-Existing `_shared/provision_client.py` + `client-config.template.json` already stamp identity.json + runtime.json + a workspace skeleton. They do **not** stamp `/opt/{slug}`, systemd, ports, cloudflared, venv, or empty app DBs. The new provisioner is a layer **above** this and must not reinvent identity/runtime generation.
+Existing `_shared/provision_client.py` + `client-config.template.json` already stamp identity.json + runtime.json + a workspace skeleton. They do **not** stamp `/opt/{slug}`, systemd, ports, cloudflared, venv, or empty app DBs. The new provisioner is a layer **above** this and must not reinvent identity/runtime generation. `provision_client.py` **refuses `safety.allow_writes: true` at provision time** (arm writes later via env) — slice 2 must keep that refusal. Live `_shared/34dev-provision.json` is the reconstructed 34dev input (slug `34dev`); slice 5 may read it; slice 2 must-NOT-copy it onto a new tenant.
+
+Several **core skill directories exist on testco without a matching `runtime.json` skill key** (call-action-items, universal-bridge, read-email, owner-email, …). Live runtime has a different key set (includes those; lacks sweeps / showingsmart / meeting-intake). The loadout (slice 4) must write an `enabled` key for every shipped skill so a missing key is not a silent `enabled() → False`.
 
 ### Skills tree — generic vs testco-fixture vs Spencer-specific
 
@@ -225,7 +231,7 @@ Testco-fixture (not Spencer-custom, but not production-real): `FIXTURE-*` sheet 
 
 Spencer-specific content that must not leak into client one's tree: HAR deal-finder, Shopify restock URLs, Fusion/render, live identity people keys, live sheet/calendar/mailbox ids, `34dev` / `cqhouston` / `spencerhuck` strings.
 
-`_shared/` is generic product code (tenant_config, write_guard, outbound_boundary, google_creds, provision_client, send_gate). It ships to every tenant. `write_guard.py` still mentions a Mini cutover and `~/hermes_migration_worklist.md` — product debt, not a copy of 34dev data.
+`_shared/` is generic product code (tenant_config, write_guard, outbound_boundary, calendar_boundary, google_creds, provision_client, send_gate). It ships to every tenant. `write_guard.py` still mentions a Mini cutover and `~/hermes_migration_worklist.md` — product debt, not a copy of 34dev data. Calendar writes have a twin of the outbound boundary (`calendar_boundary.py`, same `active()`). `_shared/purge_tenant_data.sh` is a purge tool, not a provisioner; do not run it from slice 2.
 
 ### Seeded vs fixture data
 
@@ -246,7 +252,7 @@ Spencer-specific content that must not leak into client one's tree: HAR deal-fin
 
 ### Venv (shared-venv risk)
 
-Testco app **shares** `/root/jarvis-app/.venv` on purpose (unit comment: identical deps, code tree separate). A `pip install` in that venv hits **live 34dev and testco and any new tenant using it**. `AGENTS.md` already forbids new packages without a human yes. This plan does not change that.
+Testco app **shares** `/root/jarvis-app/.venv` on purpose (unit comment: identical deps, code tree separate). `/opt/testco/jarvis-app/.venv` exists and is **unused** by the units — do not copy it, do not assume it is the interpreter. A `pip install` in the live venv hits **live 34dev and testco and any new tenant using it**. `AGENTS.md` already forbids new packages without a human yes. This plan does not change that.
 
 Hermes gateway shares `/usr/local/lib/hermes-agent/venv` the same way.
 
@@ -260,7 +266,7 @@ Recommendation for a production slot on this host: keep the shared venvs for `cl
 
 ### Live 34dev (contrast only — out of scope as a target)
 
-Identity `client: 34dev`. People keys include spencer, cassandra, eddie, martin, tega, jarvis (assistant). Internal domains are **not** `.example`. Skills tree includes the custom three plus `gbrain-memory`. Public ingress is still the three quick tunnels until a human moves it onto the named tunnel.
+Identity `client: 34dev`. People keys: spencer, tega, martin, eddie, cassandra, jarvis (assistant). Aliases present (andrew, carlos, prachir, shah, trey). Internal domains are **not** `.example`. `allow_writes: false` and **no** `outbound_recipient_suffix`. Skills tree includes the custom three plus `gbrain-memory`. Public ingress is still the three quick tunnels until a human moves it onto the named tunnel. Files named `yamin_*` under `/root/.hermes` (oauth client JSON, demo sheet/token) are **naming only** — they are not the identity slug. Live `_shared/34dev-provision.json` is the import input to reserve, not a source for client one.
 
 ---
 
@@ -291,7 +297,9 @@ Every asset a second slot needs. Classes:
 | systemd `{slug}-gateway.service` | templated-per-tenant | `--force` only if another gateway is active. |
 | digest / sweep / metrics timers | templated-per-tenant | Cadences from manifest (slice 1 knobs). |
 | oauth drop-in | templated-per-tenant | `APP_PUBLIC_ORIGIN`, `APP_COOKIE_SECURE=1`, **fresh** `APP_GOOGLE_TOKEN_KEY`, shared `YAMIN_OAUTH_CLIENT`, `OAUTHLIB_RELAX_TOKEN_SCOPE=1`. No mock. |
-| `HERMES_HOME/.env` | templated-per-tenant | Fresh `APP_SESSION_SECRET`, `APP_PASSPHRASE`; never copy testco or 34dev. |
+| `HERMES_HOME/.env` | templated-per-tenant | Fresh `APP_SESSION_SECRET`, `APP_PASSPHRASE`, `API_SERVER_KEY`, operator passphrase keys; never copy testco or 34dev. |
+| Hermes curator skill packs | templated-per-tenant | Policy: hermes-agent defaults or omit — not `cp` from `/opt/testco/skills/{apple,creative,…}`. |
+| Unused `/opt/testco/jarvis-app/.venv` | must-NOT-copy | Units use `/root/jarvis-app/.venv`. |
 | Preflight script | templated-per-tenant | Production vs scratch variants (see above). Not `testco_preflight.sh` as-is. |
 | cloudflared ingress + DNS | templated-per-tenant | Three hostnames per scheme. Commands in the provisioner; human applies. |
 | Google Console redirect URI | templated-per-tenant | Ops, not code. `{origin}/oauth/callback`. |
@@ -313,6 +321,7 @@ Every asset a second slot needs. Classes:
 | `APP_GOOGLE_TOKEN_KEY` from another tenant | must-NOT-copy | Cipher is unreadable with the wrong key. |
 | Custom skills (HAR / Shopify / render) | must-NOT-copy | |
 | 34dev identity people and sheet ids | must-NOT-copy | Slice 5 import only, later. |
+| Live `_shared/34dev-provision.json` | must-NOT-copy | Import input later, not client one's seed. |
 | `testco-inject` | must-NOT-copy | Optional scratch tool; not production. |
 | Forbidden-term list targeting 34dev | must-NOT-copy into production preflight as the *only* check | Production forbids leftover **testco** / fixture terms; 34dev terms stay forbidden unless this *is* the 34dev import. |
 
@@ -364,6 +373,8 @@ Existing `client-config.template.json` covers identity/runtime skill slots. The 
 | `client.timezone` | America/Chicago | digest_tick, sweeps, tasks_store, metrics, inject, feed |
 | `client.display_name` / `business_description` | Testco Realty / fictional brokerage | email-router prompts |
 | `skills.task-manager.digest_times_local` | `["05:00","15:00"]` | `digest_tick.py` (code fallback `["05:00"]` — silent today) |
+| `skills.task-manager.digest_lookback_days` | **absent** → 30 | `generate_digest.py` `timedelta(days=30)` window |
+| `skills.task-manager.digest_cutoff_hours` | **absent** → 48 | `generate_digest.py` `timedelta(hours=48)` cutoff |
 | `skills.task-manager.digest_transport` | **absent** → `gmail_api` | `generate_digest.py` |
 | `skills.task-manager.default_assignee` | `""` | task-manager |
 | `skills.sweeps.stale_email_hours` | 24 | stale_email.py |
@@ -381,7 +392,10 @@ Existing `client-config.template.json` covers identity/runtime skill slots. The 
 | `skills.email-monitor.lookback_days` | 14 | email-monitor |
 | `skills.gmail-push-trigger.webhook_port` | 18790 | webhook_listener.py, setup_pubsub.py, tenant_config docstring |
 | `skills.gmail-push-trigger.mailbox` / `gcp_project` / topics / `tunnel_hostname` | empty | gmail-push-trigger |
-| `skills.cost-guard.spend_warn_usd` / `spend_pause_usd` | 20 / 30 | cost-guard |
+| `skills.cost-guard.spend_warn_usd` / `spend_pause_usd` | 20 / 30 | runtime.json **and** `check_daily_spend.py` env fallbacks (dual source; script does not read `tc`) |
+| `skills.gmail-push-trigger.watchdog_lookback_hours` | **absent** → 2 | `email_watchdog.py` `LOOKBACK_HOURS = 2` |
+| `skills.showingsmart-autoreply.past_window_hours` / `default_duration_hours` | **absent** → 24 / 1 | `showing_parse.py` |
+| `skills.crm-weekly-brief.local_time` | **absent** → Monday 08:00 CT in SKILL.md | no testco systemd timer; schedule is documentation-only until sliced |
 | `skills.metrics.retention_days` | 180 | `app/metrics.py` (`DEFAULT_RETENTION_DAYS = 180`) |
 | `skills.leads.source` / `skills.tasks.source` | store | app + skills; **also shadowed by** `JARVIS_LEADS_SOURCE` env |
 | `skills.leads.export_enabled` / `export_sheet_id` | false / empty | leads_export.py |
@@ -415,6 +429,8 @@ These are tenant preferences pretending to be unit files. Move the *values* into
 
 Live-only (not on testco; still a knob if a tenant enables the poller): Gmail history poller `OnUnitActiveSec=60`. Put `skills.gmail-push-trigger.poll_seconds` in tenant_config before any new tenant gets a poller unit.
 
+Hermes-cron (not systemd, lives under `HERMES_HOME/cron` / cost-guard SKILL.md): spend check every 15m/30m/2h; prune `0 8 * * *` UTC. These are tenant-preference cadences with no `tenant_config` key today. `poll_gmail_history.py` and several SKILL.md files still hardcode **America/Chicago** instead of `client.timezone` — same slice: read `tc`, announce if missing.
+
 #### Dual sources to collapse (announce on mismatch)
 
 | Pair | Hazard |
@@ -425,6 +441,7 @@ Live-only (not on testco; still a knob if a tenant enables the poller): Gmail hi
 | `skills.gmail-push-trigger.webhook_port` 18790 vs cloudflared 18791 | Hooks miss the listener |
 | `paths.tasks_db` (skill-local) vs `JARVIS_TASKS_DB` (HERMES_HOME/state) | Two task databases |
 | `credentials.*` paths under `~/.hermes` vs `/opt/{slug}/hermes` | Wrong tenant's tokens |
+| `skills.cost-guard.*` vs `check_daily_spend.py` env WARN/PAUSE | Two spend thresholds |
 | `APP_PUBLIC_ORIGIN` vs hostname in runtime.json | Auth-connect plan forbids putting hostname in runtime.json — keep that |
 
 #### Silent code defaults that must announce
@@ -433,7 +450,7 @@ If the key is missing, log + bump a counter named for the key, then use the tena
 
 ### Verify (slice 1)
 
-1. Grep the skills tree and `app/` for remaining time/cadence literals (`05:00`, `08:30`, `1800`, `lookback_days`, `stale_email_hours`, `18790`, `/root/jarvis-app`). Every remaining literal is either in the knob table or a bug.
+1. Grep the skills tree and `app/` for remaining time/cadence literals (`05:00`, `08:30`, `1800`, `lookback_days`, `stale_email_hours`, `18790`, `/root/jarvis-app`, `LOOKBACK_HOURS`, `America/Chicago`, `timedelta(days=30)`, `Monday`). Every remaining literal is either in the knob table or a bug.
 2. Boxed unit tests: missing `client.timezone` announces and falls back; missing `digest_times_local` announces; missing `paths.app_root` refuses (no live-path fallback).
 3. Presence canary: a testco runtime with `lead_revival_hours` omitted still runs and the counter fires (today it silently uses 48).
 4. No testco restart unless the human yes's a code deploy of the announcing-fallback change onto 8710. The code PR can land on main and wait.
@@ -447,11 +464,11 @@ If the key is missing, log + bump a counter named for the key, then use the tena
 ### What it does
 
 1. Read the manifest. Refuse unknown slugs that collide (`testco`, `root`, a path escape). Refuse ports that `ss` shows in use.
-2. `mkdir /opt/{slug}` with `jarvis-app` as a git clone/worktree of this repo at the manifest SHA; `skills` as a git clone/worktree of the skills repo, then checked out to the loadout (sparse / rm of custom dirs — not `cp` from testco).
+2. `mkdir /opt/{slug}` with `jarvis-app` as a git clone/worktree of this repo at the manifest SHA; `skills/openclaw-imports` as a git clone/worktree of the skills repo, then checked out to the loadout (sparse / rm of custom dirs — not `cp` from testco). Hermes curator packs: install from hermes-agent defaults or leave absent per loadout policy — never `cp -a /opt/testco/skills`.
 3. Symlink `hermes/skills` → `/opt/{slug}/skills`.
-4. Empty `hermes/state`, `hermes/credentials`, `hermes/workspace`, attachments dir. No SQLite files.
-5. Generate `HERMES_HOME/.env` (fresh session secret + passphrase) and a systemd drop-in with a **fresh** `APP_GOOGLE_TOKEN_KEY`. Print the owner passphrase once to the operator tty, not to a file in the tree.
-6. Run `provision_client.py` so identity.json / runtime.json match the manifest (ports, paths, timezone, sheet id, boundary, loadout enables). `gateway.base_url` **equals** `HERMES_API_URL`. `webhook_port` **equals** the hooks port and the cloudflared target.
+4. Empty `hermes/state`, `hermes/credentials`, `hermes/workspace`, attachments dir. No SQLite files. Do not copy `/opt/testco/jarvis-app/.venv`.
+5. Generate `HERMES_HOME/.env` (fresh `APP_SESSION_SECRET`, `APP_PASSPHRASE`, `API_SERVER_KEY`, operator passphrase keys) and a systemd drop-in with a **fresh** `APP_GOOGLE_TOKEN_KEY`. Print the owner passphrase once to the operator tty, not to a file in the tree.
+6. Run `provision_client.py` so identity.json / runtime.json match the manifest (ports, paths, timezone, sheet id, boundary, loadout enables — **an `enabled` key for every shipped skill**). Keep provision_client's refusal of `allow_writes: true`. `gateway.base_url` **equals** `HERMES_API_URL`. `webhook_port` **equals** the hooks port and the cloudflared target.
 7. Write systemd units from templates (`{slug}-app`, `{slug}-gateway`, digest/sweep/metrics). ExecStart uses the chosen venv. ExecStartPre is the templated preflight. Scratch: RFC 2606 boundary + optional `ALLOW_WRITES=1`. Production: `ALLOW_WRITES` unset, no sheet fixture, no mock.
 8. Print (do not silently run, unless `--apply-ingress` with an explicit flag) the three cloudflared ingress snippets and:
 
@@ -465,7 +482,7 @@ If the key is missing, log + bump a counter named for the key, then use the tena
 
 Venv: default `shared` with a loud log line that a pip install hits live. Do not create a second venv in this slice.
 
-Gateway `--force`: detect another `gateway run` on the host; set `--force` if so.
+Gateway `--force`: detect another `gateway run` on the host (today: user unit `hermes-gateway.service` on 8642 **and** `testco-gateway` on 8652); set `--force` if so.
 
 ### Verify — scratch tenant `clientzero`
 
@@ -566,7 +583,7 @@ har-deal-tracker, shopify-stock-monitor, jarvis-render, gbrain-memory.
 
 Testco today enables several optionals (showingsmart, meeting-intake, recording-handler) and keeps custom stubs in JSON disabled. Production `base` does not enable showingsmart until the vendor and a real sheet tab exist.
 
-Naming debt to fix in this slice or call out: runtime key `recording-handler` vs directory `discord-recording-handler`; `skills.crm` vs directories `crm-contact-suggest` / `crm-weekly-brief`.
+The loadout (slice 4) must write an `enabled` key for every shipped skill so a missing key is not a silent `enabled() → False` (testco runtime omits several core dirs). Naming debt to fix in this slice or call out: runtime key `recording-handler` vs directory `discord-recording-handler`; `skills.crm` vs directories `crm-contact-suggest` / `crm-weekly-brief`.
 
 ### Verify (slice 4)
 
@@ -585,7 +602,7 @@ Provisioner dry-run for `clientzero` with loadout `base`: tree listing contains 
 | App DBs | `jarvis_accounts.db`, `jarvis_leads.db`, `jarvis_tasks.db`, `jarvis_threads.db` (+ WAL/shm) |
 | Sweep / digest watermarks | `sweeps.db`, `digest_last_run.json`, `metrics_monthly_last.json` |
 | Ledgers | `activity_feed.jsonl`, `approvals.jsonl`, `approvals_decisions.jsonl` |
-| Identity / runtime | `identity.json` (people keys, real domains, assistant address), `runtime.json` (real sheet ids, calendar ids, skill configs), `channels.json` |
+| Identity / runtime | `identity.json` (people keys, aliases, real domains, assistant address), `runtime.json` (real sheet ids, calendar ids, skill configs), `channels.json`, live `_shared/34dev-provision.json` as the reconstructed input |
 | Google | `google_connection` cipher **and that tenant's `APP_GOOGLE_TOKEN_KEY`**; optional leftover `google_token.json` / SA — do not mix keys |
 | Hermes | `config.yaml`, `auth.json` (provider login), `SOUL.md`; **not** a naive copy of `kanban.db` / `state.db` without a gateway-stopped copy |
 | External wiring | Discord/Slack tokens and guild ids, Zapier destinations, dedicated mailbox / assistant_address, Pub/Sub project + topic, cloudflared-jarvis quick-tunnel hostnames until moved onto `{slug}.*` or the bare names |
