@@ -82,6 +82,15 @@ export interface SessionResponse {
  *  it reaches every channel's STRUCTURE and none of its message content. */
 export type Role = 'owner' | 'admin' | 'member' | 'operator'
 
+/** GET /api/google/connection. Exactly these keys — never token/refresh/cipher. */
+export type GoogleConnectionStatusName = 'connected' | 'needs_reauth' | 'disconnected'
+
+export interface GoogleConnectionStatus {
+  status: GoogleConnectionStatusName
+  google_email: string | null
+  connected_at: string | null
+}
+
 export interface LoginResponse {
   ok: boolean
   /** Null for a break-glass operator session. */

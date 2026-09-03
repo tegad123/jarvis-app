@@ -22,6 +22,7 @@ import type {
   ChatStreamEvent,
   FeedResponse,
   FeedSummary,
+  GoogleConnectionStatus,
   HealthResponse,
   LeadsError,
   LeadsResponse,
@@ -182,6 +183,16 @@ export async function logout(): Promise<void> {
 /** Resolves when signed in; throws Unauthorized when not. */
 export function getSession(): Promise<SessionResponse> {
   return requestOk<SessionResponse>('/api/session')
+}
+
+/* ------------------------------------------------------- google connection */
+
+export function getGoogleConnection(): Promise<GoogleConnectionStatus> {
+  return requestOk<GoogleConnectionStatus>('/api/google/connection')
+}
+
+export function disconnectGoogleConnection(): Promise<{ ok: boolean; status: string }> {
+  return requestOk('/api/google/connection/disconnect', { method: 'POST' })
 }
 
 /* --------------------------------------------------------------------- feed */
