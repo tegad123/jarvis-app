@@ -44,7 +44,7 @@ Taken from the running units, `/opt/testco`, `/etc/cloudflared/config.yml`, and 
   skills/openclaw-imports/  # Jarvis product skills (own git repo)
 ```
 
-`/opt/testco/hermes/skills` is a symlink to `/opt/testco/skills`, not a copy. That parent also holds Hermes curator packs (`apple`, `creative`, `github`, `productivity`, `research`, `mlops`, `media`, `software-development`, `autonomous-ai-agents`, `email`, plus empty `secrets/`). `JARVIS_SKILLS_ROOT` points at `…/openclaw-imports`; the gateway sees the whole parent via `HERMES_HOME/skills`. A provisioner that clones only `openclaw-imports` still needs a defined policy for those curator packs (copy from hermes-agent defaults, omit, or symlink) — they are not Jarvis product and must-NOT-copy from testco's dirty tree.
+`/opt/testco/hermes/skills` is a symlink to `/opt/testco/skills`, not a copy. That parent also holds Hermes curator packs (`apple`, `creative`, `github`, `productivity`, `research`, `mlops`, `media`, `software-development`, `autonomous-ai-agents`, `email`, plus empty `secrets/`). `JARVIS_SKILLS_ROOT` points at `…/openclaw-imports`; the gateway sees the whole parent via `HERMES_HOME/skills`. Manifest field `curator_packs: omit | defaults` is the policy; they are not Jarvis product and must-NOT-copy from testco's dirty tree.
 
 `/opt/testco/jarvis-app/tools/preflight.sh` is branch/PR hygiene for agents. It is **not** the systemd ExecStartPre gate (`testco_preflight.sh`).
 
@@ -101,6 +101,8 @@ Environment keys (values are paths/ports, not secrets):
 - `JARVIS_SHEET_FIXTURE=/opt/testco/fixtures/sheet_fixture.json`
 - `JARVIS_ALLOW_WRITES=1`
 
+`HOME=/root` is the live-fallback hazard: Hermes, given `HOME=/root` and a missing `HERMES_HOME`, opens `/root/.hermes`. New-tenant templates do not copy this (slice 2: `HOME=/opt/{slug}` + preflight). Do not change testco's unit in this docs work.
+
 Unit comment still says "no cloudflared". That is **stale**: the named yamin tunnel now serves `:8710` as `app.yamin.io`.
 
 **Drop-in** `/etc/systemd/system/testco-app.service.d/oauth.conf` — Environment *keys* only (do not copy values):
@@ -143,7 +145,7 @@ Three refusals, all ExecStartPre:
 2. Boundary suffixes that are not RFC 2606 reserved (`.example` / `example.com` / `.test` / `.invalid` / `.localhost`). Proves refuse of real domains and allow of `.example`.
 3. Prior-tenant terms `34dev|cqhouston|spencerhuck` in reachable config (`runtime.json`, `identity.json`, `channels.json`, `hermes/config.yaml`). Pattern is canary-proved before use.
 
-must-NOT-copy as-is to a production tenant. The forbidden-term list and the `.example` probes are testco-specific. Production preflight inverts the second check: refuse leftover testco / `FIXTURE-` / `.example` terms in a real tenant's reachable config; refuse `ALLOW_WRITES=1` without a *documented real-send* posture (no capture suffix pretending to be production). Scratch `clientzero` may keep the RFC 2606 preflight so verify can arm writes without mailing anyone.
+must-NOT-copy as-is to a production tenant. The forbidden-term list and the `.example` probes are testco-specific. Production (and scratch) preflight **also** asserts `HERMES_HOME` is set and is a path under `/opt/{slug}` — testco's script does not; that hole is slice 2. Production preflight inverts the second check: refuse leftover testco / `FIXTURE-` / `.example` terms in a real tenant's reachable config; refuse `ALLOW_WRITES=1` without a *documented real-send* posture (no capture suffix pretending to be production). Scratch `clientzero` may keep the RFC 2606 preflight so verify can arm writes without mailing anyone.
 
 ### Cloudflared (`/etc/cloudflared/config.yml`)
 
@@ -216,7 +218,7 @@ Several **core skill directories exist on testco without a matching `runtime.jso
 
 ### Skills tree — generic vs testco-fixture vs Spencer-specific
 
-Testco skills are a **git repo** at `/opt/testco/skills/openclaw-imports` (HEAD at inventory: slice-6 google_creds merge). Live skills at `/root/.hermes/skills/openclaw-imports` are a **separate repo**. Copying with `cp` is how those trees drifted; the provisioner uses `git clone` or `git worktree`, never `cp`.
+Testco skills are a **git repo** at `/opt/testco/skills/openclaw-imports` (HEAD at inventory: slice-6 google_creds merge). Live skills at `/root/.hermes/skills/openclaw-imports` are a **separate divergent repo with no shared remote**. Copying with `cp` is how those trees drifted. Slice 0 creates a bare canonical origin; until it exists, slice 2 must not clone from either working tree.
 
 `SKILLS_MANIFEST.md` (28 skills) is the existing classification. Testco's *directory* tree already omitted custom skills (`gbrain-memory`, `har-deal-tracker`, `jarvis-render`, `shopify-stock-monitor` exist on live, not on testco). Runtime.json still carries disabled stubs for three of those.
 
@@ -282,7 +284,7 @@ Every asset a second slot needs. Classes:
 | Asset | Class | Notes |
 |-------|--------|--------|
 | jarvis-app source | copied-as-is | `git clone` / `git worktree` of this repo at a pinned SHA. Not `/opt/testco/jarvis-app` (that checkout can lag). |
-| skills `openclaw-imports` at loadout | copied-as-is filtered | git clone/worktree of the skills repo; then sparse to the loadout. Never `cp -a /opt/testco/skills`. |
+| skills `openclaw-imports` at loadout | copied-as-is filtered | Clone **only** from the slice 0 bare origin at a pinned SHA; then sparse to the loadout. Never clone `/opt/testco/skills` or `/root/.hermes/skills`, never `cp`. |
 | `_shared/` modules | copied-as-is | Ships with the skills repo. |
 | `SKILLS_MANIFEST.md` | copied-as-is | Source of loadout tiers. |
 | Hermes-agent install | copied-as-is | `/usr/local/lib/hermes-agent` — shared binary/venv; `--force` when a sibling gateway exists. |
@@ -293,14 +295,14 @@ Every asset a second slot needs. Classes:
 | `runtime.json` | templated-per-tenant | via `provision_client.py` from the manifest. Paths, ports, sheet ids, suffixes. |
 | `channels.json` | templated-per-tenant | Empty team channels or from manifest. |
 | `config.yaml` | templated-per-tenant | WAL on; no live platform tokens. |
-| systemd `{slug}-app.service` | templated-per-tenant | From a unit template. No `JARVIS_SHEET_FIXTURE`. `ALLOW_WRITES` from manifest posture. |
-| systemd `{slug}-gateway.service` | templated-per-tenant | `--force` only if another gateway is active. |
+| systemd `{slug}-app.service` | templated-per-tenant | From a unit template. `HOME=/opt/{slug}`. No `JARVIS_SHEET_FIXTURE`. `ALLOW_WRITES` from manifest posture. |
+| systemd `{slug}-gateway.service` | templated-per-tenant | Same `HOME`. `--force` only if another gateway is active. |
 | digest / sweep / metrics timers | templated-per-tenant | Cadences from manifest (slice 1 knobs). |
-| oauth drop-in | templated-per-tenant | `APP_PUBLIC_ORIGIN`, `APP_COOKIE_SECURE=1`, **fresh** `APP_GOOGLE_TOKEN_KEY`, shared `YAMIN_OAUTH_CLIENT`, `OAUTHLIB_RELAX_TOKEN_SCOPE=1`. No mock. |
+| oauth drop-in | templated-per-tenant | `APP_PUBLIC_ORIGIN`, `APP_COOKIE_SECURE` **0 on scratch loopback / 1 on production HTTPS**, **fresh** `APP_GOOGLE_TOKEN_KEY`, shared `YAMIN_OAUTH_CLIENT`, `OAUTHLIB_RELAX_TOKEN_SCOPE=1`. No mock. |
 | `HERMES_HOME/.env` | templated-per-tenant | Fresh `APP_SESSION_SECRET`, `APP_PASSPHRASE`, `API_SERVER_KEY`, operator passphrase keys; never copy testco or 34dev. |
-| Hermes curator skill packs | templated-per-tenant | Policy: hermes-agent defaults or omit — not `cp` from `/opt/testco/skills/{apple,creative,…}`. |
+| Hermes curator skill packs | templated-per-tenant | Manifest `curator_packs: omit \| defaults`. Not `cp` from `/opt/testco/skills/{apple,creative,…}`. |
 | Unused `/opt/testco/jarvis-app/.venv` | must-NOT-copy | Units use `/root/jarvis-app/.venv`. |
-| Preflight script | templated-per-tenant | Production vs scratch variants (see above). Not `testco_preflight.sh` as-is. |
+| Preflight script | templated-per-tenant | Production vs scratch variants. Asserts `HERMES_HOME` set and under `/opt/{slug}`. Not `testco_preflight.sh` as-is. |
 | cloudflared ingress + DNS | templated-per-tenant | Three hostnames per scheme. Commands in the provisioner; human applies. |
 | Google Console redirect URI | templated-per-tenant | Ops, not code. `{origin}/oauth/callback`. |
 | Empty `state/jarvis_*.db` | templated-per-tenant | Omit files; lazy migrations create schema. |
@@ -341,6 +343,33 @@ Recommendation to carry into the ops PR, not a decision: **B when client one is 
 
 ---
 
+## Slice 0 — Canonical skills origin (prerequisite)
+
+**PR / ops:** a bare git origin the provisioner can clone. Not a tenant stamp. Not a `cp` of either working tree onto a third.
+
+The two `openclaw-imports` checkouts are separate histories with **no shared remote**. Testco carries the slice-6 google_creds cutover and the actor fix; live does not. Cloning from either working tree (or `cp`) is how a new tenant inherits the wrong HEAD, or a dirty worktree, with no pin to name.
+
+Specify:
+
+1. Create a bare canonical origin, e.g. `/root/git/openclaw-imports.git`.
+2. Seed it from the **TESTCO** repo (`/opt/testco/skills/openclaw-imports`), not live.
+3. Add that origin as a remote on **both** working trees (testco and `/root/.hermes/skills/openclaw-imports`).
+4. Record live's divergence as a named branch on the origin (e.g. `live-34dev` at live's HEAD). Do not rewrite live's history. Do not merge that branch into the provisioner pin.
+5. The provisioner clones **only** from the bare origin at a **pinned SHA** (manifest field, or the SHA recorded next to the loadout). Never `--branch` floating `main` of a working tree.
+
+Until the bare origin exists and both working trees have the remote, **slice 2 step 2 is blocked**. A provisioner dry-run that would clone from `/opt/testco/skills` or `/root/.hermes/skills` is a failed verify, not a workaround.
+
+This slice does not restart testco or live. Adding a git remote is not a send-path change. Pushing live's tree as a named branch is the record; it is not the tenant loadout.
+
+### Verify (slice 0)
+
+- `git --git-dir=/root/git/openclaw-imports.git rev-parse HEAD` equals testco's skills HEAD (seed).
+- `git remote -v` on both working trees lists the bare origin.
+- `git --git-dir=/root/git/openclaw-imports.git branch` shows the live-divergence branch; its tip matches live's skills HEAD.
+- A clone of the origin at the pinned SHA has the slice-6 `google_creds` path and does **not** contain live-only custom skill dirs unless that SHA is the live-divergence branch (the provisioner pin must not be that branch).
+
+---
+
 ## Slice 1 — Tenant manifest + knobs into `tenant_config`
 
 **PR:** one manifest schema (file per tenant, e.g. `docs/tenants/{slug}.yaml` or next to the provisioner), plus the code change that makes every tenant-preference knob read through `tenant_config` with **announcing** fallbacks. No provisioner yet. No schema migration unless a knob cannot live in `runtime.json` — if it cannot, stop and ask.
@@ -354,6 +383,8 @@ Recommendation to carry into the ops PR, not a decision: **B when client one is 
 - `sheet_id` (real; empty allowed)
 - `boundary_domains` / outbound suffix policy (scratch vs production)
 - `skill_loadout` (name of a loadout in slice 4, plus optional enables)
+- `skills_origin_sha` (pin; provisioner clones the slice 0 bare origin at this SHA only)
+- `curator_packs`: `omit` | `defaults` (Hermes curator packs under `/opt/{slug}/skills`; omit until a tenant needs them)
 - digest / cron knobs listed below
 - `writes_posture`: `blocked` | `captured` (testco/scratch) | `live` (production after cutover)
 - `venv`: `shared` | `per-tenant` (per-tenant is human-yes)
@@ -452,24 +483,24 @@ If the key is missing, log + bump a counter named for the key, then use the tena
 
 1. Grep the skills tree and `app/` for remaining time/cadence literals (`05:00`, `08:30`, `1800`, `lookback_days`, `stale_email_hours`, `18790`, `/root/jarvis-app`, `LOOKBACK_HOURS`, `America/Chicago`, `timedelta(days=30)`, `Monday`). Every remaining literal is either in the knob table or a bug.
 2. Boxed unit tests: missing `client.timezone` announces and falls back; missing `digest_times_local` announces; missing `paths.app_root` refuses (no live-path fallback).
-3. Presence canary: a testco runtime with `lead_revival_hours` omitted still runs and the counter fires (today it silently uses 48).
+3. Presence canary for `lead_revival_hours`: a runtime with the key omitted still runs and the announcing-fallback counter fires (today the code silently uses 48). **Conditional:** run against testco only after that announcing-fallback change is deployed there; otherwise run it boxed (in-process, `JARVIS_RUNTIME_CONFIG` pointed at a fixture that omits the key). Absence of a counter on undeployed testco is not a failed canary.
 4. No testco restart unless the human yes's a code deploy of the announcing-fallback change onto 8710. The code PR can land on main and wait.
 
 ---
 
 ## Slice 2 — `provision_tenant` stamps `/opt/{slug}/`
 
-**PR:** `scripts/provision_tenant.py` (or `.sh` wrapping Python) + systemd unit templates + production/scratch preflight templates. Calls existing `provision_client.py` for identity/runtime. Reads the slice 4 loadout. Does not edit live units. Does not `pip install`.
+**PR:** `scripts/provision_tenant.py` (or `.sh` wrapping Python) + systemd unit templates + production/scratch preflight templates. Calls existing `provision_client.py` for identity/runtime. Reads the slice 4 loadout. Does not edit live units. Does not `pip install`. **Blocked on slice 0** for the skills clone (step 2).
 
 ### What it does
 
-1. Read the manifest. Refuse unknown slugs that collide (`testco`, `root`, a path escape). Refuse ports that `ss` shows in use.
-2. `mkdir /opt/{slug}` with `jarvis-app` as a git clone/worktree of this repo at the manifest SHA; `skills/openclaw-imports` as a git clone/worktree of the skills repo, then checked out to the loadout (sparse / rm of custom dirs — not `cp` from testco). Hermes curator packs: install from hermes-agent defaults or leave absent per loadout policy — never `cp -a /opt/testco/skills`.
+1. Read the manifest. Refuse reserved slugs (`testco`, `root`, a path escape). Collision checks are **structural**, not `ss` alone: refuse if `/opt/{slug}` already exists, if any `{slug}-*.service` unit file is installed, or if any of the manifest ports appear in an installed unit's `Environment=` (`APP_PORT`, `HERMES_API_URL`, webhook port). `ss` only sees listeners; a disabled unit or a stopped scratch leftover would pass `ss` and still collide.
+2. **Requires slice 0.** `mkdir /opt/{slug}` with `jarvis-app` as a git clone/worktree of this repo at the manifest SHA; `skills/openclaw-imports` cloned **only** from the bare origin at the pinned SHA, then sparse to the loadout (not `cp` from testco or live). Hermes curator packs: `curator_packs` from the manifest (`omit` or hermes-agent `defaults`) — never `cp -a /opt/testco/skills`. If the bare origin is missing, stop; do not fall back to a working tree.
 3. Symlink `hermes/skills` → `/opt/{slug}/skills`.
 4. Empty `hermes/state`, `hermes/credentials`, `hermes/workspace`, attachments dir. No SQLite files. Do not copy `/opt/testco/jarvis-app/.venv`.
 5. Generate `HERMES_HOME/.env` (fresh `APP_SESSION_SECRET`, `APP_PASSPHRASE`, `API_SERVER_KEY`, operator passphrase keys) and a systemd drop-in with a **fresh** `APP_GOOGLE_TOKEN_KEY`. Print the owner passphrase once to the operator tty, not to a file in the tree.
 6. Run `provision_client.py` so identity.json / runtime.json match the manifest (ports, paths, timezone, sheet id, boundary, loadout enables — **an `enabled` key for every shipped skill**). Keep provision_client's refusal of `allow_writes: true`. `gateway.base_url` **equals** `HERMES_API_URL`. `webhook_port` **equals** the hooks port and the cloudflared target.
-7. Write systemd units from templates (`{slug}-app`, `{slug}-gateway`, digest/sweep/metrics). ExecStart uses the chosen venv. ExecStartPre is the templated preflight. Scratch: RFC 2606 boundary + optional `ALLOW_WRITES=1`. Production: `ALLOW_WRITES` unset, no sheet fixture, no mock.
+7. Write systemd units from templates (`{slug}-app`, `{slug}-gateway`, digest/sweep/metrics). ExecStart uses the chosen venv. ExecStartPre is the templated preflight. **`HOME=/opt/{slug}`** on every unit (testco's `HOME=/root` plus an accidentally-missing `HERMES_HOME` makes Hermes fall back to `/root/.hermes` — live's tree). Preflight asserts `HERMES_HOME` is set **and** lies inside `/opt/{slug}` before start; a missing or live-shaped `HERMES_HOME` is a refused boot, not a default. Scratch: RFC 2606 boundary + optional `ALLOW_WRITES=1` + `APP_COOKIE_SECURE=0` (loopback HTTP). Production: `ALLOW_WRITES` unset, no sheet fixture, no mock, `APP_COOKIE_SECURE=1`.
 8. Print (do not silently run, unless `--apply-ingress` with an explicit flag) the three cloudflared ingress snippets and:
 
    `cloudflared tunnel route dns yamin {slug}.app.yamin.io`  
@@ -486,14 +517,14 @@ Gateway `--force`: detect another `gateway run` on the host (today: user unit `h
 
 ### Verify — scratch tenant `clientzero`
 
-Unused ports at inventory: **8720 / 8662 / 18792**. Re-check `ss` before starting.
+Unused ports at inventory: **8720 / 8662 / 18792**. Re-check structural collision (tree, unit files, Environment ports) **and** `ss` before starting. Slice 0 origin must exist.
 
-1. Manifest for `clientzero`: RFC 2606 boundary, writes captured or blocked, no sheet fixture, loopback origin `http://127.0.0.1:8720` (no cloudflared required for this verify; print the ingress commands and assert they are correct in the script output).
-2. Both services `active`. Preflight did not fail.
+1. Manifest for `clientzero`: RFC 2606 boundary, writes captured or blocked, no sheet fixture, loopback origin `http://127.0.0.1:8720`, `APP_COOKIE_SECURE=0` (no cloudflared required for this verify; print the ingress commands and assert they are correct in the script output).
+2. Both services `active`. Preflight did not fail. Units show `HOME=/opt/clientzero` and `HERMES_HOME=/opt/clientzero/hermes`. A canary: preflight with `HERMES_HOME` unset (or set to `/root/.hermes`) refuses start.
 3. `GET http://127.0.0.1:8720/api/health` and `/api/health/summary` answer. Ledger: empty DBs exist after first request (lazy migrate) — show `ls` of `jarvis_accounts.db` etc.
-4. Login works via PIN: seed one owner with `accounts_cli`, `POST /api/login`, cookie works on `/api/me` (or equivalent). Do not copy `SEEDED_PINS.json`.
+4. Login works via PIN: seed one owner with `accounts_cli`, `POST /api/login`, cookie works on `/api/me` (or equivalent). Do not copy `SEEDED_PINS.json`. `APP_COOKIE_SECURE=1` on this loopback origin is a failed verify, not a production-hardening win.
 5. Tenant-agnostic verify battery against `AUTH_BASE=http://127.0.0.1:8720` with env `HERMES_HOME=/opt/clientzero/hermes` and the matching `JARVIS_*` paths. **In:** health/ping, PIN login, people list (names only), boxed store tests that take a path. **Out:** anything hardcoded to `/opt/testco`, `dana@testco.example.com`, `SEEDED_PINS.json`, `verifyTestco*.mjs`, `verify_boundary.py` (unless clientzero uses the same reserved suffixes — then it may run with `HERMES_HOME` pointed at clientzero). **Out:** scripts that restart `jarvis-app.service` or talk to `:8700`.
-6. Teardown: units gone, `/opt/clientzero` gone, `ss` shows 8720/8662 closed, testco `:8710` still healthy (health + a PIN login on dana's testco account — do not disturb Bao). Live `:8700` untouched.
+6. Teardown: units gone, `/opt/clientzero` gone, `ss` shows 8720/8662 closed, **and** a second provision of the same slug would pass the structural checks (no leftover `{slug}-*.service`, no `/opt/clientzero`). Testco `:8710` still healthy (health + a PIN login on dana's testco account — do not disturb Bao). Live `:8700` untouched.
 
 Do not enable clientzero on the yamin tunnel during scratch verify unless a human wants a public name.
 
@@ -517,7 +548,7 @@ Production template:
 
 ### Real-Google drop-in template
 
-Keys (no values in git):
+Two postures. Production HTTPS:
 
 - `APP_PUBLIC_ORIGIN=https://{host}`
 - `APP_COOKIE_SECURE=1`
@@ -525,7 +556,9 @@ Keys (no values in git):
 - `YAMIN_OAUTH_CLIENT=` (shared client JSON path is allowed)
 - `OAUTHLIB_RELAX_TOKEN_SCOPE=1`
 
-Absent: `APP_GOOGLE_OAUTH_MOCK`, loopback origin, `JARVIS_SHEET_FIXTURE`.
+**Scratch / loopback HTTP** (`http://127.0.0.1:{app_port}`): same keys except `APP_COOKIE_SECURE=0` and `APP_PUBLIC_ORIGIN` is the loopback origin. Secure cookies are not sent on HTTP; PIN-login verify against clientzero fails by construction if the scratch template copies production's `=1`. Production stays `=1`.
+
+Absent in both: `APP_GOOGLE_OAUTH_MOCK`, `JARVIS_SHEET_FIXTURE`. Scratch may use loopback origin; production must not.
 
 PKCE verifier-in-state-cookie and app INFO logging to journald are already on main (`a8ae9bf`); new tenants inherit via the jarvis-app clone.
 
@@ -559,7 +592,7 @@ No obligation to install Prometheus in this slice.
 
 ### Verify (slice 3)
 
-Templates exist and `provision_tenant --print-units --posture production` shows: no `ALLOW_WRITES=1`, no sheet fixture, no mock, oauth keys present including `OAUTHLIB_RELAX_TOKEN_SCOPE`, backup timer documented. Restore drill on clientzero SQLite. Testco units unchanged (`systemctl show testco-app -p Environment` still has the tester posture).
+Templates exist and `provision_tenant --print-units --posture production` shows: no `ALLOW_WRITES=1`, no sheet fixture, no mock, oauth keys present including `OAUTHLIB_RELAX_TOKEN_SCOPE`, `APP_COOKIE_SECURE=1`, `HOME=/opt/{slug}`, backup timer documented. `--posture scratch` (or clientzero) shows `APP_COOKIE_SECURE=0`. Restore drill on clientzero SQLite. Testco units unchanged (`systemctl show testco-app -p Environment` still has the tester posture).
 
 ---
 
@@ -627,9 +660,10 @@ Live 34dev stays on its quick tunnels until a human decision (same sentence as t
 
 | Slice | Depends on | Human-yes if |
 |-------|------------|----------------|
+| 0 Canonical skills origin | — | creating `/root/git/openclaw-imports.git`; adding remotes on live and testco working trees |
 | 1 Manifest + announcing knobs | — | any schema change; deploying the fallback change onto testco |
 | 4 Loadout file | — | can land with 1 |
-| 2 Provisioner + clientzero | 1, 4 | shared-venv change; applying cloudflared; enabling a public hostname |
+| 2 Provisioner + clientzero | **0**, 1, 4 | shared-venv change; applying cloudflared; enabling a public hostname. Step 2 blocked until 0 exists. |
 | 3 Production templates + backups | 2 | host journald policy; backup destination |
 | 5 Import seam | reserved | entire 34dev move |
 
