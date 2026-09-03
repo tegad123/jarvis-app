@@ -13,6 +13,8 @@ one in-memory value for the whole process.
 from __future__ import annotations
 
 import logging
+import os
+import re
 import secrets
 import time
 import urllib.error
@@ -28,6 +30,16 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from . import accounts, auth, config, google_connection, threads as threads_mod
 
 log = logging.getLogger(__name__)
+
+# Google expands OpenID scopes (email/profile → userinfo.email/userinfo.profile).
+# oauthlib then raises Warning("Scope has changed ...") unless this is set.
+# Required on the live cutover drop-in as well as testco.
+_RELAX_SCOPE_ENV = "OAUTHLIB_RELAX_TOKEN_SCOPE"
+
+# Strip token-ish query values if an exception message includes a URL or body.
+_REDACT = re.compile(
+    r"(?i)\b(code|access_token|refresh_token|id_token|client_secret)=[^\s&]+"
+)
 
 LOGIN_SCOPES = ("openid", "email", "profile")
 CONNECT_SCOPES = (
@@ -290,11 +302,30 @@ def _exchange_mock(code: str) -> Dict[str, Any]:
     return rec
 
 
+def _relax_token_scope() -> None:
+    os.environ.setdefault(_RELAX_SCOPE_ENV, "1")
+
+
+def _safe_exc_text(exc: BaseException) -> str:
+    """Exception text with token-ish query values stripped. Never log .token."""
+    return _REDACT.sub(r"\1=<redacted>", str(exc))
+
+
+def _log_exchange_failure(op: str, exc: BaseException) -> None:
+    log.exception(
+        "%s token exchange failed (%s: %s)",
+        op,
+        type(exc).__name__,
+        _safe_exc_text(exc),
+    )
+
+
 def _exchange_google_login(code: str, origin: str) -> str:
     from google.auth.transport import requests as greq
     from google.oauth2 import id_token as gid
     from google_auth_oauthlib.flow import Flow
 
+    _relax_token_scope()
     redirect_uri = f"{origin}/oauth/callback"
     flow = Flow.from_client_secrets_file(
         str(config.oauth_client_path()),
@@ -317,6 +348,7 @@ def _exchange_google_connect(code: str, origin: str) -> Dict[str, Any]:
     from google_auth_oauthlib.flow import Flow
 
     redirect_uri = f"{origin}/oauth/callback"
+    _relax_token_scope()
     flow = Flow.from_client_secrets_file(
         str(config.oauth_client_path()),
         scopes=list(CONNECT_SCOPES),
@@ -413,8 +445,8 @@ def _callback_login(request: Request, code: str, q_state: str, origin: str):
             email = _exchange_mock(code)["email"]
         else:
             email = _exchange_google_login(code, origin)
-    except Exception:
-        log.info("google login: token exchange failed")
+    except Exception as exc:
+        _log_exchange_failure("google login", exc)
         return _fail_response(request, status_code=401)
 
     acct = accounts.get_by_email(email)
@@ -471,8 +503,8 @@ def _callback_connect(request: Request, code: str, q_state: str, origin: str):
         else:
             payload = _exchange_google_connect(code, origin)
             granted = payload.get("scopes") or ""
-    except Exception:
-        log.info("google connect: token exchange failed")
+    except Exception as exc:
+        _log_exchange_failure("google connect", exc)
         return _fail_response(request, status_code=401)
 
     if not granted_all_five(granted):
@@ -498,8 +530,12 @@ def _callback_connect(request: Request, code: str, q_state: str, origin: str):
             token_cipher=cipher,
             connected_by=auth.person_of(sess),
         )
-    except Exception:
-        log.info("google connect: encrypt/store failed")
+    except Exception as exc:
+        log.exception(
+            "google connect: encrypt/store failed (%s: %s)",
+            type(exc).__name__,
+            _safe_exc_text(exc),
+        )
         return _fail_response(request, status_code=401)
 
     redir = RedirectResponse("/", status_code=302)

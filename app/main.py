@@ -18,6 +18,8 @@ version, credential scopes, tenant slugs) and is reachable from the internet.
 /api/ping is the endpoint for uptime monitoring.
 """
 
+import copy
+import logging
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -62,6 +64,25 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None,
 )
+
+
+def _uvicorn_log_config() -> dict:
+    """uvicorn's default dictConfig never attaches a handler to root.
+
+    app.* loggers (google_oauth, google_connection, accounts, ...) propagate
+    to root. Root has no handlers and WARNING level, so INFO announcements
+    vanish — journald only shows uvicorn access lines. Reuse uvicorn's stderr
+    handler on root at INFO so systemd sees application logs.
+    """
+    from uvicorn.config import LOGGING_CONFIG
+    cfg = copy.deepcopy(LOGGING_CONFIG)
+    cfg["root"] = {"handlers": ["default"], "level": "INFO"}
+    return cfg
+
+
+@app.on_event("startup")
+def _announce_app_logging() -> None:
+    logging.getLogger("app").info("app logging wired to stderr at INFO")
 
 
 class LoginRequest(BaseModel):
@@ -1064,6 +1085,7 @@ def main() -> None:
     # first request cannot race two workers into initialising it.
     threads_mod.init()
     uvicorn.run(app, host=config.HOST, port=config.PORT, log_level="info",
+                log_config=_uvicorn_log_config(),
                 proxy_headers=True, forwarded_allow_ips="127.0.0.1")
 
 
