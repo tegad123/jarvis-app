@@ -15,6 +15,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -24,7 +25,8 @@ from cryptography.fernet import Fernet
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
 TEMPLATES = HERE / "templates"
-LOADOUTS_FILE = HERE / "loadouts.yaml"
+# Retired: packing list lives in the skills clone as LOADOUTS.yaml.
+LEGACY_LOADOUTS_FILE = HERE / "loadouts.yaml"
 
 SKILLS_ORIGIN = Path("/root/git/openclaw-imports.git")
 SHARED_VENV = Path("/root/jarvis-app/.venv/bin/python")
@@ -84,21 +86,80 @@ def load_yaml(path: Path) -> dict:
     return data
 
 
-def load_loadout(skills_clone: Optional[Path], name: str) -> dict:
-    candidate = None
-    if skills_clone is not None:
-        p = skills_clone / "LOADOUTS.yaml"
-        if p.is_file():
-            candidate = p
-    path = candidate or LOADOUTS_FILE
+def listed_skill_dirs(tree: Path) -> List[str]:
+    return sorted(
+        p.name for p in tree.iterdir()
+        if p.is_dir() and not p.name.startswith(".")
+    )
+
+
+def load_loadout(skills_clone: Path, name: str) -> dict:
+    """Read LOADOUTS.yaml from the cloned skills tree. Never from jarvis-app."""
+    if skills_clone is None:
+        die(
+            "LOADOUTS.yaml is read from the cloned skills tree at "
+            "skills_origin_sha, not from jarvis-app. "
+            f"{LEGACY_LOADOUTS_FILE} is retired."
+        )
+    path = skills_clone / "LOADOUTS.yaml"
+    if not path.is_file():
+        die(
+            f"LOADOUTS.yaml missing from skills clone {skills_clone}. "
+            "The packing list versions with the skills repo. "
+            f"{LEGACY_LOADOUTS_FILE} is retired and is not a fallback."
+        )
     data = load_yaml(path)
-    del name  # named loadout is `base` plus optional enables from the manifest
+    if data.get("retired"):
+        die(f"{path} is a retirement stub, not a loadout")
+    loadout_name = name or "base"
+    if loadout_name != "base":
+        die(f"unknown skill_loadout {loadout_name!r}; only 'base' plus skill_loadout_optional")
     base = list(data.get("base") or [])
     optional = list(data.get("optional") or [])
     excluded = list(data.get("excluded") or [])
     if not base:
         die(f"loadout file {path} has empty base")
     return {"base": base, "optional": optional, "excluded": excluded, "source": str(path)}
+
+
+def assert_completeness(skills_clone: Path, loadout: dict) -> List[str]:
+    """FAIL if a skill dir exists in no bucket, or a name is in two buckets.
+
+    Excluded names may be absent (deny-list for live-only custom skills).
+    Base and optional names must exist as directories.
+    """
+    dirs = listed_skill_dirs(skills_clone)
+    buckets = {
+        "base": list(loadout["base"]),
+        "optional": list(loadout["optional"]),
+        "excluded": list(loadout["excluded"]),
+    }
+    owner: Dict[str, str] = {}
+    for bucket, names in buckets.items():
+        for n in names:
+            if n in owner:
+                die(f"loadout name {n!r} is in both {owner[n]} and {bucket}")
+            owner[n] = bucket
+    unaccounted = [d for d in dirs if d not in owner]
+    if unaccounted:
+        die(
+            "skill dirs not in any LOADOUTS.yaml bucket "
+            f"(new skills must be classified): {unaccounted}"
+        )
+    missing_base = [s for s in buckets["base"] if s not in dirs]
+    if missing_base:
+        die(f"base loadout names missing from skills tree: {missing_base}")
+    missing_opt = [s for s in buckets["optional"] if s not in dirs]
+    if missing_opt:
+        die(f"optional loadout names missing from skills tree: {missing_opt}")
+    absent_excl = [s for s in buckets["excluded"] if s not in dirs]
+    log(
+        "LOADOUT COMPLETENESS PASS: "
+        f"{len(dirs)} dirs classified "
+        f"(base={len(buckets['base'])}, optional={len(buckets['optional'])}, "
+        f"excluded={len(buckets['excluded'])} absent_ok={absent_excl})"
+    )
+    return dirs
 
 
 def check_slug(slug: str) -> None:
@@ -298,24 +359,30 @@ def clone_skills(dest: Path, sha: str) -> None:
 
 
 def prune_to_loadout(skills_clone: Path, loadout: dict, optional_enables: List[str]) -> List[str]:
-    keep = set(loadout["base"]) | {"_shared"}
+    assert_completeness(skills_clone, loadout)
     extra = list(optional_enables or [])
     unknown = [s for s in extra if s not in loadout["optional"]]
     if unknown:
         die(f"skill_loadout_optional names not in optional list: {unknown}")
     excluded_hit = [s for s in extra if s in loadout["excluded"]]
     if excluded_hit:
-        die(f"excluded skills cannot be enabled in slice 2: {excluded_hit}")
-    keep |= set(extra)
+        die(f"excluded skills cannot be enabled: {excluded_hit}")
+    keep = set(loadout["base"]) | set(extra)
+    removable = set(loadout["optional"]) | set(loadout["excluded"])
     shipped: List[str] = []
     for child in sorted(skills_clone.iterdir()):
-        if child.name.startswith("."):
+        if child.name.startswith(".") or not child.is_dir():
             continue
-        if child.is_dir() and child.name not in keep:
-            log(f"pruning skill dir {child.name} (not in loadout)")
+        if child.name not in keep:
+            if child.name not in removable:
+                die(
+                    f"unclassified skill dir {child.name} survived completeness "
+                    "and is not optional/excluded — refusing silent drop"
+                )
+            log(f"pruning skill dir {child.name} (not in this tenant's loadout)")
             shutil.rmtree(child)
             continue
-        if child.is_dir() and child.name != "_shared":
+        if child.name != "_shared":
             shipped.append(child.name)
     missing_core = [s for s in loadout["base"] if not (skills_clone / s).is_dir()]
     if missing_core:
@@ -323,6 +390,9 @@ def prune_to_loadout(skills_clone: Path, loadout: dict, optional_enables: List[s
     for bad in loadout["excluded"]:
         if (skills_clone / bad).exists():
             die(f"excluded skill {bad} still present after prune")
+    expected = [s for s in loadout["base"] if s != "_shared"] + list(extra)
+    if sorted(shipped) != sorted(expected):
+        die(f"shipped {shipped} != base+optional {expected}")
     return shipped
 
 
@@ -379,6 +449,9 @@ def build_client_config(manifest: dict, paths: dict, shipped: List[str], loadout
     for name in shipped:
         enabled = name in loadout["base"] or name in optional_on
         skills[name] = {"enabled": bool(enabled)}
+    # Historical runtime alias (directory is discord-recording-handler).
+    if "discord-recording-handler" in skills:
+        skills["recording-handler"] = dict(skills["discord-recording-handler"])
 
     tm: Dict[str, Any] = dict(skills.get("task-manager") or {"enabled": True})
     if "times_local" in digest:
@@ -920,12 +993,58 @@ def check_only(manifest_path: Path) -> None:
     )
 
 
+def check_loadout(manifest_path: Optional[Path], skills_tree: Optional[Path],
+                  optional_enables: Optional[List[str]]) -> None:
+    """Completeness + optional prune dry-run. Does not stamp /opt or units."""
+    extras = list(optional_enables or [])
+    tmp: Optional[Path] = None
+    tree = skills_tree
+    name = "base"
+    if tree is None:
+        if manifest_path is None:
+            die("--check-loadout requires --skills-tree or --manifest")
+        manifest = load_yaml(manifest_path)
+        sha = str(manifest["skills_origin_sha"]).strip()
+        tmp = Path(tempfile.mkdtemp(prefix="loadout-check-"))
+        tree = tmp / "openclaw-imports"
+        clone_skills(tree, sha)
+        name = manifest.get("skill_loadout") or "base"
+        if not extras:
+            extras = list(manifest.get("skill_loadout_optional") or [])
+    elif not tree.is_dir():
+        die(f"--skills-tree is not a directory: {tree}")
+    try:
+        loadout = load_loadout(tree, name)
+        log(f"loadout from {loadout['source']}")
+        assert_completeness(tree, loadout)
+        if tmp is None:
+            print("LOADOUT COMPLETENESS PASS (inspect-only; did not prune --skills-tree)")
+            return
+        shipped = prune_to_loadout(tree, loadout, extras)
+        remaining = listed_skill_dirs(tree)
+        log(f"shipped skills: {shipped}")
+        log(f"tree after prune: {remaining}")
+        for bad in loadout["excluded"]:
+            if bad in remaining:
+                die(f"excluded {bad} present after dry-run prune")
+        print("LOADOUT DRY-RUN PASS")
+    finally:
+        if tmp is not None:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Stamp or teardown a Jarvis tenant.")
     ap.add_argument("--manifest", type=Path, help="ops YAML (docs/tenants/{slug}.yaml)")
     ap.add_argument("--teardown", metavar="SLUG")
     ap.add_argument("--yes", action="store_true", help="confirm teardown")
     ap.add_argument("--check-collisions", action="store_true")
+    ap.add_argument("--check-loadout", action="store_true",
+                    help="completeness + prune dry-run; no /opt stamp")
+    ap.add_argument("--skills-tree", type=Path,
+                    help="with --check-loadout: inspect this clone (no prune)")
+    ap.add_argument("--optional", action="append", default=None,
+                    help="with --check-loadout: extra optional skill to keep (repeatable)")
     ap.add_argument("--print-units", action="store_true")
     ap.add_argument("--posture", choices=("production", "scratch"),
                     help="with --print-units: render production or scratch templates")
@@ -943,6 +1062,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
     if args.teardown:
         teardown(args.teardown, args.yes)
+        return 0
+    if args.check_loadout:
+        check_loadout(args.manifest, args.skills_tree, args.optional)
         return 0
     if args.print_units:
         if not args.manifest:
