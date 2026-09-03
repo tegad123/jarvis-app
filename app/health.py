@@ -128,24 +128,15 @@ def check_feed() -> Dict[str, Any]:
 # --------------------------------------------------------------------- sheets
 
 def check_sheets() -> Dict[str, Any]:
-    """Validate the Google credential against Google, then check Sheets scope.
+    """Validate the Google credential via google_creds, then check Sheets scope.
 
-    Deliberately two steps. Minting a token proves the credential is live rather
-    than merely present on disk; the scope check proves it is live *for Sheets*.
-    A credential can pass the first and fail the second, and reporting only the
-    first would be the exact false green this check exists to prevent.
+    Same resolution path as skills: tenant connection if a cipher row exists,
+    otherwise the announced service-account fallback. Reports `source` as
+    tenant_connection | service_account. Never dumps tokens or cipher bytes.
 
-    FIXED 2026-08-17 — THE SAME PRINCIPLE RUNS BOTH WAYS. This function used to
-    read ~/.hermes/credentials/google_token.json directly: the OAuth user token
-    from the demo rig, which has been dead since the service-account migration
-    and which NOTHING uses any more. So it reported `sheets: fail` (and dragged
-    the whole report to 503) while Sheets access was demonstrably fine — the
-    Leads screen was returning 36 rows from the live tracker at the same moment.
-    A false RED is not the safe direction of a false GREEN; it is the same
-    defect, and it costs an operator a debugging session chasing nothing.
-    It now resolves the credential through _shared/google_creds — the single
-    path every skill and the Leads endpoint actually use — so this check can
-    only pass when the thing it claims to be checking really works.
+    APP_GOOGLE_OAUTH_MOCK skips the Google token refresh and Sheets client
+    build — mock tokens cannot authorise against Google, and this check must
+    not call the real APIs on testco.
     """
     out: Dict[str, Any] = {}
 
@@ -156,10 +147,15 @@ def check_sheets() -> Dict[str, Any]:
                 "detail": f"google_creds unavailable: {type(exc).__name__}: {exc}"}
 
     try:
+        if hasattr(google_creds, "source"):
+            out["source"] = google_creds.source()
         key_path = google_creds.sa_key_path()
         out["credential"] = str(key_path) if key_path else "(no service-account key)"
         out["mode"] = google_creds.mode()
-        out["subject"] = google_creds.subject()
+        try:
+            out["subject"] = google_creds.subject()
+        except Exception:
+            pass
     except Exception as exc:
         return {**out, "status": "fail",
                 "detail": f"credential not resolvable: {type(exc).__name__}: {exc}"}
@@ -169,13 +165,33 @@ def check_sheets() -> Dict[str, Any]:
     has_sheets = any(s in SHEETS_SCOPES for s in scopes)
     out["sheets_scope_granted"] = has_sheets
 
-    # Step 1 — mint a real token. For a service account this exercises the JWT
-    # grant and domain-wide delegation, which is where a broken setup fails.
+    try:
+        creds = google_creds.credentials()
+    except ImportError as exc:
+        return {**out, "status": "unknown",
+                "detail": f"google auth libraries unavailable: {exc}"}
+    except Exception as exc:
+        return {**out, "status": "fail", "credential_valid": False,
+                "detail": f"credential did not authorise: {type(exc).__name__}: {exc}"}
+
+    if config.oauth_mock():
+        out["credential_valid"] = True
+        if not has_sheets:
+            out["status"] = "fail"
+            out["detail"] = (
+                "Google credential is valid but carries no Sheets/Drive scope "
+                f"(granted: {', '.join(s.rsplit('/', 1)[-1] for s in scopes) or 'none'})."
+            )
+            return out
+        out["status"] = "ok"
+        out["detail"] = "mock: skipped Google token refresh"
+        return out
+
+    # Step 1 — mint a real token. Only when not mock.
     try:
         from google.auth.transport.requests import Request as GoogleRequest
-        creds = google_creds.credentials()
         if not creds.valid:
-            creds.refresh(GoogleRequest())      # real network call to Google
+            creds.refresh(GoogleRequest())
         out["credential_valid"] = bool(creds.valid)
     except ImportError as exc:
         return {**out, "status": "unknown",

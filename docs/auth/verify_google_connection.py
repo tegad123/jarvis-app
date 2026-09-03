@@ -342,9 +342,9 @@ ck("status JSON contains no keys named token/refresh/client_secret/cipher",
 ck("status JSON contains no Fernet/base64 blobs",
    blobs == [],
    "none" if not blobs else "a value looked like a cipher blob")
-allowed = {"status", "google_email", "connected_at"}
+allowed = {"status", "google_email", "connected_at", "refreshed_at"}
 extra_keys = sorted(set(status_body) - allowed) if isinstance(status_body, dict) else ["non-object"]
-ck("status JSON only has status/google_email/connected_at",
+ck("status JSON only has status/google_email/connected_at/refreshed_at",
    extra_keys == [],
    f"keys={sorted(status_body) if isinstance(status_body, dict) else extra_keys}")
 
