@@ -799,6 +799,11 @@ def provision(manifest_path: Path) -> None:
 
     run(["systemctl", "daemon-reload"])
     run(["systemctl", "enable", "--now", f"{slug}-app.service", f"{slug}-gateway.service"])
+    for unit in (f"{slug}-app.service", f"{slug}-gateway.service"):
+        r = subprocess.run(["systemctl", "is-active", unit], capture_output=True, text=True)
+        st = (r.stdout or "").strip() or "unknown"
+        if st != "active":
+            die(f"{unit} is {st} after enable --now — preflight/start failed (see journalctl -u {unit})")
     run(["systemctl", "enable", "--now", f"{slug}-backup.timer"])
     log(f"enabled {slug}-app, {slug}-gateway, and {slug}-backup.timer")
 
