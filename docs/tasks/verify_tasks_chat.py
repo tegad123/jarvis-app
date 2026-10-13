@@ -167,21 +167,25 @@ print(f"  box: {env.BOX}")
 
 from app import tasks_store, threads as threads_mod  # noqa: E402
 
-ADD = "/opt/testco/skills/openclaw-imports/task-manager/scripts/add_task.py"
-DONE = "/opt/testco/skills/openclaw-imports/task-manager/scripts/complete_task.py"
-LEGACY = pathlib.Path("/opt/testco/skills/openclaw-imports/task-manager/data/tasks.db")
+ADD = str(env.SKILLS_CODE / "task-manager" / "scripts" / "add_task.py")
+DONE = str(env.SKILLS_CODE / "task-manager" / "scripts" / "complete_task.py")
+LEGACY_DBS = sorted({env.TESTCO_SKILLS / "task-manager" / "data" / "tasks.db",
+                     env.SKILLS_CODE / "task-manager" / "data" / "tasks.db"})
 MSG_ID = "slack:C0TEST:1724700000.000100"
 TITLE = "Call the title company about 118 Alderwood"
 
 
 def legacy_count():
-    if not LEGACY.exists():
-        return 0
-    conn = sqlite3.connect(str(LEGACY))
-    try:
-        return conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
-    finally:
-        conn.close()
+    total = 0
+    for db in LEGACY_DBS:
+        if not db.exists():
+            continue
+        conn = sqlite3.connect(str(db))
+        try:
+            total += conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+        finally:
+            conn.close()
+    return total
 
 
 def run(script, *argv):

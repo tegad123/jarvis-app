@@ -47,9 +47,10 @@ os.environ["HERMES_HOME"] = str(env.BOX)
 (env.BOX / "outbox").mkdir(parents=True, exist_ok=True)
 os.environ["JARVIS_ALLOW_WRITES"] = "1"
 
-TESTCO_SKILLS = pathlib.Path("/opt/testco/skills/openclaw-imports")
-for p in (TESTCO_SKILLS / "sweeps" / "scripts", TESTCO_SKILLS / "_shared",
-          TESTCO_SKILLS / "owner-email" / "scripts"):
+TESTCO_SKILLS = env.TESTCO_SKILLS          # config: runtime.json, identity.json
+SKILLS_CODE = env.SKILLS_CODE              # code under test
+for p in (SKILLS_CODE / "sweeps" / "scripts", SKILLS_CODE / "_shared",
+          SKILLS_CODE / "owner-email" / "scripts"):
     sys.path.insert(0, str(p))
 
 # A scratch runtime with the sweeps block, so the suite never edits testco's.

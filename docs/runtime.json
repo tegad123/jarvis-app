@@ -27,16 +27,6 @@
     "cloudflared_dir": "~/.cloudflared"
   },
   "credentials": {
-    "google_token": {
-      "path": "~/.hermes/credentials/google_token.json",
-      "service_account": "~/.hermes/credentials/sa_jarvis_prod.json",
-      "scopes": [
-        "gmail.modify",
-        "calendar",
-        "spreadsheets",
-        "drive"
-      ]
-    },
     "assistant_email_app_password": {
       "path": "~/.hermes/credentials/jarvis_email_app_password.txt"
     },

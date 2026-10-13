@@ -40,8 +40,8 @@ os.environ["HERMES_HOME"] = str(env.BOX)
 (env.BOX / "outbox").mkdir(parents=True, exist_ok=True)
 os.environ["JARVIS_ALLOW_WRITES"] = "1"
 
-sys.path.insert(0, "/opt/testco/skills/openclaw-imports/task-manager/scripts")
-sys.path.insert(0, "/opt/testco/skills/openclaw-imports/_shared")
+sys.path.insert(0, str(env.SKILLS_CODE / "task-manager" / "scripts"))
+sys.path.insert(0, str(env.SKILLS_CODE / "_shared"))
 
 from app import tasks_store, threads as threads_mod  # noqa: E402
 import identity  # noqa: E402

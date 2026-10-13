@@ -41,9 +41,11 @@ shutil.rmtree(BOX / "outbox", ignore_errors=True)
 VERBOSE = "-v" in sys.argv
 LIVE = "--no-live" not in sys.argv
 PYBIN = "/root/jarvis-app/.venv/bin/python"
-SK = pathlib.Path("/opt/testco/skills/openclaw-imports")
+SK = env.SKILLS_CODE
 FIXTURES = pathlib.Path("/opt/testco/fixtures")
-BASE = "http://127.0.0.1:8710"
+BASE = os.environ.get("VERIFY_BASE", "http://127.0.0.1:8710").rstrip("/")
+if BASE.endswith(":8700"):
+    sys.exit("REFUSING: :8700 is the live tenant.")
 
 ok = []
 skipped = []
@@ -271,7 +273,7 @@ down = pathlib.Path(tempfile.mkdtemp(prefix="metrics-down-"))
 blocker = down / "threads.db"; blocker.mkdir()   # a DIRECTORY where the db file must be → sqlite cannot open
 code = r'''
 import os, sys, json
-sys.path.insert(0, "/root/jarvis-app"); sys.path.insert(0, "/opt/testco/skills/openclaw-imports/_shared")
+sys.path.insert(0, os.environ["JARVIS_APP_ROOT"]); sys.path.insert(0, os.path.join(os.environ["JARVIS_SKILLS_ROOT"], "_shared"))
 from app import tasks_store
 t = tasks_store.create("Verify while metrics down", created_by="dana", deadline="2030-01-01")
 tasks_store.set_status(t["task_id"], "done", by="dana")
@@ -358,9 +360,8 @@ if LIVE:
     PINS = json.loads(pathlib.Path("/opt/testco/SEEDED_PINS.json").read_text())
     if isinstance(next(iter(PINS.values())), dict):
         PINS = {k: v.get("pin") for k, v in PINS.items()}
-    passphrase = next((l.split("=", 1)[1].strip().strip('"').strip("'") for l in
-                       pathlib.Path("/opt/testco/hermes/.env").read_text().splitlines()
-                       if l.strip().startswith("APP_PASSPHRASE=")), "")
+    passphrase = os.environ.get("VERIFY_OPERATOR_PASSPHRASE", "")
+    ck("live: VERIFY_OPERATOR_PASSPHRASE is set (value never printed)", bool(passphrase))
     jars = pathlib.Path(tempfile.mkdtemp(prefix="metrics-jars-"))
     def call(path, method="GET", body=None, jar=None):
         cmd = ["curl", "-s", "-o", str(jars / "body"), "-w", "%{http_code}", "-X", method, BASE + path]

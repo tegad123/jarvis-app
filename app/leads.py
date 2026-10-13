@@ -2,8 +2,8 @@
 
 The sheet stays the write surface (spec: "No editing in v1 — the sheet remains
 the write surface"). This module only reads, through _shared/google_creds.py so
-credentials resolve exactly as they do for every skill: a service account with
-domain-wide delegation impersonating identity.assistant_address.
+credentials resolve exactly as they do for every skill: the tenant's stored
+Google connection, or a "reconnect Google" refusal.
 
 SHEET SHAPE — read off the live sheet, not assumed:
 

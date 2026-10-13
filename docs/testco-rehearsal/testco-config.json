@@ -173,15 +173,6 @@
     }
   },
   "credentials": {
-    "google_token": {
-      "path": "~/.hermes/credentials/google_token.json",
-      "scopes": [
-        "gmail.readonly",
-        "gmail.send",
-        "gmail.modify",
-        "calendar"
-      ]
-    },
     "assistant_email_app_password": {
       "path": "~/.hermes/credentials/jarvis_email_app_password.txt"
     },

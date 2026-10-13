@@ -43,7 +43,8 @@ JARDIR = pathlib.Path("/tmp/tasks-jars"); JARDIR.mkdir(exist_ok=True)
 if BASE.endswith(":8700"):
     sys.exit("REFUSING: :8700 is the live tenant. Point this at the sandbox or testco.")
 
-sys.path.insert(0, "/opt/testco/skills/openclaw-imports/_shared")
+sys.path.insert(0, os.path.join(os.environ.get("VERIFY_SKILLS_ROOT")
+                                or "/opt/testco/skills/openclaw-imports", "_shared"))
 os.environ.setdefault("JARVIS_IDENTITY_CONFIG",
                       "/opt/testco/skills/openclaw-imports/_shared/identity.json")
 import identity  # noqa: E402
@@ -54,10 +55,10 @@ if isinstance(next(iter(PINS.values())), dict):
 
 
 def passphrase() -> str:
-    for line in pathlib.Path("/opt/testco/hermes/.env").read_text().splitlines():
-        if line.strip().startswith("APP_PASSPHRASE="):
-            return line.split("=", 1)[1].strip().strip('"').strip("'")
-    sys.exit("no APP_PASSPHRASE in testco's .env")
+    value = os.environ.get("VERIFY_OPERATOR_PASSPHRASE")
+    if not value:
+        sys.exit("REFUSING: VERIFY_OPERATOR_PASSPHRASE is not set (value never printed)")
+    return value
 
 
 ok = []

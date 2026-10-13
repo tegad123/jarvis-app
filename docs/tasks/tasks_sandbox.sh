@@ -21,7 +21,10 @@ SB="${TASKS_SANDBOX:-/tmp/claude-0/-root/tasks-sandbox}"
 PORT="${TASKS_PORT:-8711}"
 TESTCO_HOME=/opt/testco/hermes
 TESTCO_SKILLS=/opt/testco/skills/openclaw-imports
-APP=/root/jarvis-app
+# Code under test; config stays testco's.
+APP="${VERIFY_APP_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+SKILLS_CODE="${VERIFY_SKILLS_ROOT:-$TESTCO_SKILLS}"
+PYTHON="${VERIFY_PYTHON:-/root/jarvis-app/.venv/bin/python}"
 
 case "${1:-}" in
 start)
@@ -47,7 +50,8 @@ src.backup(dst); dst.close(); src.close()
 
   cd "$APP"
   HERMES_HOME="$TESTCO_HOME" \
-  JARVIS_SKILLS_ROOT="$TESTCO_SKILLS" \
+  JARVIS_SKILLS_ROOT="$SKILLS_CODE" \
+  JARVIS_APP_ROOT="$APP" \
   JARVIS_RUNTIME_CONFIG="$TESTCO_SKILLS/_shared/runtime.json" \
   JARVIS_IDENTITY_CONFIG="$TESTCO_SKILLS/_shared/identity.json" \
   JARVIS_TASKS_DB="$SB/tasks.db" \
@@ -58,7 +62,8 @@ src.backup(dst); dst.close(); src.close()
   JARVIS_TASKS_SOURCE="${TASKS_SOURCE:-store}" \
   JARVIS_ALLOW_WRITES=1 \
   APP_PORT="$PORT" \
-  nohup "$APP/.venv/bin/python" -m app.main > "$SB/app.log" 2>&1 &
+  APP_HOST=127.0.0.1 \
+  nohup "$PYTHON" -m app.main > "$SB/app.log" 2>&1 &
   echo $! > "$SB/app.pid"
 
   for _ in $(seq 1 40); do

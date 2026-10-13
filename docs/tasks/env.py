@@ -20,17 +20,21 @@ from pathlib import Path
 BOX = Path(os.environ.get("TASKS_BOX", "/tmp/claude-0/-root/tasks-box"))
 TESTCO_HOME = Path("/opt/testco/hermes")
 TESTCO_SKILLS = Path("/opt/testco/skills/openclaw-imports")
-APP = Path("/root/jarvis-app")
+# Code under test. Config (runtime.json, identity.json) always stays testco's.
+APP = Path(os.environ.get("VERIFY_APP_ROOT") or Path(__file__).resolve().parents[2])
+SKILLS_CODE = Path(os.environ.get("VERIFY_SKILLS_ROOT") or TESTCO_SKILLS)
 
 FORBIDDEN = (Path("/root/.hermes/state"), TESTCO_HOME / "state",
-             TESTCO_SKILLS / "task-manager" / "data")
+             TESTCO_SKILLS / "task-manager" / "data",
+             SKILLS_CODE / "task-manager" / "data")
 
 
 def apply() -> None:
     BOX.mkdir(parents=True, exist_ok=True)
     os.environ.update({
         "HERMES_HOME": str(TESTCO_HOME),
-        "JARVIS_SKILLS_ROOT": str(TESTCO_SKILLS),
+        "JARVIS_SKILLS_ROOT": str(SKILLS_CODE),
+        "JARVIS_APP_ROOT": str(APP),
         "JARVIS_RUNTIME_CONFIG": str(TESTCO_SKILLS / "_shared" / "runtime.json"),
         "JARVIS_IDENTITY_CONFIG": str(TESTCO_SKILLS / "_shared" / "identity.json"),
         "JARVIS_TASKS_DB": str(BOX / "tasks.db"),
@@ -44,7 +48,7 @@ def apply() -> None:
         # where the harness means it to be.
         "JARVIS_ALLOW_WRITES": os.environ.get("JARVIS_ALLOW_WRITES", "1"),
     })
-    for p in (str(APP), str(TESTCO_SKILLS / "_shared")):
+    for p in (str(APP), str(SKILLS_CODE / "_shared")):
         if p not in sys.path:
             sys.path.insert(0, p)
 
