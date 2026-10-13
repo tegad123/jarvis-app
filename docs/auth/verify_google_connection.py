@@ -19,18 +19,35 @@ The owner connect plants the tenant identity's assistant_address; a profile
 with any other address is refused reason=mismatch, writes 0 rows, and the
 refusal log line (VERIFY_APP_LOG, the app's log file) carries no token.
 
+No fallback (subprocess, no HTTP): decoy service-account / google_token.json /
+ADC files are planted in a scratch HERMES_HOME and named by every legacy env
+var. With no stored connection google_creds.credentials(), gmail() and
+leads.load() fail with "Reconnect Google", bump google_creds_not_connected
+0→1 and log the refusal, and an audit hook on open/listdir records zero
+touches of the decoys (canary: the hook records a deliberate decoy open).
+Companion: with a planted connection credentials() returns, source is
+tenant_connection, and the decoys are still untouched.
+
+Reconnect (HTTP): with 0 rows /api/health sheets is fail, source=not_connected,
+reconnect_required, detail carries the reconnect message, and the counter
+moves; after connect source=tenant_connection and the counter does not move.
+
 Absence: dana PIN 200; wrong PIN 401 same message; operator person_key=null;
 GET /api/people has no emails.
 
-Never :8700. Never prints pins, passphrases, env values, keys, or cipher bytes.
+The operator passphrase comes from VERIFY_OPERATOR_PASSPHRASE; this script
+never reads an env file. Never :8700. Never prints pins, passphrases, env
+values, keys, or cipher bytes.
 """
 import json
 import os
 import pathlib
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 BASE = os.environ.get("AUTH_BASE", "http://127.0.0.1:8710").rstrip("/")
@@ -41,7 +58,15 @@ HOME = pathlib.Path("/opt/testco/hermes")
 ACCOUNTS = pathlib.Path(
     os.environ.get("JARVIS_ACCOUNTS_DB", str(HOME / "state" / "jarvis_accounts.db"))
 )
-APP_SRC = pathlib.Path(__file__).resolve().parents[2] / "app" / "google_oauth.py"
+THREADS = pathlib.Path(
+    os.environ.get("JARVIS_THREADS_DB", str(HOME / "state" / "jarvis_threads.db"))
+)
+APP_ROOT = pathlib.Path(__file__).resolve().parents[2]
+APP_SRC = APP_ROOT / "app" / "google_oauth.py"
+SKILLS_ROOT = os.environ.get("JARVIS_SKILLS_ROOT", "/opt/testco/skills/openclaw-imports")
+RECONNECT = "Reconnect Google from Settings"
+NOT_CONNECTED_LOG = "google_creds: refused, no tenant connection (reconnect Google)"
+COUNTER_NOT_CONNECTED = "google_creds_not_connected"
 PINS_PATH = pathlib.Path("/opt/testco/SEEDED_PINS.json")
 SCR = pathlib.Path("/tmp/verify-google-connection")
 SCR.mkdir(parents=True, exist_ok=True)
@@ -78,15 +103,180 @@ def pins():
 
 
 def passphrase():
-    for line in (HOME / ".env").read_text().splitlines():
-        if line.strip().startswith("APP_PASSPHRASE="):
-            return line.split("=", 1)[1].strip().strip('"').strip("'")
-    sys.exit("REFUSING: APP_PASSPHRASE missing (presence only; value not printed)")
+    value = os.environ.get("VERIFY_OPERATOR_PASSPHRASE")
+    if not value:
+        sys.exit("REFUSING: VERIFY_OPERATOR_PASSPHRASE is not set (value never printed)")
+    return value
+
+
+def counter(name):
+    """WAL-inclusive snapshot of one counter from the app's threads DB."""
+    if not THREADS.exists():
+        return 0
+    dst = SCR / "threads-snap.db"
+    con_src = sqlite3.connect(str(THREADS))
+    con_dst = sqlite3.connect(str(dst))
+    con_src.backup(con_dst)
+    con_dst.close()
+    con_src.close()
+    con = sqlite3.connect(str(dst))
+    try:
+        row = con.execute("SELECT value FROM counters WHERE name=?", (name,)).fetchone()
+    except sqlite3.OperationalError:
+        row = None
+    con.close()
+    return int(row[0]) if row else 0
+
+
+def sheets_check(health):
+    if not isinstance(health, dict):
+        return {}
+    return (health.get("checks") or {}).get("sheets") or {}
+
+
+NO_FALLBACK_CHILD = r'''
+import io, json, logging, os, sqlite3, sys
+decoy = os.environ["DECOY_DIR"]
+touched = []
+
+def hook(event, args):
+    if event in ("open", "os.listdir", "os.scandir") and args:
+        p = args[0]
+        if isinstance(p, bytes):
+            p = p.decode(errors="replace")
+        if isinstance(p, os.PathLike):
+            p = os.fspath(p)
+        if isinstance(p, str) and os.path.abspath(p).startswith(decoy):
+            touched.append(os.path.basename(p) or p)
+
+sys.addaudithook(hook)
+out = {}
+with open(os.path.join(decoy, "canary.txt")) as fh:
+    fh.read()
+out["canary_seen"] = "canary.txt" in touched
+touched.clear()
+
+buf = io.StringIO()
+logging.getLogger().addHandler(logging.StreamHandler(buf))
+logging.getLogger().setLevel(logging.INFO)
+sys.path.insert(0, os.environ["JARVIS_APP_ROOT"])
+sys.path.insert(0, os.path.join(os.environ["JARVIS_SKILLS_ROOT"], "_shared"))
+from app import accounts, threads, google_connection
+accounts.init()
+threads._ensure()
+import google_creds
+out["module"] = google_creds.__file__
+
+def ctr():
+    con = sqlite3.connect(os.environ["JARVIS_THREADS_DB"])
+    try:
+        row = con.execute("SELECT value FROM counters WHERE name=?",
+                          ("google_creds_not_connected",)).fetchone()
+    except sqlite3.OperationalError:
+        row = None
+    con.close()
+    return int(row[0]) if row else 0
+
+if os.environ["CHILD_MODE"] == "connected":
+    payload = {"refresh_token": "child-refresh", "access_token": "child-access",
+               "expiry": "2999-01-01T00:00:00+00:00",
+               "scopes": "https://www.googleapis.com/auth/spreadsheets"}
+    google_connection.put_connected(
+        google_email="child@tenant.example", scopes=payload["scopes"],
+        token_cipher=google_connection.encrypt_tokens(payload), connected_by="dana")
+
+def attempt(fn):
+    try:
+        got = fn()
+        return {"raised": None, "returned": got is not None}
+    except Exception as exc:
+        return {"raised": type(exc).__name__, "msg": str(exc)[:300]}
+
+out["counter_before"] = ctr()
+out["credentials"] = attempt(google_creds.credentials)
+out["counter_after_credentials"] = ctr()
+out["source"] = google_creds.source()
+if os.environ["CHILD_MODE"] == "empty":
+    out["gmail"] = attempt(google_creds.gmail)
+    from app import leads
+    try:
+        leads.load()
+        out["leads"] = {"raised": None}
+    except leads.LeadsUnavailable as exc:
+        out["leads"] = {"raised": "LeadsUnavailable", "msg": exc.message}
+    except Exception as exc:
+        out["leads"] = {"raised": type(exc).__name__, "msg": str(exc)[:300]}
+out["log"] = buf.getvalue()[-4000:]
+out["touched"] = sorted(set(touched))
+print("CHILD_RESULT " + json.dumps(out))
+'''
+
+DECOY_FILES = {
+    "service_account.json": {"type": "service_account", "client_email": "decoy@decoy.example",
+                             "private_key": "DECOY-NOT-A-KEY", "token_uri": "https://decoy.example/token"},
+    "sa_jarvis_prod.json": {"type": "service_account", "client_email": "decoy@decoy.example",
+                            "private_key": "DECOY-NOT-A-KEY", "token_uri": "https://decoy.example/token"},
+    "google_token.json": {"refresh_token": "decoy-refresh", "client_id": "decoy",
+                          "client_secret": "decoy", "token_uri": "https://decoy.example/token"},
+    "oauth_token.json": {"refresh_token": "decoy-refresh", "client_id": "decoy",
+                         "client_secret": "decoy", "token_uri": "https://decoy.example/token"},
+    "adc.json": {"type": "authorized_user", "refresh_token": "decoy-refresh",
+                 "client_id": "decoy", "client_secret": "decoy"},
+}
+
+
+def run_no_fallback_child(mode):
+    """Run google_creds in a scratch tenant with decoy legacy credentials."""
+    from cryptography.fernet import Fernet
+
+    box = pathlib.Path(tempfile.mkdtemp(prefix="verify-no-fallback-"))
+    try:
+        home = box / "hermes"
+        decoy = home / "credentials"
+        (home / "state").mkdir(parents=True)
+        decoy.mkdir(parents=True)
+        for name, body in DECOY_FILES.items():
+            (decoy / name).write_text(json.dumps(body))
+        (decoy / "canary.txt").write_text("canary")
+        env = {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "CHILD_MODE": mode,
+            "DECOY_DIR": str(decoy.resolve()),
+            "HERMES_HOME": str(home),
+            "JARVIS_APP_ROOT": str(APP_ROOT),
+            "JARVIS_SKILLS_ROOT": SKILLS_ROOT,
+            "JARVIS_IDENTITY_CONFIG": str(IDENTITY),
+            "JARVIS_ACCOUNTS_DB": str(home / "state" / "jarvis_accounts.db"),
+            "JARVIS_THREADS_DB": str(home / "state" / "jarvis_threads.db"),
+            "JARVIS_ACTIVITY_FEED": str(home / "state" / "activity_feed.jsonl"),
+            "JARVIS_LEADS_SHEET_ID": "decoy-sheet-id",
+            "APP_GOOGLE_TOKEN_KEY": Fernet.generate_key().decode(),
+            "APP_GOOGLE_OAUTH_MOCK": "1",
+            "JARVIS_CREDENTIALS_DIR": str(decoy),
+            "HERMES_CREDENTIALS_DIR": str(decoy),
+            "JARVIS_GOOGLE_SA_KEY": str(decoy / "service_account.json"),
+            "JARVIS_GOOGLE_TOKEN": str(decoy / "google_token.json"),
+            "GOOGLE_APPLICATION_CREDENTIALS": str(decoy / "adc.json"),
+        }
+        if os.environ.get("JARVIS_RUNTIME_CONFIG"):
+            env["JARVIS_RUNTIME_CONFIG"] = os.environ["JARVIS_RUNTIME_CONFIG"]
+        proc = subprocess.run([sys.executable, "-c", NO_FALLBACK_CHILD],
+                              capture_output=True, text=True, env=env, timeout=120)
+        line = next((ln for ln in proc.stdout.splitlines()
+                     if ln.startswith("CHILD_RESULT ")), "")
+        if not line:
+            tail = (proc.stderr or proc.stdout).strip().splitlines()[-3:]
+            return {"error": f"exit={proc.returncode} {' | '.join(tail)}"}
+        return json.loads(line[len("CHILD_RESULT "):])
+    finally:
+        shutil.rmtree(box, ignore_errors=True)
 
 
 def curl(path, jar=None, method="GET", body=None, headers_path=None, form=None):
     out = SCR / "body"
     hdr = headers_path or (SCR / "hdr")
+    out.unlink(missing_ok=True)
+    hdr.unlink(missing_ok=True)
     cmd = [
         "curl", "-s", "-D", str(hdr), "-o", str(out), "-w", "%{http_code}",
         "-X", method, "--max-redirs", "0",
@@ -284,6 +474,52 @@ ck("mock_token_response never emits an id_token field",
    '["id_token"]' not in tok_fn and '"id_token":' not in tok_fn and "'id_token':" not in tok_fn)
 
 
+print("\n── no fallback: no stored connection, decoys planted ────")
+r = run_no_fallback_child("empty")
+print(f"  google_creds under test: {r.get('module', r.get('error'))}")
+ck("audit-hook canary: a deliberate decoy open is recorded",
+   r.get("canary_seen") is True, r.get("error", ""))
+cr = r.get("credentials") or {}
+ck("credentials() raises GoogleNotConnected",
+   cr.get("raised") == "GoogleNotConnected", f"raised={cr.get('raised')}")
+ck("credentials() error says Reconnect Google",
+   RECONNECT in (cr.get("msg") or ""), (cr.get("msg") or "")[:120])
+gm = r.get("gmail") or {}
+ck("gmail() raises GoogleNotConnected with the reconnect message",
+   gm.get("raised") == "GoogleNotConnected" and RECONNECT in (gm.get("msg") or ""),
+   f"raised={gm.get('raised')}")
+ld = r.get("leads") or {}
+ck("leads.load() surfaces the reconnect message",
+   ld.get("raised") == "LeadsUnavailable" and RECONNECT in (ld.get("msg") or ""),
+   f"raised={ld.get('raised')} msg={(ld.get('msg') or '')[:80]}")
+ck("source() is not_connected",
+   r.get("source") == "not_connected", f"source={r.get('source')}")
+ck("no decoy credential file was opened or listed",
+   "touched" in r and r["touched"] == [], f"touched={r.get('touched')}")
+ck("google_creds_not_connected 0→1 for one credentials() call",
+   r.get("counter_before") == 0 and r.get("counter_after_credentials") == 1,
+   f"{r.get('counter_before')}→{r.get('counter_after_credentials')}")
+ck("refusal is logged (announced, not silent)",
+   NOT_CONNECTED_LOG in (r.get("log") or ""),
+   "logged" if NOT_CONNECTED_LOG in (r.get("log") or "") else "log line missing")
+
+print("\n── no fallback companion: stored connection, decoys planted ──")
+r = run_no_fallback_child("connected")
+ck("audit-hook canary fires in the connected child too",
+   r.get("canary_seen") is True, r.get("error", ""))
+cr = r.get("credentials") or {}
+ck("credentials() returns credentials from the tenant connection",
+   cr.get("raised") is None and cr.get("returned") is True,
+   f"raised={cr.get('raised')} {(cr.get('msg') or '')[:120]}")
+ck("source() is tenant_connection",
+   r.get("source") == "tenant_connection", f"source={r.get('source')}")
+ck("connected path opened no decoy credential file",
+   "touched" in r and r["touched"] == [], f"touched={r.get('touched')}")
+ck("connected path did not bump google_creds_not_connected",
+   r.get("counter_before") == 0 and r.get("counter_after_credentials") == 0,
+   f"{r.get('counter_before')}→{r.get('counter_after_credentials')}")
+
+
 PINS, jar_pin, jar_op = absence("PIN and operator still exist")
 
 print("\n── ledger: google_connection table ──────────────────────")
@@ -297,6 +533,24 @@ tables, n_clean, _ = snap_connection()
 print(f"  ledger after cleanup disconnect: rows={n_clean} (was {n0})")
 ck("cleanup leaves google_connection empty",
    n_clean == 0, f"rows={n_clean}")
+
+print("\n── reconnect: tenant with no stored credentials ─────────")
+c0 = counter(COUNTER_NOT_CONNECTED)
+code, health, _ = curl("/api/health", jar_pin)
+c1 = counter(COUNTER_NOT_CONNECTED)
+sh = sheets_check(health)
+ck("/api/health is 503 fail and sheets source=not_connected with 0 rows",
+   code == 503 and isinstance(health, dict) and health.get("status") == "fail"
+   and sh.get("source") == "not_connected",
+   f"HTTP {code} status={health.get('status') if isinstance(health, dict) else None} "
+   f"source={sh.get('source')}")
+ck("/api/health sheets is fail with reconnect_required",
+   sh.get("status") == "fail" and sh.get("reconnect_required") is True,
+   f"status={sh.get('status')} reconnect_required={sh.get('reconnect_required')}")
+ck("/api/health sheets detail carries the reconnect message",
+   RECONNECT in (sh.get("detail") or ""), (sh.get("detail") or "")[:120])
+ck("google_creds_not_connected moved on the refused health read",
+   c1 >= c0 + 1, f"{c0}→{c1}")
 
 print("\n── presence: connect start role gates ───────────────────")
 code, _, heads = curl("/api/google/connect/start", jar_pin)
@@ -486,6 +740,15 @@ gc = (health or {}).get("google_connection") if isinstance(health, dict) else No
 ck("GET /api/health reports google_connection status=connected",
    isinstance(gc, dict) and gc.get("status") == "connected",
    f"HTTP {code} status={gc.get('status') if isinstance(gc, dict) else None}")
+c0 = counter(COUNTER_NOT_CONNECTED)
+code, health, _ = curl("/api/health", jar_g)
+c1 = counter(COUNTER_NOT_CONNECTED)
+sh = sheets_check(health)
+ck("/api/health sheets source=tenant_connection after connect",
+   sh.get("source") == "tenant_connection" and not sh.get("reconnect_required"),
+   f"source={sh.get('source')} status={sh.get('status')}")
+ck("connected health read did not bump google_creds_not_connected",
+   c1 == c0, f"{c0}→{c1}")
 
 print("\n── presence: replay of the connect callback ─────────────")
 jar_replay = str(SCR / "connect-replay.jar")

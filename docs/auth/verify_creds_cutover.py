@@ -1,25 +1,30 @@
 #!/usr/bin/env python3
-"""Slice 6 — google_creds tenant-connection cutover. Boxed first, then :8710.
+"""Slice 6 — google_creds tenant connection, fail closed. Boxed first, then AUTH_BASE.
 
 Boxed (scratch DB, fake cipher, no HTTP, no Google):
   - connected row → source=tenant_connection (assert SOURCE, not just success)
-  - no row → SA fallback AND counter increment AND grepable log line
-  - corrupt cipher → ConnectionCipherError through google_creds (not silent None, not SA)
+  - no row → GoogleNotConnected ("Reconnect Google") AND counter
+    google_creds_not_connected +1 AND grepable log line; no fallback exists
+  - corrupt cipher → ConnectionCipherError through google_creds (not silent None)
   - fake refresh invalid_grant → needs_reauth, counter 0→1, feed line, caller exception
-  - missing APP_GOOGLE_TOKEN_KEY with a row → loud fail, not SA
+  - missing APP_GOOGLE_TOKEN_KEY with a row → loud RuntimeError
 
-Live :8710 (mock tokens; no real Google):
+HTTP AUTH_BASE (default :8710; mock tokens, no real Google):
   - mock-connect → /api/health sheets source=tenant_connection
-  - disconnect → source=service_account and google_creds_sa_fallback moved
-  - rerun verify_google_connection.py (36/36) + PIN/operator canaries inside it
+  - disconnect → source=not_connected, reconnect_required, counter moved
+  - rerun verify_google_connection.py from this checkout; exit 0 and N/N
 
-Never :8700. Never prints pins, keys, cipher, or token bytes.
+JARVIS_SKILLS_ROOT / JARVIS_IDENTITY_CONFIG / JARVIS_THREADS_DB select the tree
+and ledger under test; the app is this checkout. The operator passphrase comes
+from VERIFY_OPERATOR_PASSPHRASE; no env file is read. Never :8700. Never prints
+pins, keys, cipher, or token bytes.
 """
 import io
 import json
 import logging
 import os
 import pathlib
+import re
 import sqlite3
 import subprocess
 import sys
@@ -32,8 +37,11 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 # ---------------------------------------------------------------------------
 
 BOX = pathlib.Path(tempfile.mkdtemp(prefix="creds-cutover-"))
-IDN = pathlib.Path("/opt/testco/skills/openclaw-imports/_shared/identity.json")
-SKILLS_SHARED = pathlib.Path("/opt/testco/skills/openclaw-imports/_shared")
+APP_ROOT = pathlib.Path(__file__).resolve().parents[2]
+SKILLS_ROOT = os.environ.get("JARVIS_SKILLS_ROOT", "/opt/testco/skills/openclaw-imports")
+IDN = pathlib.Path(os.environ.get(
+    "JARVIS_IDENTITY_CONFIG", f"{SKILLS_ROOT}/_shared/identity.json"))
+SKILLS_SHARED = pathlib.Path(SKILLS_ROOT) / "_shared"
 FORBIDDEN = (pathlib.Path("/root/.hermes"), pathlib.Path("/root/jarvis-app/data"))
 LIVE_SKILLS_CREDS = pathlib.Path(
     "/root/.hermes/skills/openclaw-imports/_shared/google_creds.py"
@@ -50,17 +58,16 @@ from cryptography.fernet import Fernet  # noqa: E402
 os.environ["APP_GOOGLE_TOKEN_KEY"] = Fernet.generate_key().decode()  # never printed
 os.environ["HERMES_HOME"] = str(BOX / "hermes")
 os.environ["JARVIS_ACCOUNTS_DB"] = str(ACCOUNTS)
-os.environ["JARVIS_THREADS_DB"] = str(THREADS)
 os.environ["JARVIS_ACTIVITY_FEED"] = str(FEED)
-os.environ["JARVIS_SKILLS_ROOT"] = "/opt/testco/skills/openclaw-imports"
+HTTP_THREADS = os.environ.get("JARVIS_THREADS_DB")
+os.environ["JARVIS_THREADS_DB"] = str(THREADS)
+os.environ["JARVIS_SKILLS_ROOT"] = SKILLS_ROOT
 os.environ["JARVIS_IDENTITY_CONFIG"] = str(IDN)
-os.environ["JARVIS_APP_ROOT"] = "/root/jarvis-app"
+os.environ["JARVIS_APP_ROOT"] = str(APP_ROOT)
 os.environ["JARVIS_CREDENTIALS_DIR"] = str(CREDS_DIR)
 os.environ["APP_GOOGLE_OAUTH_MOCK"] = "1"
-os.environ.pop("JARVIS_GOOGLE_SA_KEY", None)
-os.environ.pop("JARVIS_GOOGLE_DISABLE_SA", None)
 
-sys.path.insert(0, "/root/jarvis-app")
+sys.path.insert(0, str(APP_ROOT))
 sys.path.insert(0, str(SKILLS_SHARED))
 
 ok = []
@@ -101,21 +108,17 @@ def plant_connected(gc_mod):
     )
 
 
-def reset_creds_module(gcreds):
-    gcreds._last_source = None
-    gcreds._creds_cache.clear()
-
-
-SA_FALLBACK_LOG = "google_creds: service-account fallback (no tenant connection row)"
-COUNTER_SA = "google_creds_sa_fallback"
+NOT_CONNECTED_LOG = "google_creds: refused, no tenant connection (reconnect Google)"
+COUNTER_NC = "google_creds_not_connected"
+RECONNECT = "Reconnect Google from Settings"
 COUNTER_REAUTH = "google_connection_needs_reauth"
 COUNTER_DECRYPT = "google_connection_decrypt_failed"
 
 print("── boxed isolation ──────────────────────────────────────────")
 print(f"  box={BOX}")
-ck("identity source is testco skills, not live hermes",
-   "/opt/testco/skills" in str(IDN) and "/root/.hermes" not in str(IDN))
-ck("this process patches TESTCO google_creds, not live",
+ck("identity source is not live hermes",
+   "/root/.hermes" not in str(IDN.resolve()))
+ck("this process patches a non-live google_creds",
    (SKILLS_SHARED / "google_creds.py").is_file()
    and (not LIVE_SKILLS_CREDS.exists()
         or SKILLS_SHARED.resolve() != LIVE_SKILLS_CREDS.parent.resolve()))
@@ -125,7 +128,7 @@ ck("APP_GOOGLE_TOKEN_KEY is set (value not printed)",
 from app import accounts, google_connection, threads  # noqa: E402
 import google_creds  # noqa: E402
 
-ck("google_creds loaded from testco skills tree",
+ck("google_creds loaded from JARVIS_SKILLS_ROOT",
    str(pathlib.Path(google_creds.__file__).resolve()).startswith(
        str(SKILLS_SHARED.resolve())
    ),
@@ -138,8 +141,8 @@ ck("accounts.DB_PATH is not live hermes",
 ck("threads.DB_PATH is inside the box",
    str(threads.DB_PATH.resolve()).startswith(str(BOX.resolve())),
    str(threads.DB_PATH))
-ck("google_creds JARVIS_APP_ROOT is this checkout, not live default",
-   os.environ.get("JARVIS_APP_ROOT") == "/root/jarvis-app")
+ck("google_creds JARVIS_APP_ROOT is this checkout",
+   os.environ.get("JARVIS_APP_ROOT") == str(APP_ROOT))
 
 accounts.init()
 threads._ensure()
@@ -151,24 +154,9 @@ lg = logging.getLogger("google_creds")
 lg.setLevel(logging.WARNING)
 lg.addHandler(h)
 
-sa_hits = {"n": 0}
-
-
-def fake_sa(scopes, subj):
-    sa_hits["n"] += 1
-
-    class C:
-        valid = True
-
-    return C()
-
-
-google_creds._service_account_credentials = fake_sa
-
 print("\n── boxed: prefer tenant connection ────────────────────────")
 plant_connected(google_connection)
-reset_creds_module(google_creds)
-before_sa = boxed_counter(COUNTER_SA)
+before_nc = boxed_counter(COUNTER_NC)
 peek = google_creds.source()
 creds = google_creds.credentials()
 ck("source() peeks tenant_connection when a cipher row exists",
@@ -178,38 +166,42 @@ ck("credentials() source is tenant_connection (not just success)",
    google_creds.source())
 ck("tenant path returned credentials (not None)",
    creds is not None, type(creds).__name__)
-ck("SA builder was not called when a tenant row exists",
-   sa_hits["n"] == 0, f"sa_hits={sa_hits['n']}")
-ck("SA fallback counter did not move on tenant path",
-   boxed_counter(COUNTER_SA) == before_sa,
-   f"{before_sa}→{boxed_counter(COUNTER_SA)}")
+ck("not-connected counter did not move on tenant path",
+   boxed_counter(COUNTER_NC) == before_nc,
+   f"{before_nc}→{boxed_counter(COUNTER_NC)}")
 
-print("\n── boxed: no row → announced SA fallback ──────────────────")
+print("\n── boxed: no row → fail closed, reconnect Google ──────────")
 google_connection.clear()
-reset_creds_module(google_creds)
-# sa_key_path must look present so the SA branch is taken, not oauth_token.json.
-google_creds.sa_key_path = lambda: pathlib.Path("/etc/hosts")
 logbuf.truncate(0)
 logbuf.seek(0)
-before_sa = boxed_counter(COUNTER_SA)
+before_nc = boxed_counter(COUNTER_NC)
 peek = google_creds.source()
-got = google_creds.credentials()
+raised = None
+got = "unset"
+try:
+    got = google_creds.credentials()
+except Exception as exc:
+    raised = exc
 logged = logbuf.getvalue()
-after_sa = boxed_counter(COUNTER_SA)
-ck("source() is service_account when no cipher row",
-   peek == "service_account", peek)
-ck("credentials() source is service_account",
-   google_creds.source() == "service_account",
-   google_creds.source())
-ck("SA builder was invoked (fallback chosen)",
-   sa_hits["n"] >= 1 and got is not None,
-   f"sa_hits={sa_hits['n']}")
-ck("SA fallback counter incremented",
-   after_sa >= before_sa + 1,
-   f"{before_sa}→{after_sa}")
-ck("SA fallback log line exists (announced, not silent)",
-   SA_FALLBACK_LOG in logged,
-   "grep hit" if SA_FALLBACK_LOG in logged else "line missing from logger")
+after_nc = boxed_counter(COUNTER_NC)
+ck("source() is not_connected when no cipher row",
+   peek == "not_connected", peek)
+ck("credentials() raises GoogleNotConnected, returns nothing",
+   type(raised).__name__ == "GoogleNotConnected" and got == "unset",
+   f"raised={type(raised).__name__ if raised else None}")
+ck("refusal carries the reconnect message",
+   raised is not None and RECONNECT in str(raised), str(raised)[:120])
+ck("google_creds_not_connected counter +1",
+   after_nc == before_nc + 1,
+   f"{before_nc}→{after_nc}")
+ck("refusal log line exists (announced, not silent)",
+   NOT_CONNECTED_LOG in logged,
+   "grep hit" if NOT_CONNECTED_LOG in logged else "line missing from logger")
+ck("google_creds exposes no fallback builders",
+   not any(hasattr(google_creds, n) for n in
+           ("_service_account_credentials", "sa_key_path", "_creds_cache", "mode")),
+   [n for n in ("_service_account_credentials", "sa_key_path", "_creds_cache", "mode")
+    if hasattr(google_creds, n)])
 
 print("\n── boxed: corrupt cipher through google_creds ─────────────")
 plant_connected(google_connection)
@@ -223,10 +215,7 @@ ba[len(ba) // 2] ^= 0xFF
 con.execute("UPDATE google_connection SET token_cipher=? WHERE id=1", (bytes(ba),))
 con.commit()
 con.close()
-reset_creds_module(google_creds)
-sa_before_hits = sa_hits["n"]
 before_dec = boxed_counter(COUNTER_DECRYPT)
-before_sa = boxed_counter(COUNTER_SA)
 raised = None
 result = "unset"
 try:
@@ -241,14 +230,10 @@ ck("google_creds raises ConnectionCipherError on flipped cipher (not None)",
 ck("decrypt-failed counter incremented through google_creds",
    boxed_counter(COUNTER_DECRYPT) >= before_dec + 1,
    f"{before_dec}→{boxed_counter(COUNTER_DECRYPT)}")
-ck("corrupt cipher did not fall back to SA",
-   sa_hits["n"] == sa_before_hits and boxed_counter(COUNTER_SA) == before_sa,
-   f"sa_hits {sa_before_hits}→{sa_hits['n']} fallback {before_sa}→{boxed_counter(COUNTER_SA)}")
 google_connection.clear()
 
 print("\n── boxed: fake refresh invalid_grant ──────────────────────")
 plant_connected(google_connection)
-reset_creds_module(google_creds)
 from google.auth.exceptions import RefreshError  # noqa: E402
 
 _orig_maybe = google_creds._maybe_refresh
@@ -291,10 +276,7 @@ ck("needs_reauth headline has no email address",
 
 print("\n── boxed: missing token key with a connected row ──────────")
 plant_connected(google_connection)
-reset_creds_module(google_creds)
 saved_key = os.environ.pop("APP_GOOGLE_TOKEN_KEY")
-sa_before_hits = sa_hits["n"]
-before_sa = boxed_counter(COUNTER_SA)
 raised = None
 result = "unset"
 try:
@@ -305,9 +287,6 @@ os.environ["APP_GOOGLE_TOKEN_KEY"] = saved_key
 ck("missing APP_GOOGLE_TOKEN_KEY with a row is a loud failure",
    raised == "RuntimeError" and result == "unset",
    f"raised={raised} result_is_none={result is None}")
-ck("missing key did not fall back to SA",
-   sa_hits["n"] == sa_before_hits and boxed_counter(COUNTER_SA) == before_sa,
-   f"sa_hits {sa_before_hits}→{sa_hits['n']}")
 google_connection.clear()
 
 if not all(ok):
@@ -325,12 +304,11 @@ if BASE.endswith(":8700"):
     sys.exit("REFUSING: :8700 is the live tenant.")
 
 HOME = pathlib.Path("/opt/testco/hermes")
-LIVE_ACCOUNTS = HOME / "state" / "jarvis_accounts.db"
-LIVE_THREADS = HOME / "state" / "jarvis_threads.db"
+LIVE_THREADS = pathlib.Path(HTTP_THREADS or HOME / "state" / "jarvis_threads.db")
 PINS_PATH = pathlib.Path("/opt/testco/SEEDED_PINS.json")
 SCR = pathlib.Path("/tmp/verify-creds-cutover")
 SCR.mkdir(parents=True, exist_ok=True)
-MAILBOX = "mailbox@testco.example.com"
+MAILBOX = (json.loads(IDN.read_text()).get("assistant_address") or "").strip()
 GENERIC = "That PIN is not right."
 
 
@@ -342,15 +320,17 @@ def pins():
 
 
 def passphrase():
-    for line in (HOME / ".env").read_text().splitlines():
-        if line.strip().startswith("APP_PASSPHRASE="):
-            return line.split("=", 1)[1].strip().strip('"').strip("'")
-    sys.exit("REFUSING: APP_PASSPHRASE missing (presence only; value not printed)")
+    value = os.environ.get("VERIFY_OPERATOR_PASSPHRASE")
+    if not value:
+        sys.exit("REFUSING: VERIFY_OPERATOR_PASSPHRASE is not set (value never printed)")
+    return value
 
 
 def curl(path, jar=None, method="GET", body=None):
     out = SCR / "body"
     hdr = SCR / "hdr"
+    out.unlink(missing_ok=True)
+    hdr.unlink(missing_ok=True)
     cmd = [
         "curl", "-s", "-D", str(hdr), "-o", str(out), "-w", "%{http_code}",
         "-X", method, "--max-redirs", "0",
@@ -397,12 +377,10 @@ def live_counter(name):
     return int(row[0]) if row else 0
 
 
-def sheets_source(health):
+def sheets_check(health):
     if not isinstance(health, dict):
-        return None
-    checks = health.get("checks") or {}
-    sheets = checks.get("sheets") or {}
-    return sheets.get("source")
+        return {}
+    return (health.get("checks") or {}).get("sheets") or {}
 
 
 def mock_connect_flow(jar, email, grant="full"):
@@ -422,7 +400,7 @@ def mock_connect_flow(jar, email, grant="full"):
     return code, cb, heads, loc
 
 
-print("\n── live :8710 mock resolution ─────────────────────────────")
+print(f"\n── HTTP {BASE} mock resolution ─────────────────────────────")
 PINS = pins()
 jar = str(SCR / "dana.jar")
 pathlib.Path(jar).unlink(missing_ok=True)
@@ -446,28 +424,32 @@ ck("status GET includes refreshed_at (field only, no secrets)",
    and status_body.get("status") == "connected",
    f"HTTP {code} keys={sorted(status_body) if isinstance(status_body, dict) else type(status_body).__name__}")
 
-c_tenant = live_counter(COUNTER_SA)
+c_tenant = live_counter(COUNTER_NC)
 code, health, _ = curl("/api/health", jar)
-src = sheets_source(health)
+src = sheets_check(health).get("source")
 ck("GET /api/health sheets source=tenant_connection while connected",
    src == "tenant_connection",
    f"HTTP {code} source={src}")
-ck("tenant health did not increment SA fallback counter",
-   live_counter(COUNTER_SA) == c_tenant,
-   f"{c_tenant}→{live_counter(COUNTER_SA)}")
+ck("tenant health did not increment the not-connected counter",
+   live_counter(COUNTER_NC) == c_tenant,
+   f"{c_tenant}→{live_counter(COUNTER_NC)}")
 
-c_before = live_counter(COUNTER_SA)
+c_before = live_counter(COUNTER_NC)
 code, d, _ = curl("/api/google/connection/disconnect", jar, "POST")
-ck("disconnect before SA-source health",
+ck("disconnect before not-connected health",
    code == 200 and isinstance(d, dict) and d.get("ok") is True,
    f"HTTP {code}")
 code, health, _ = curl("/api/health", jar)
-src = sheets_source(health)
-c_after = live_counter(COUNTER_SA)
-ck("GET /api/health sheets source=service_account after disconnect",
-   src == "service_account",
-   f"HTTP {code} source={src}")
-ck("SA fallback counter moved after disconnect health",
+sh = sheets_check(health)
+c_after = live_counter(COUNTER_NC)
+ck("GET /api/health sheets source=not_connected after disconnect",
+   sh.get("source") == "not_connected",
+   f"HTTP {code} source={sh.get('source')}")
+ck("disconnected health is fail with reconnect_required and the message",
+   sh.get("status") == "fail" and sh.get("reconnect_required") is True
+   and RECONNECT in (sh.get("detail") or ""),
+   f"status={sh.get('status')} detail={(sh.get('detail') or '')[:80]}")
+ck("not-connected counter moved after disconnect health",
    c_after >= c_before + 1,
    f"{c_before}→{c_after}")
 
@@ -490,10 +472,19 @@ ck("operator passphrase still person_key=null, role=operator",
    f"HTTP {code}")
 
 print("\n── rerun verify_google_connection.py ──────────────────────")
+rerun_env = dict(os.environ)
+if HTTP_THREADS:
+    rerun_env["JARVIS_THREADS_DB"] = HTTP_THREADS
+else:
+    rerun_env.pop("JARVIS_THREADS_DB", None)
+for k in ("HERMES_HOME", "JARVIS_ACCOUNTS_DB", "JARVIS_ACTIVITY_FEED",
+          "JARVIS_APP_ROOT", "JARVIS_CREDENTIALS_DIR", "APP_GOOGLE_TOKEN_KEY"):
+    rerun_env.pop(k, None)
+if os.environ.get("VERIFY_HTTP_ACCOUNTS_DB"):
+    rerun_env["JARVIS_ACCOUNTS_DB"] = os.environ["VERIFY_HTTP_ACCOUNTS_DB"]
 rerun = subprocess.run(
-    ["/root/jarvis-app/.venv/bin/python",
-     "/root/jarvis-app/docs/auth/verify_google_connection.py"],
-    capture_output=True, text=True,
+    [sys.executable, str(APP_ROOT / "docs" / "auth" / "verify_google_connection.py")],
+    capture_output=True, text=True, env=rerun_env,
 )
 sys.stdout.write(rerun.stdout)
 if rerun.stderr:
@@ -501,8 +492,9 @@ if rerun.stderr:
 tail = (rerun.stdout or "").strip().splitlines()[-1] if rerun.stdout else ""
 ck("verify_google_connection.py exited 0",
    rerun.returncode == 0, f"exit={rerun.returncode}")
-ck("verify_google_connection.py reports 36/36",
-   tail.strip() == "36/36 passed",
+m = re.fullmatch(r"(\d+)/(\d+) passed", tail.strip())
+ck("verify_google_connection.py reports N/N passed",
+   bool(m) and m.group(1) == m.group(2) and int(m.group(2)) > 0,
    tail.strip())
 
 print(f"\n{sum(ok)}/{len(ok)} passed")

@@ -163,6 +163,8 @@ def load() -> Dict[str, Any]:
 
     try:
         client = google_creds.gspread_client()
+    except google_creds.GoogleNotConnected as exc:
+        raise LeadsUnavailable(google_creds.RECONNECT_MESSAGE, exc.reason) from exc
     except Exception as exc:
         raise LeadsUnavailable(
             "Jarvis could not authenticate with Google.",

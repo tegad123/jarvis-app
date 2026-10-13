@@ -130,9 +130,9 @@ def check_feed() -> Dict[str, Any]:
 def check_sheets() -> Dict[str, Any]:
     """Validate the Google credential via google_creds, then check Sheets scope.
 
-    Same resolution path as skills: tenant connection if a cipher row exists,
-    otherwise the announced service-account fallback. Reports `source` as
-    tenant_connection | service_account. Never dumps tokens or cipher bytes.
+    Same resolution path as skills: the tenant connection, or a fail-closed
+    "reconnect Google" refusal. Reports `source` as tenant_connection |
+    not_connected. Never dumps tokens or cipher bytes.
 
     APP_GOOGLE_OAUTH_MOCK skips the Google token refresh and Sheets client
     build — mock tokens cannot authorise against Google, and this check must
@@ -147,15 +147,7 @@ def check_sheets() -> Dict[str, Any]:
                 "detail": f"google_creds unavailable: {type(exc).__name__}: {exc}"}
 
     try:
-        if hasattr(google_creds, "source"):
-            out["source"] = google_creds.source()
-        key_path = google_creds.sa_key_path()
-        out["credential"] = str(key_path) if key_path else "(no service-account key)"
-        out["mode"] = google_creds.mode()
-        try:
-            out["subject"] = google_creds.subject()
-        except Exception:
-            pass
+        out["source"] = google_creds.source()
     except Exception as exc:
         return {**out, "status": "fail",
                 "detail": f"credential not resolvable: {type(exc).__name__}: {exc}"}
@@ -167,6 +159,9 @@ def check_sheets() -> Dict[str, Any]:
 
     try:
         creds = google_creds.credentials()
+    except google_creds.GoogleNotConnected as exc:
+        return {**out, "status": "fail", "credential_valid": False,
+                "reconnect_required": True, "detail": str(exc)}
     except ImportError as exc:
         return {**out, "status": "unknown",
                 "detail": f"google auth libraries unavailable: {exc}"}
@@ -205,9 +200,8 @@ def check_sheets() -> Dict[str, Any]:
         out["detail"] = (
             "Google credential is valid but carries no Sheets/Drive scope "
             f"(granted: {', '.join(s.rsplit('/', 1)[-1] for s in scopes) or 'none'}). "
-            "Sheets-backed skills (crm, lead-reply) cannot read. Authorise the "
-            "spreadsheets scope for this service account in the Workspace admin "
-            "console's domain-wide delegation entry to clear this."
+            "Sheets-backed skills (crm, lead-reply) cannot read. Reconnect "
+            "Google from Settings and grant every requested permission."
         )
         return out
 

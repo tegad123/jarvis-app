@@ -27,8 +27,6 @@ SKILLS_ROOT = Path(
 ).expanduser()
 SHARED = SKILLS_ROOT / "_shared"
 
-GOOGLE_TOKEN_PATH = HERMES_HOME / "credentials" / "google_token.json"
-
 
 def _parse_env_file(path: Path) -> Dict[str, str]:
     """Minimal KEY=VALUE reader. Ignores blanks, comments and `export` prefixes."""
