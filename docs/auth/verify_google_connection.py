@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Slice 4 — tenant Google connection canaries.
 
-Default AUTH_BASE is testco (:8710). That tree is stale; it will not exercise
-this branch. Point AUTH_BASE at a sandbox of /root/jarvis-app (MOCK=1,
-isolated JARVIS_ACCOUNTS_DB, APP_PUBLIC_ORIGIN loopback) and override
-JARVIS_ACCOUNTS_DB to that sandbox file so ledger snaps are not testco.
+Default AUTH_BASE is the verify sandbox (:8711, docs/tasks/tasks_sandbox.sh:
+MOCK=1, throwaway token key, APP_PUBLIC_ORIGIN loopback). Override
+JARVIS_ACCOUNTS_DB to that sandbox's accounts.db so ledger snaps read the
+sandbox, not the pristine fixture.
 
 Presence: connect start dana 302 / omar 403 / operator 403 / logged-out 401;
 owner mock-connect row 0→1, status=connected, google_email set; status JSON
@@ -50,11 +50,11 @@ import sys
 import tempfile
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
-BASE = os.environ.get("AUTH_BASE", "http://127.0.0.1:8710").rstrip("/")
+BASE = os.environ.get("AUTH_BASE", "http://127.0.0.1:8711").rstrip("/")
 if BASE.endswith(":8700"):
     sys.exit("REFUSING: :8700 is the live tenant.")
 
-HOME = pathlib.Path("/opt/testco/hermes")
+HOME = pathlib.Path("/opt/jarvis-verify-fixture/hermes")
 ACCOUNTS = pathlib.Path(
     os.environ.get("JARVIS_ACCOUNTS_DB", str(HOME / "state" / "jarvis_accounts.db"))
 )
@@ -63,17 +63,18 @@ THREADS = pathlib.Path(
 )
 APP_ROOT = pathlib.Path(__file__).resolve().parents[2]
 APP_SRC = APP_ROOT / "app" / "google_oauth.py"
-SKILLS_ROOT = os.environ.get("JARVIS_SKILLS_ROOT", "/opt/testco/skills/openclaw-imports")
+SKILLS_ROOT = (os.environ.get("JARVIS_SKILLS_ROOT") or os.environ.get("VERIFY_SKILLS_ROOT")
+               or "/opt/jarvis-verify-fixture/skills/openclaw-imports")
 RECONNECT = "Reconnect Google from Settings"
 NOT_CONNECTED_LOG = "google_creds: refused, no tenant connection (reconnect Google)"
 COUNTER_NOT_CONNECTED = "google_creds_not_connected"
-PINS_PATH = pathlib.Path("/opt/testco/SEEDED_PINS.json")
+PINS_PATH = pathlib.Path("/opt/jarvis-verify-fixture/SEEDED_PINS.json")
 SCR = pathlib.Path("/tmp/verify-google-connection")
 SCR.mkdir(parents=True, exist_ok=True)
 GENERIC = "That PIN is not right."
 IDENTITY = pathlib.Path(os.environ.get(
     "JARVIS_IDENTITY_CONFIG",
-    "/opt/testco/skills/openclaw-imports/_shared/identity.json",
+    "/opt/jarvis-verify-fixture/skills/openclaw-imports/_shared/identity.json",
 ))
 MAILBOX = (json.loads(IDENTITY.read_text()).get("assistant_address") or "").strip()
 if not MAILBOX:

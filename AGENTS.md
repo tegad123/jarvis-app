@@ -8,24 +8,33 @@ emails and texts to real clients. Act accordingly.
 ## Topology — memorize before touching anything
 - LIVE app:    port 8700, runs from /root/jarvis-app. NEVER modify, restart,
   or test against live. It serves a real user.
-- TESTCO app:  port 8710, runs from /opt/testco/jarvis-app. All runtime
-  verification happens here.
-- TESTCO gateway: port 8652 (hermes agent framework,
-  /usr/local/lib/hermes-agent, branch scale-vault-local).
-- Both apps currently share the venv at /root/jarvis-app/.venv. A pip install
+- VERIFY SANDBOX: port 8711, `docs/tasks/tasks_sandbox.sh start`, runs the
+  code under test (VERIFY_APP_ROOT / VERIFY_SKILLS_ROOT) against the frozen
+  verify fixture at /opt/jarvis-verify-fixture (testco's .example config and
+  stores, throwaway secrets, mock Google OAuth, dead gateway port). All
+  runtime verification happens here.
+- REHEARSAL: app 8730, gateway 8672, /opt/rehearsal. Live posture with a real
+  mailbox and writes on. It is a tenant, NOT a test target: never point verify
+  scripts or sandboxes at its config or stores.
+- TESTCO (8710/8652, /opt/testco) was RETIRED 2026-10-13. Archive and rollback:
+  docs/platform/decisions.md. Scripts that needed it refuse with RETIRED.
+- Hermes gateways: /usr/local/lib/hermes-agent, branch scale-vault-local.
+- Live and rehearsal share the venv at /root/jarvis-app/.venv. A pip install
   affects BOTH. Do not install packages without flagging it first.
 
 ## Hard rules
 1. Work on a branch off main. Never commit directly to main.
 2. Never use git add -A. Stage specific files you changed and can name.
-3. Never touch: /root/.hermes/ (secrets), /opt/testco/hermes/ (runtime state:
-   auth, credentials, kanban.db, caches), any .env or .env.bak file,
-   /root/.claude/, systemd units, cloudflared tunnels.
+3. Never touch: /root/.hermes/ (secrets), /opt/rehearsal/hermes/ (runtime
+   state: auth, credentials, kanban.db, caches), any .env or .env.bak file,
+   /root/.claude/, systemd units, cloudflared tunnels. The verify fixture is
+   read-only to scripts: sandboxes copy from it, nothing writes into it.
 4. Never print, log, or quote the contents of env files or anything matching
    sk-ant-*. If you need to know whether a variable exists, test for its
    presence, never its value.
-5. Never restart jarvis-app.service. testco-app and testco-gateway may be
-   restarted when verification requires it.
+5. Never restart jarvis-app.service. Restarting rehearsal-app or
+   rehearsal-gateway needs an explicit human yes (it is a live-posture tenant).
+   The verify sandbox may be started and stopped freely.
 6. No new dependencies, schema migrations, or send-path changes without an
    explicit human yes in the conversation.
 7. After any commit, merge, or branch operation, run `git log --oneline -1`
@@ -64,22 +73,20 @@ emails and texts to real clients. Act accordingly.
   were both hidden this way.
 
 ## Definition of done
-A change is done when, on testco (8710):
+A change is done when, in the verify sandbox (8711, fixture-backed):
 1. The relevant verify script(s) under docs/ pass — run them, paste output.
 2. PROMPT 1-6 regression checks are green.
-3. You have shown the before/after ledger delta for anything that writes.
+3. You have shown the before/after ledger delta for anything that writes
+   (the sandbox's box files, never the fixture).
 Not done: "the code looks right", "tests should pass", a passing build alone.
+The exact commands are in .cursor/skills/verify-jarvis/SKILL.md.
 
-## Current known state (2026-08-30)
-- /opt/testco/jarvis-app is STALE relative to main. It **has** per-user auth
-  (dana PIN login on :8710 verified 2026-08-30; source:
-  `docs/testco-baseline/BASELINE-REPORT.md`). It **lacks** the Tasks tab/API,
-  channel members, operator-role frontend, and later design passes. Branch
-  testco documents that snapshot. Reconciling it up to main is a planned,
-  human-supervised task — do not "helpfully" sync it.
-- `JARVIS_ALLOW_WRITES=1` on the running testco units is **deliberate**:
-  writes are enabled behind the `.example` recipient boundary so action
-  claims are testable. A verify assertion expecting `0` is stale, not a
-  misconfiguration (`docs/testco-baseline/BASELINE-REPORT.md`).
-- External tester (Bao) is actively testing against testco. Do not change
-  testco's running build without human approval.
+## Current known state (2026-10-13)
+- testco is retired: units, tunnel hostnames (app/gateway/hooks.yamin.io) and
+  /opt/testco are gone. Its baseline branch is on GitHub as
+  archive/testco-baseline (48346d2). The full tree is in a root-only tarball
+  until 2026-11-12 (docs/platform/decisions.md).
+- The verify sandbox runs with `JARVIS_ALLOW_WRITES=1` deliberately: writes are
+  enabled behind the `.example` recipient boundary so action claims are
+  testable inside the sandbox.
+- No external tester is active.

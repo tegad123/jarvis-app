@@ -22,7 +22,7 @@ is reported as SKIPPED, never as a pass, because "we did not check" and "it
 works" must never look the same in this output.
 
 Usage:
-  python3 docs/tasks/verify_tasks_chat.py [--base http://127.0.0.1:8710] [--stub]
+  python3 docs/tasks/verify_tasks_chat.py [--base http://127.0.0.1:8711] [--stub]
 """
 
 import argparse
@@ -36,8 +36,8 @@ import sys
 import time
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--base", default=os.environ.get("TASKS_BASE", "http://127.0.0.1:8710"))
-ap.add_argument("--pins", default="/opt/testco/SEEDED_PINS.json")
+ap.add_argument("--base", default=os.environ.get("TASKS_BASE", "http://127.0.0.1:8711"))
+ap.add_argument("--pins", default="/opt/jarvis-verify-fixture/SEEDED_PINS.json")
 ap.add_argument("--stub", action="store_true", help="skip the real model round trip")
 ap.add_argument("--timeout", type=int, default=300)
 args = ap.parse_args()
@@ -64,7 +64,7 @@ def skip(name, why):
 
 # ── (a) the real Ask round trip ──────────────────────────────────────────────
 print("── (a) THE REAL ASK ROUND TRIP (live gateway, real model) ─────")
-LIVE_TASKS = pathlib.Path("/opt/testco/hermes/state/jarvis_tasks.db")
+LIVE_TASKS = pathlib.Path("/opt/jarvis-verify-fixture/hermes/state/jarvis_tasks.db")
 # Unique per run so the skill cannot DUPLICATE-SKIP against seeded titles
 # (e.g. the Aug-26 Alderwood task). The street string is the matcher; it
 # lives in the Ask text. A hex run token in the message made the model
@@ -180,9 +180,12 @@ def legacy_count():
     for db in LEGACY_DBS:
         if not db.exists():
             continue
-        conn = sqlite3.connect(str(db))
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
         try:
-            total += conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+            # generate_digest.py's sqlite connect leaves an empty, table-less file
+            # behind; nothing has been written to it, so it holds zero legacy rows.
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE name='tasks'").fetchone():
+                total += conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
         finally:
             conn.close()
     return total

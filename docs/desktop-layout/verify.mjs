@@ -5,7 +5,7 @@ import { PNG } from 'pngjs'
 const BASE = process.argv[2]
 const OUT = new URL('./shots/', import.meta.url).pathname
 mkdirSync(OUT, { recursive: true })
-const pins = JSON.parse(readFileSync('/opt/testco/SEEDED_PINS.json','utf8'))
+const pins = JSON.parse(readFileSync('/opt/jarvis-verify-fixture/SEEDED_PINS.json','utf8'))
 const ok=[]; const ck=(n,c,x='')=>{console.log(`  ${c?'PASS':'FAIL'}  ${n}${x?' — '+x:''}`);ok.push(c)}
 const b=await chromium.launch({headless:true})
 

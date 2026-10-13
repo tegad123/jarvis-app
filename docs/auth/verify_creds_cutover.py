@@ -9,7 +9,7 @@ Boxed (scratch DB, fake cipher, no HTTP, no Google):
   - fake refresh invalid_grant → needs_reauth, counter 0→1, feed line, caller exception
   - missing APP_GOOGLE_TOKEN_KEY with a row → loud RuntimeError
 
-HTTP AUTH_BASE (default :8710; mock tokens, no real Google):
+HTTP AUTH_BASE (default :8711, the verify sandbox; mock tokens, no real Google):
   - mock-connect → /api/health sheets source=tenant_connection
   - disconnect → source=not_connected, reconnect_required, counter moved
   - rerun verify_google_connection.py from this checkout; exit 0 and N/N
@@ -38,9 +38,10 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 BOX = pathlib.Path(tempfile.mkdtemp(prefix="creds-cutover-"))
 APP_ROOT = pathlib.Path(__file__).resolve().parents[2]
-SKILLS_ROOT = os.environ.get("JARVIS_SKILLS_ROOT", "/opt/testco/skills/openclaw-imports")
+SKILLS_ROOT = (os.environ.get("JARVIS_SKILLS_ROOT") or os.environ.get("VERIFY_SKILLS_ROOT")
+               or "/opt/jarvis-verify-fixture/skills/openclaw-imports")
 IDN = pathlib.Path(os.environ.get(
-    "JARVIS_IDENTITY_CONFIG", f"{SKILLS_ROOT}/_shared/identity.json"))
+    "JARVIS_IDENTITY_CONFIG", "/opt/jarvis-verify-fixture/skills/openclaw-imports/_shared/identity.json"))
 SKILLS_SHARED = pathlib.Path(SKILLS_ROOT) / "_shared"
 FORBIDDEN = (pathlib.Path("/root/.hermes"), pathlib.Path("/root/jarvis-app/data"))
 LIVE_SKILLS_CREDS = pathlib.Path(
@@ -290,22 +291,22 @@ ck("missing APP_GOOGLE_TOKEN_KEY with a row is a loud failure",
 google_connection.clear()
 
 if not all(ok):
-    print(f"\nboxed {sum(ok)}/{len(ok)} passed — stopping before :8710")
+    print(f"\nboxed {sum(ok)}/{len(ok)} passed — stopping before :8711")
     sys.exit(1)
 
 print(f"\nboxed {sum(ok)}/{len(ok)} passed")
 
 # ---------------------------------------------------------------------------
-# LIVE :8710 — mock connection only, no real Google
+# SANDBOX :8711 — mock connection only, no real Google
 # ---------------------------------------------------------------------------
 
-BASE = os.environ.get("AUTH_BASE", "http://127.0.0.1:8710").rstrip("/")
+BASE = os.environ.get("AUTH_BASE", "http://127.0.0.1:8711").rstrip("/")
 if BASE.endswith(":8700"):
     sys.exit("REFUSING: :8700 is the live tenant.")
 
-HOME = pathlib.Path("/opt/testco/hermes")
+HOME = pathlib.Path("/opt/jarvis-verify-fixture/hermes")
 LIVE_THREADS = pathlib.Path(HTTP_THREADS or HOME / "state" / "jarvis_threads.db")
-PINS_PATH = pathlib.Path("/opt/testco/SEEDED_PINS.json")
+PINS_PATH = pathlib.Path("/opt/jarvis-verify-fixture/SEEDED_PINS.json")
 SCR = pathlib.Path("/tmp/verify-creds-cutover")
 SCR.mkdir(parents=True, exist_ok=True)
 MAILBOX = (json.loads(IDN.read_text()).get("assistant_address") or "").strip()

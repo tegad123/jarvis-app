@@ -9,7 +9,7 @@ alwaysApply: true
 
 - Read `AGENTS.md` and `docs/SPEC.md` before any change. Only work on the phase named in the request. Check `docs/platform/GAP-ANALYSIS.md` for what already exists before writing a new module.
 - Platform work happens on the `platform` branch in its own worktree. Never check out, switch, stash, or reset inside `/root/jarvis-app`; the live app runs from it.
-- Never touch the live app (port 8700): no edits, restarts, or requests. Verify on testco per `AGENTS.md`.
+- Never touch the live app (port 8700): no edits, restarts, or requests. Verify in the fixture-backed sandbox on 8711 per `AGENTS.md` (testco is retired; rehearsal is a tenant, not a test target).
 - Keep these intact: `/api/health`, `/api/health/summary`, `gated_send` at the send layer, the `.example` outbound boundary (`_shared/outbound_boundary.py`), and `write_guard` (`JARVIS_ALLOW_WRITES`).
 - Add new code in the new folders from Phase 0. Don't move or rename existing files unless the phase says to.
 - Every write action must carry `source_kind` and `source_id`. Never execute an action from model memory alone.

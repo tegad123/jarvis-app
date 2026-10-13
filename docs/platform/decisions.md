@@ -14,6 +14,44 @@ These resolve the five architecture forks below. Each is recorded as the human s
 
 Where the spec contradicted decisions 2 and 5, notes were added in place in `docs/SPEC.md` (Section 6 header, Phase 0 storage note, Phase 11, Section 15). The sections were not rewritten.
 
+## Decided 2026-10-13: testco retired
+
+**Decision (human):** Bao no longer tests on testco, so retire it instead of patching it. Approved: stop and disable its services and tunnel, archive `/opt/testco` to a root-only tarball kept 30 days, remove the world-readable token drop-in, repoint the skills repo's origin to GitHub, move the verify sandboxes off testco, and update `AGENTS.md`, `.cursor/rules/jarvis.mdc` and the `verify-jarvis` skill.
+
+**Why:** testco's `oauth.conf` drop-in was mode 644 and `systemctl show` exposed its `APP_GOOGLE_TOKEN_KEY` to any local user (shown as `nobody` before removal). Testco had 0 `google_connection` rows, so no Google grant was exposed and nothing needed revoking. The pending non-root tenant work would have made that a real cross-tenant path.
+
+**Live did not depend on it:** live's app (8700) and gateway (8642) had no `/opt/testco` references in their environments and no testco files open, no live unit referred to it, no symlink pointed into it, and nothing was connected to 8710/8652. Live's pids were unchanged through the retirement. Not checked: the git remote of live's skills checkout under `/root/.hermes` (off-limits).
+
+**What was done:**
+
+- Pushed testco's local branch `testco` (`48346d2`, the 2026-08-30 baseline snapshot, which existed nowhere else) to GitHub as `archive/testco-baseline` after a canaried secret scan (2 commits, 351 blobs, 0 hits).
+- Killed the four ad-hoc quick tunnels to 8710 (started 2026-08-25). Stopped and disabled `testco-app`, `testco-gateway` and the five timers.
+- Removed the `app`, `gateway` and `hooks.yamin.io` ingress rules from `/etc/cloudflared/config.yml` and restarted `cloudflared-yamin` (rehearsal was down about 1 s). Those hostnames now hit the 404 catch-all. **Their DNS records still exist in Cloudflare; deleting them is a dashboard step for a human.**
+- Archived `/opt/testco` (7820 entries), all 12 unit files and the drop-in, and the old tunnel config to `/root/archives/testco-retired-2026-10-13.tar.gz` (root, 600, directory 700), sha256 `746cebb96a6e388e2744273c4455de8513ba2e5f02a9595f11d2314ce8ddeb45`. Then deleted the units, the drop-in and `/opt/testco`.
+- The skills bare repo `/root/git/openclaw-imports.git` had `origin` = `/opt/testco/skills/openclaw-imports`. Its `github` remote was renamed to `origin` (`github-skills:tegad123/jarvis-skills.git`). Every testco skills commit was already in the bare repo.
+
+**Purge:** delete the tarball and its `.sha256` on or after **2026-11-12**. Manual; no timer was added.
+
+**Rollback (until the purge):** `tar -C / -xzpf /root/archives/testco-retired-2026-10-13.tar.gz`, then copy `/root/archives/cloudflared-config.yml.pre-testco-retire` back to `/etc/cloudflared/config.yml`, `systemctl daemon-reload`, enable and start the testco units, and restart `cloudflared-yamin`.
+
+**Verify sandboxes moved to a frozen fixture, not to rehearsal.** The request was to repoint them at rehearsal. Rehearsal runs live posture (`POSTURE="live"`, real `.com` identity, no `.example` recipients, `JARVIS_ALLOW_WRITES=1`), so copying its config into a sandbox would test with a real identity and writes on. Instead, before archiving, testco's config and stores were frozen into `/opt/jarvis-verify-fixture` (root, 700) in testco's layout, with:
+
+- a regenerated `hermes/.env`: same variable names and operator labels, every secret replaced with a random value, `HERMES_API_URL` set to the dead port `127.0.0.1:9`;
+- the `runtime.json` paths rewritten to the fixture, and `gateway.base_url` changed from `127.0.0.1:8642`. **8642 is live's gateway.** testco's config named it and only testco's `.env` override kept traffic away.
+
+`docs/tasks/env.py` and `docs/tasks/tasks_sandbox.sh` read it through `VERIFY_FIXTURE_ROOT`. The sandbox runs mock Google OAuth with a per-start Fernet key and its own copy of the fixture's `hermes` directory, so nothing writes into the fixture. Scripts that needed a running testco now exit with `RETIRED`.
+
+**Found while moving the gate:**
+
+- **The old PROMPT 2 and 6 runs exercised testco's stale app, not the tree under test.** Skills resolve the app only through `runtime.json` `paths.app_root`, which named `/opt/testco/jarvis-app`. The harness now writes a box `runtime.json` whose `app_root` is the code under test.
+- **The auth suites took their skills code from a stray shell export** rather than from the harness. They now honour `VERIFY_SKILLS_ROOT`.
+- **`task-manager/scripts/generate_digest.py` (the digest-reply path) creates an empty `task-manager/data/tasks.db` inside whichever skills tree runs it.** That empty file crashed `verify_tasks_chat.py`'s legacy guard on the next run. The guard now counts a table-less file as 0 rows; a canary shows it still counts real rows. The skill-side write itself is still open.
+
+- **The fixture holds one real address.** testco's `accounts` row for `dana` has a real (non-`.example`) mailbox address as its `email`, not the identity's `dana@testco.example.com`; it was set on testco, probably for a real Google login test. Because of it, `verify_auth_google.py` (mock login as the `.example` address gets 401) and `verify_email_column.py` fail. `verify_email_column.py` also asserts a pre-migration schema with no `email` column. Both would fail the same way on testco. Left as found; correcting the fixture needs a human yes.
+- **Some suites wrote straight into testco's state by design.** `verify_fullbody_fixture.py` appended to its approvals queue and `verify_showingsmart.py` used its outbox and skills data, so on the first run they wrote into the fixture. Those five files were restored from the archive. The scripts now use the sandbox's hermes copy or a scratch home. The fixture is `chattr +i` (its databases switched to `journal_mode=DELETE`, contents proven identical), so any future write fails loudly. **To delete or modify it, run `chattr -R -i /opt/jarvis-verify-fixture` first.**
+
+Gate on the fixture, 2026-10-13, `platform`: `verify_google_connection` 72/72, `verify_creds_cutover` 42/42, PROMPT 1 65/65, 2 20/20 (1 skipped), 3 32/32, 3b 39/39, 4 119/119, 5 69/69 (9 skipped), 6 62/62.
+
 ## Decided (from the spec, recorded 2026-10-10)
 
 - Customer #1: 34 Dev team.
@@ -82,4 +120,4 @@ Today: live (34 Dev) runs from `/root/jarvis-app` with `HERMES_HOME=/root/.herme
 - **A. Re-provision live as `/opt/34dev`** with `scripts/provision_tenant.py`, then cut over (tokens, stores, Gmail watch, DNS or tunnel). One layout for every tenant; live gets the loadout completeness guard and verify suites. Costs: a supervised cutover with downtime risk on the only paying tenant; requires touching `/root/.hermes`, systemd, and the tunnel, all human-only per `AGENTS.md`.
 - **B. Leave Spencer where he is; onboard Eddie, Blake, and Martin on the platform first** (spec Phase 11 order). No risk to live. Costs: two layouts and two skills trees to maintain, and team features cannot span Spencer and the others until he moves.
 - **C. Freeze live, build the platform, migrate once at the end.** Least churn on live. Costs: live drifts further from `main` and the cutover gets larger.
-- Precondition for any option: sync testco to `main` (human-supervised, per `AGENTS.md`).
+- Precondition for any option: sync testco to `main` (human-supervised, per `AGENTS.md`). *(Obsolete 2026-10-13: testco was retired; verification uses the fixture-backed sandbox. See "Decided 2026-10-13: testco retired".)*

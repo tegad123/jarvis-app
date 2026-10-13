@@ -5,7 +5,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { PNG } from 'pngjs'
 const [OLD, NEW] = [process.argv[2], process.argv[3]]
 const OUT = new URL('./shots/', import.meta.url).pathname
-const pins = JSON.parse(readFileSync('/opt/testco/SEEDED_PINS.json','utf8'))
+const pins = JSON.parse(readFileSync('/opt/jarvis-verify-fixture/SEEDED_PINS.json','utf8'))
 const ok=[]; const ck=(n,c,x='')=>{console.log(`  ${c?'PASS':'FAIL'}  ${n}${x?' — '+x:''}`);ok.push(c)}
 const b=await chromium.launch()
 async function shoot(base, tag){

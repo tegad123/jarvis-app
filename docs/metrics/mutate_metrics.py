@@ -23,7 +23,7 @@ import tempfile
 from pathlib import Path
 
 APP = Path("/root/jarvis-app")
-SK = Path("/opt/testco/skills/openclaw-imports")
+SK = Path("/opt/jarvis-verify-fixture/skills/openclaw-imports")
 PYBIN = str(APP / ".venv" / "bin" / "python")
 SUITE = APP / "docs" / "metrics" / "verify_metrics.py"
 

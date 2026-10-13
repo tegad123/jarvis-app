@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import sys; sys.exit("RETIRED 2026-10-13: testco is retired (docs/platform/decisions.md); this script needs its running services or tree.")  # noqa: E702
 """TESTCO as a standing service — isolation asserted from OUTSIDE the process.
 
 Reads what the RUNNING services actually opened (/proc/<pid>/environ and the

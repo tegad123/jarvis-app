@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """
-GET /api/operator/outbox — regression suite against testco (:8710).
+GET /api/operator/outbox — regression suite against the verify sandbox (:8711).
   roles      owner / admin / member → 403, no session → 401, operator → 200
   limit      default 20; 1 and 200 accepted; 0, 201, -1, 'x', 1.5 → 400
   fidelity   rows equal the last N lines of outbox/captured_mail.jsonl projected to
              (ts, to, cc, subject, body), in file order; count == len(rows)
 """
-import argparse, json, pathlib, subprocess, sys
-ap = argparse.ArgumentParser(); ap.add_argument("--base", default="http://127.0.0.1:8710"); ap.add_argument("-v", "--verbose", action="store_true")
+import argparse, json, os, pathlib, subprocess, sys
+ap = argparse.ArgumentParser(); ap.add_argument("--base", default="http://127.0.0.1:8711"); ap.add_argument("-v", "--verbose", action="store_true")
 args = ap.parse_args(); BASE = args.base.rstrip("/")
 if BASE.endswith(":8700"): sys.exit("REFUSING: :8700 is the live tenant.")
-HOME = pathlib.Path("/opt/testco/hermes"); OUTBOX = HOME / "outbox" / "captured_mail.jsonl"
+HOME = pathlib.Path(os.environ.get("VERIFY_SANDBOX_HERMES", "/tmp/claude-0/-root/tasks-sandbox/hermes")); OUTBOX = HOME / "outbox" / "captured_mail.jsonl"
+if not OUTBOX.is_file(): sys.exit(f"REFUSING: no sandbox outbox at {OUTBOX} (run docs/tasks/tasks_sandbox.sh start)")
 SCR = pathlib.Path("/tmp/claude-0/-root/5856f8be-0b4c-4374-9aeb-3d70bf132d08/scratchpad/outbox"); SCR.mkdir(parents=True, exist_ok=True)
-PINS = json.loads(pathlib.Path("/opt/testco/SEEDED_PINS.json").read_text())
+PINS = json.loads(pathlib.Path("/opt/jarvis-verify-fixture/SEEDED_PINS.json").read_text())
 ok = []
 def ck(name, cond, extra=""):
     ok.append(bool(cond)); print(f"  {'PASS' if cond else 'FAIL'}  {name}" + (f" — {extra}" if (extra and (not cond or args.verbose)) else ""))

@@ -29,7 +29,7 @@ ap.add_argument("--tasks-db", default=os.environ.get(
     "TASKS_DB", "/tmp/claude-0/-root/tasks-sandbox/tasks.db"))
 ap.add_argument("--feed", default=os.environ.get(
     "TASKS_FEED", "/tmp/claude-0/-root/tasks-sandbox/feed.jsonl"))
-ap.add_argument("--pins", default="/opt/testco/SEEDED_PINS.json")
+ap.add_argument("--pins", default="/opt/jarvis-verify-fixture/SEEDED_PINS.json")
 ap.add_argument("-v", "--verbose", action="store_true")
 args = ap.parse_args()
 
@@ -44,9 +44,9 @@ if BASE.endswith(":8700"):
     sys.exit("REFUSING: :8700 is the live tenant. Point this at the sandbox or testco.")
 
 sys.path.insert(0, os.path.join(os.environ.get("VERIFY_SKILLS_ROOT")
-                                or "/opt/testco/skills/openclaw-imports", "_shared"))
+                                or "/opt/jarvis-verify-fixture/skills/openclaw-imports", "_shared"))
 os.environ.setdefault("JARVIS_IDENTITY_CONFIG",
-                      "/opt/testco/skills/openclaw-imports/_shared/identity.json")
+                      "/opt/jarvis-verify-fixture/skills/openclaw-imports/_shared/identity.json")
 import identity  # noqa: E402
 
 PINS = json.loads(pathlib.Path(args.pins).read_text())

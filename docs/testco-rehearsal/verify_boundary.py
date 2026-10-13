@@ -8,6 +8,7 @@ at any other tenant. Does not talk to :8700. Does not restart units.
     python3 docs/testco-rehearsal/verify_boundary.py --manifest docs/tenants/clientzero.yaml
 """
 from __future__ import annotations
+import sys; sys.exit("RETIRED 2026-10-13: testco is retired (docs/platform/decisions.md); this script needs its running services or tree.")  # noqa: E702
 
 import argparse
 import contextlib

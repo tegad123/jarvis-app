@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Slice 3 — staff Google login canaries against testco (:8710) only.
+"""Slice 3 — staff Google login canaries against the verify sandbox (:8711) only.
 
 Presence: start redirects + state cookie; forged state 401/400 no session;
 replay rejected; mock login as dana@testco.example.com is dana/owner;
@@ -18,13 +18,13 @@ import subprocess
 import sys
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
-BASE = os.environ.get("AUTH_BASE", "http://127.0.0.1:8710").rstrip("/")
+BASE = os.environ.get("AUTH_BASE", "http://127.0.0.1:8711").rstrip("/")
 if BASE.endswith(":8700"):
     sys.exit("REFUSING: :8700 is the live tenant.")
 
-HOME = pathlib.Path("/opt/testco/hermes")
+HOME = pathlib.Path("/opt/jarvis-verify-fixture/hermes")
 ACCOUNTS = HOME / "state" / "jarvis_accounts.db"
-PINS_PATH = pathlib.Path("/opt/testco/SEEDED_PINS.json")
+PINS_PATH = pathlib.Path("/opt/jarvis-verify-fixture/SEEDED_PINS.json")
 SCR = pathlib.Path("/tmp/verify-auth-google")
 SCR.mkdir(parents=True, exist_ok=True)
 GENERIC = "That PIN is not right."
@@ -180,9 +180,9 @@ ck("start sets a signed state cookie",
 os.environ.setdefault("HERMES_HOME", str(HOME))
 os.environ.setdefault("JARVIS_ACCOUNTS_DB", str(ACCOUNTS))
 os.environ.setdefault("JARVIS_SKILLS_ROOT",
-                      "/opt/testco/skills/openclaw-imports")
+                      "/opt/jarvis-verify-fixture/skills/openclaw-imports")
 os.environ.setdefault("JARVIS_IDENTITY_CONFIG",
-                      "/opt/testco/skills/openclaw-imports/_shared/identity.json")
+                      "/opt/jarvis-verify-fixture/skills/openclaw-imports/_shared/identity.json")
 sys.path.insert(0, "/root/jarvis-app")
 from app import google_oauth, config as app_config  # noqa: E402
 
@@ -279,9 +279,9 @@ print("\n── presence: disabled-dana mock login 401, then re-enable ─")
 os.environ.setdefault("HERMES_HOME", str(HOME))
 os.environ.setdefault("JARVIS_ACCOUNTS_DB", str(ACCOUNTS))
 os.environ.setdefault("JARVIS_SKILLS_ROOT",
-                      "/opt/testco/skills/openclaw-imports")
+                      "/opt/jarvis-verify-fixture/skills/openclaw-imports")
 os.environ.setdefault("JARVIS_IDENTITY_CONFIG",
-                      "/opt/testco/skills/openclaw-imports/_shared/identity.json")
+                      "/opt/jarvis-verify-fixture/skills/openclaw-imports/_shared/identity.json")
 sys.path.insert(0, "/root/jarvis-app")
 from app import accounts  # noqa: E402
 

@@ -8,9 +8,11 @@ because isolating the database is not isolating the side effects — the task
 store emits feed events, and a harness that redirects only the DB writes its
 fake tasks into the customer's real feed.
 
-Pointed at TESTCO's config, not the live tenant's: tasks are an app-native
-feature and 34dev is sheet-backed, so a harness aimed there would exercise the
-legacy branch and pass by testing nothing.
+Pointed at the verify fixture (testco's config and stores, frozen when testco
+was retired), not the live tenant's: tasks are an app-native feature and 34dev
+is sheet-backed, so a harness aimed there would exercise the legacy branch and
+pass by testing nothing. Not rehearsal either: it runs live posture with a
+real mailbox and writes on, and the fixture's recipients are all .example.
 """
 
 import os
@@ -18,9 +20,12 @@ import sys
 from pathlib import Path
 
 BOX = Path(os.environ.get("TASKS_BOX", "/tmp/claude-0/-root/tasks-box"))
-TESTCO_HOME = Path("/opt/testco/hermes")
-TESTCO_SKILLS = Path("/opt/testco/skills/openclaw-imports")
-# Code under test. Config (runtime.json, identity.json) always stays testco's.
+FIXTURE = Path(os.environ.get("VERIFY_FIXTURE_ROOT", "/opt/jarvis-verify-fixture"))
+if not (FIXTURE / "skills" / "openclaw-imports" / "_shared" / "identity.json").is_file():
+    sys.exit(f"REFUSING: verify fixture missing at {FIXTURE} (set VERIFY_FIXTURE_ROOT)")
+TESTCO_HOME = FIXTURE / "hermes"
+TESTCO_SKILLS = FIXTURE / "skills" / "openclaw-imports"
+# Code under test. Config (runtime.json, identity.json) always stays the fixture's.
 APP = Path(os.environ.get("VERIFY_APP_ROOT") or Path(__file__).resolve().parents[2])
 SKILLS_CODE = Path(os.environ.get("VERIFY_SKILLS_ROOT") or TESTCO_SKILLS)
 
@@ -29,13 +34,27 @@ FORBIDDEN = (Path("/root/.hermes/state"), TESTCO_HOME / "state",
              SKILLS_CODE / "task-manager" / "data")
 
 
+def boxed_runtime(box: Path) -> Path:
+    """The fixture's runtime.json with paths.app_root = the code under test.
+
+    Skills resolve the app only through paths.app_root, so without this the
+    skill path imports whatever app tree the fixture config names, not APP.
+    """
+    import json
+    cfg = json.loads((TESTCO_SKILLS / "_shared" / "runtime.json").read_text())
+    cfg.setdefault("paths", {})["app_root"] = str(APP)
+    out = box / "runtime.json"
+    out.write_text(json.dumps(cfg, indent=2) + "\n")
+    return out
+
+
 def apply() -> None:
     BOX.mkdir(parents=True, exist_ok=True)
     os.environ.update({
         "HERMES_HOME": str(TESTCO_HOME),
         "JARVIS_SKILLS_ROOT": str(SKILLS_CODE),
         "JARVIS_APP_ROOT": str(APP),
-        "JARVIS_RUNTIME_CONFIG": str(TESTCO_SKILLS / "_shared" / "runtime.json"),
+        "JARVIS_RUNTIME_CONFIG": str(boxed_runtime(BOX)),
         "JARVIS_IDENTITY_CONFIG": str(TESTCO_SKILLS / "_shared" / "identity.json"),
         "JARVIS_TASKS_DB": str(BOX / "tasks.db"),
         "JARVIS_THREADS_DB": str(BOX / "threads.db"),

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import sys; sys.exit("RETIRED 2026-10-13: testco is retired (docs/platform/decisions.md); this script needs its running services or tree.")  # noqa: E702
 """Companion mutate for slice 4. Corrupt the stored cipher, then prove the
 read path fails LOUDLY (raised error + counter), not as silent None.
 

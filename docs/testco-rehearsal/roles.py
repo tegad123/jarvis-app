@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import sys; sys.exit("RETIRED 2026-10-13: testco is retired (docs/platform/decisions.md); this script needs its running services or tree.")  # noqa: E702
 """A4.4 — each testco account sees only what its role and membership allow."""
 import json, pathlib, subprocess, sys
 B = "http://127.0.0.1:8710"

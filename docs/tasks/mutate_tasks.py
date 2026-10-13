@@ -29,7 +29,7 @@ import tempfile
 from pathlib import Path
 
 APP = Path("/root/jarvis-app")
-SKILLS = Path("/opt/testco/skills/openclaw-imports")
+SKILLS = Path("/opt/jarvis-verify-fixture/skills/openclaw-imports")
 DOCS = APP / "docs" / "tasks"
 # The app venv: chat.py imports httpx, which the system interpreter lacks.
 PYBIN = str(APP / ".venv" / "bin" / "python")

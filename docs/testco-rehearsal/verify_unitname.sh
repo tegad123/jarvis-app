@@ -1,4 +1,5 @@
 #!/bin/bash
+echo "RETIRED 2026-10-13: testco is retired (docs/platform/decisions.md); this script needs its running services or tree." >&2; exit 2
 # Triggered assert for the unit-name fix in hermes_cli/gateway.py.
 #
 # Two THROWAWAY homes, so neither the live tenant nor testco is disturbed —

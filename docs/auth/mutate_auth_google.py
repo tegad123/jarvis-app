@@ -4,7 +4,7 @@
 Remap dana's accounts.email; mock Google login as dana@testco.example.com MUST
 fail; PIN login MUST still pass; restore the address after.
 
-Against http://127.0.0.1:8710 only. Never :8700.
+Against http://127.0.0.1:8711 only. Never :8700.
 """
 import json
 import os
@@ -13,13 +13,13 @@ import subprocess
 import sys
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
-BASE = os.environ.get("AUTH_BASE", "http://127.0.0.1:8710").rstrip("/")
+BASE = os.environ.get("AUTH_BASE", "http://127.0.0.1:8711").rstrip("/")
 if BASE.endswith(":8700"):
     sys.exit("REFUSING: :8700 is the live tenant.")
 
-HOME = pathlib.Path("/opt/testco/hermes")
+HOME = pathlib.Path("/opt/jarvis-verify-fixture/hermes")
 ACCOUNTS = HOME / "state" / "jarvis_accounts.db"
-PINS_PATH = pathlib.Path("/opt/testco/SEEDED_PINS.json")
+PINS_PATH = pathlib.Path("/opt/jarvis-verify-fixture/SEEDED_PINS.json")
 SCR = pathlib.Path("/tmp/mutate-auth-google")
 SCR.mkdir(parents=True, exist_ok=True)
 GENERIC = "That PIN is not right."
@@ -106,9 +106,9 @@ def mock_google(email, jar):
 os.environ.setdefault("HERMES_HOME", str(HOME))
 os.environ.setdefault("JARVIS_ACCOUNTS_DB", str(ACCOUNTS))
 os.environ.setdefault("JARVIS_SKILLS_ROOT",
-                      "/opt/testco/skills/openclaw-imports")
+                      "/opt/jarvis-verify-fixture/skills/openclaw-imports")
 os.environ.setdefault("JARVIS_IDENTITY_CONFIG",
-                      "/opt/testco/skills/openclaw-imports/_shared/identity.json")
+                      "/opt/jarvis-verify-fixture/skills/openclaw-imports/_shared/identity.json")
 sys.path.insert(0, "/root/jarvis-app")
 from app import accounts  # noqa: E402
 

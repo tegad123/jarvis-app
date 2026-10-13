@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import sys; sys.exit("RETIRED 2026-10-13: testco is retired (docs/platform/decisions.md); this script needs its running services or tree.")  # noqa: E702
 """Named operator credential (bao): logs in as role operator with attribution, works on the three
 operator surfaces, journals as operator:bao, and is REJECTED on the live tenant (:8700)."""
 import json, pathlib, subprocess, sys, re

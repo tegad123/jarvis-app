@@ -1,5 +1,7 @@
 #!/bin/bash
-# Stand up an ISOLATED jarvis-app, pointed at TESTCO's config, for the tasks suites.
+# Stand up an ISOLATED jarvis-app, pointed at the verify fixture (testco's
+# frozen config, /opt/jarvis-verify-fixture), for the tasks, auth and metrics
+# suites. Google OAuth is mocked and the token key is a throwaway made per start.
 #
 # WHY THIS EXISTS. The mutation harness removes permission guards on purpose.
 # Every negative probe ("a member must NOT be able to archive this") then
@@ -19,9 +21,11 @@ set -euo pipefail
 
 SB="${TASKS_SANDBOX:-/tmp/claude-0/-root/tasks-sandbox}"
 PORT="${TASKS_PORT:-8711}"
-TESTCO_HOME=/opt/testco/hermes
-TESTCO_SKILLS=/opt/testco/skills/openclaw-imports
-# Code under test; config stays testco's.
+FIXTURE="${VERIFY_FIXTURE_ROOT:-/opt/jarvis-verify-fixture}"
+TESTCO_HOME="$FIXTURE/hermes"
+TESTCO_SKILLS="$FIXTURE/skills/openclaw-imports"
+[ -f "$TESTCO_SKILLS/_shared/identity.json" ] || { echo "REFUSING: verify fixture missing at $FIXTURE"; exit 1; }
+# Code under test; config stays the fixture's.
 APP="${VERIFY_APP_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 SKILLS_CODE="${VERIFY_SKILLS_ROOT:-$TESTCO_SKILLS}"
 PYTHON="${VERIFY_PYTHON:-/root/jarvis-app/.venv/bin/python}"
@@ -29,6 +33,9 @@ PYTHON="${VERIFY_PYTHON:-/root/jarvis-app/.venv/bin/python}"
 case "${1:-}" in
 start)
   rm -rf "$SB"; mkdir -p "$SB"
+  # The app derives approvals, outbox and inject journals from HERMES_HOME, so
+  # it gets a private copy: nothing the sandbox does can land in the fixture.
+  cp -a "$TESTCO_HOME" "$SB/hermes"
 
   # sqlite3 .backup, not cp: WAL means the -wal file holds committed pages the
   # main file does not, and a plain copy can land mid-checkpoint.
@@ -37,7 +44,7 @@ start)
     if [ -f "$SRC" ]; then
       python3 -c "
 import sqlite3, sys
-src = sqlite3.connect(sys.argv[1]); dst = sqlite3.connect(sys.argv[2])
+src = sqlite3.connect('file:' + sys.argv[1] + '?mode=ro', uri=True); dst = sqlite3.connect(sys.argv[2])
 src.backup(dst); dst.close(); src.close()
 " "$SRC" "$SB/${db}.db"
     fi
@@ -48,11 +55,25 @@ src.backup(dst); dst.close(); src.close()
 
   LIVE_FEED_BEFORE=$(grep -c . "$TESTCO_HOME/state/activity_feed.jsonl" 2>/dev/null || echo 0)
 
+  (umask 077; "$PYTHON" -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" > "$SB/token_key")
+  # Skills find the app only through paths.app_root; aim it at the code under test.
+  python3 -c "
+import json, sys
+cfg = json.load(open(sys.argv[1])); cfg.setdefault('paths', {})['app_root'] = sys.argv[2]
+open(sys.argv[3], 'w').write(json.dumps(cfg, indent=2) + '\n')
+" "$TESTCO_SKILLS/_shared/runtime.json" "$APP" "$SB/runtime.json"
+  # Env wins over the fixture's .env, so a caller-supplied passphrase is the one the app checks.
+  if [ -n "${VERIFY_OPERATOR_PASSPHRASE:-}" ]; then export APP_PASSPHRASE="$VERIFY_OPERATOR_PASSPHRASE"; fi
+
   cd "$APP"
-  HERMES_HOME="$TESTCO_HOME" \
+  APP_GOOGLE_OAUTH_MOCK=1 \
+  APP_GOOGLE_TOKEN_KEY="$(cat "$SB/token_key")" \
+  APP_PUBLIC_ORIGIN="http://127.0.0.1:$PORT" \
+  APP_COOKIE_SECURE=0 \
+  HERMES_HOME="$SB/hermes" \
   JARVIS_SKILLS_ROOT="$SKILLS_CODE" \
   JARVIS_APP_ROOT="$APP" \
-  JARVIS_RUNTIME_CONFIG="$TESTCO_SKILLS/_shared/runtime.json" \
+  JARVIS_RUNTIME_CONFIG="$SB/runtime.json" \
   JARVIS_IDENTITY_CONFIG="$TESTCO_SKILLS/_shared/identity.json" \
   JARVIS_TASKS_DB="$SB/tasks.db" \
   JARVIS_THREADS_DB="$SB/threads.db" \

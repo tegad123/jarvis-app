@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import sys; sys.exit("RETIRED 2026-10-13: testco is retired (docs/platform/decisions.md); this script needs its running services or tree.")  # noqa: E702
 """Seed the TESTCO CLONE with a realistic synthetic workload for the tester.
 
 WHAT "REAL EMIT PATHS" MEANS HERE, AND THE ONE PLACE IT BENDS

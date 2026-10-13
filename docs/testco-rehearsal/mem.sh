@@ -1,4 +1,5 @@
 #!/bin/bash
+echo "RETIRED 2026-10-13: testco is retired (docs/platform/decisions.md); this script needs its running services or tree." >&2; exit 2
 printf "%-7s %8s  %-7s %s\n" PID RSS_MB TENANT PROCESS
 ps -eo pid=,rss=,args= | grep -E "[h]ermes_cli.main gateway|[p]ython -m app.main|[c]loudflared" | while read -r pid rss rest; do
   hh=$(tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep '^HERMES_HOME=' | cut -d= -f2-)

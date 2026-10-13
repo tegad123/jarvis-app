@@ -3,10 +3,14 @@
 then the same regenerated request on testco's real queue renders and executes through the API."""
 import json, os, pathlib, shutil, subprocess, sys, uuid
 BOX = pathlib.Path("/tmp/claude-0/-root/5856f8be-0b4c-4374-9aeb-3d70bf132d08/scratchpad/fullbody-box"); shutil.rmtree(BOX, ignore_errors=True); (BOX/"state").mkdir(parents=True)
-SK="/opt/testco/skills/openclaw-imports"
-os.environ.update({"HERMES_HOME":str(BOX),"JARVIS_SKILLS_ROOT":SK,"JARVIS_RUNTIME_CONFIG":f"{SK}/_shared/runtime.json","JARVIS_IDENTITY_CONFIG":f"{SK}/_shared/identity.json",
+CFG="/opt/jarvis-verify-fixture/skills/openclaw-imports"   # config: the frozen fixture (read-only)
+SK=os.environ.get("VERIFY_SKILLS_ROOT") or CFG              # code under test
+APP=os.environ.get("VERIFY_APP_ROOT") or str(pathlib.Path(__file__).resolve().parents[2])
+# The API half queues into the running sandbox's private hermes, the queue its app reads.
+SANDBOX_HERMES=pathlib.Path(os.environ.get("VERIFY_SANDBOX_HERMES", "/tmp/claude-0/-root/tasks-sandbox/hermes"))
+os.environ.update({"HERMES_HOME":str(BOX),"JARVIS_SKILLS_ROOT":SK,"JARVIS_RUNTIME_CONFIG":f"{CFG}/_shared/runtime.json","JARVIS_IDENTITY_CONFIG":f"{CFG}/_shared/identity.json",
   "JARVIS_APPROVALS":str(BOX/"state/approvals.jsonl"),"JARVIS_APPROVAL_DECISIONS":str(BOX/"state/approvals_decisions.jsonl"),"JARVIS_ACTIVITY_FEED":str(BOX/"state/feed.jsonl"),"JARVIS_ALLOW_WRITES":"1"})
-sys.path.insert(0,"/root/jarvis-app"); from app import approvals
+sys.path.insert(0,APP); from app import approvals
 ok=[]; ck=lambda n,c,x="": (ok.append(bool(c)), print(f"  {'PASS' if c else 'FAIL'}  {n}"+(f" — {x}" if x and not c else "")))
 lines=lambda p: [json.loads(l) for l in pathlib.Path(p).read_text().splitlines() if l.strip()] if pathlib.Path(p).exists() else []
 print("=== boxed: seed → approve ===")
@@ -19,10 +23,11 @@ ck("approve → captured (boundary; wmchenry@example.com is inside .example.com)
 cap=lines(BOX/"outbox/captured_mail.jsonl")
 ck("captured mail body is the WHOLE message", cap and cap[-1]["body"]==pl["body"] and "second walk-" in cap[-1]["body"], (cap[-1]["body"][-60:] if cap else ""))
 print("=== testco: regenerated request on the real queue, via the API ===")
-HOME=pathlib.Path("/opt/testco/hermes"); rid=f"apr_regen_{uuid.uuid4().hex[:8]}"
+HOME=SANDBOX_HERMES; rid=f"apr_regen_{uuid.uuid4().hex[:8]}"
+if not (HOME/"state").is_dir(): sys.exit(f"REFUSING: no sandbox hermes at {HOME} (run docs/tasks/tasks_sandbox.sh start)")
 req={"id":rid,"ts":approvals._iso_now(),"tenant":"testco","status":"pending","skill":"owner-email","summary":"Send a follow-up to William Mchenry about 609 25th St","payload":pl,"kind":"action"}
 with open(HOME/"state/approvals.jsonl","a") as fh: fh.write(json.dumps(req, ensure_ascii=False)+"\n")
-PINS=json.loads(pathlib.Path("/opt/testco/SEEDED_PINS.json").read_text()); jar=str(BOX/"dana.jar"); BASE="http://127.0.0.1:8710"
+PINS=json.loads(pathlib.Path("/opt/jarvis-verify-fixture/SEEDED_PINS.json").read_text()); jar=str(BOX/"dana.jar"); BASE="http://127.0.0.1:8711"
 def call(path,method="GET",body=None):
     o=BOX/"b.json"; cmd=["curl","-s","-o",str(o),"-w","%{http_code}","-X",method,BASE+path,"-b",jar,"-c",jar]
     if body is not None: cmd+=["-H","Content-Type: application/json","-d",json.dumps(body)]

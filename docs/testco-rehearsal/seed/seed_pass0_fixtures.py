@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import sys; sys.exit("RETIRED 2026-10-13: testco is retired (docs/platform/decisions.md); this script needs its running services or tree.")  # noqa: E702
 """Pass-0 fixtures — the states a claim-verification pass has to be able to see.
 
 Each fixture exists so a specific claim can be FALSIFIED. A tester cannot check

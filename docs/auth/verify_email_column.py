@@ -15,8 +15,8 @@ import tempfile
 from pathlib import Path
 
 BOX = Path(tempfile.mkdtemp(prefix="auth-email-col-"))
-SRC = Path("/opt/testco/hermes/state/jarvis_accounts.db")
-IDN = Path("/opt/testco/skills/openclaw-imports/_shared/identity.json")
+SRC = Path("/opt/jarvis-verify-fixture/hermes/state/jarvis_accounts.db")
+IDN = Path("/opt/jarvis-verify-fixture/skills/openclaw-imports/_shared/identity.json")
 FORBIDDEN = (Path("/root/.hermes"), Path("/root/jarvis-app/data"))
 
 
@@ -36,7 +36,7 @@ snap_accounts(DB)
 os.environ["JARVIS_ACCOUNTS_DB"] = str(DB)
 os.environ["HERMES_HOME"] = str(BOX / "hermes")
 (BOX / "hermes" / "state").mkdir(parents=True)
-os.environ["JARVIS_SKILLS_ROOT"] = "/opt/testco/skills/openclaw-imports"
+os.environ["JARVIS_SKILLS_ROOT"] = "/opt/jarvis-verify-fixture/skills/openclaw-imports"
 os.environ["JARVIS_IDENTITY_CONFIG"] = str(IDN)
 sys.path.insert(0, "/root/jarvis-app")
 
@@ -65,7 +65,7 @@ def indexes(path):
 print("── isolation ────────────────────────────────────────────────")
 print(f"  box={BOX}")
 ck("seeded source is testco, not live",
-   "/opt/testco/hermes/state" in str(SRC) and "/root/.hermes" not in str(SRC))
+   "/opt/jarvis-verify-fixture/hermes/state" in str(SRC) and "/root/.hermes" not in str(SRC))
 before_cols = pragma_cols(DB)
 ck("copied schema has no email column yet", "email" not in before_cols,
    str(before_cols))
@@ -189,7 +189,7 @@ print("\n── PIN login still works (boxed, no HTTP) ────────�
 # Restore identity so dana's pin check is against the real registry.
 identity.CONFIG_PATH = IDN
 identity.load(force=True)
-pins = json.loads(Path("/opt/testco/SEEDED_PINS.json").read_text())
+pins = json.loads(Path("/opt/jarvis-verify-fixture/SEEDED_PINS.json").read_text())
 if isinstance(next(iter(pins.values())), dict):
     pins = {k: v.get("pin") for k, v in pins.items()}
 acct = accounts.verify("dana", pins["dana"])

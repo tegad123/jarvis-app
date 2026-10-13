@@ -1,4 +1,5 @@
 #!/bin/bash
+echo "RETIRED 2026-10-13: testco is retired (docs/platform/decisions.md); this script needs its running services or tree." >&2; exit 2
 # Boot the TESTCO CLONE's app on its own port. Never touches the live service.
 set -euo pipefail
 SP=/tmp/claude-0/-root/84fc1bc9-4f40-4eb5-bd70-60f6beaacf1a/scratchpad

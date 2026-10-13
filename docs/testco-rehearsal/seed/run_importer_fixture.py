@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import sys; sys.exit("RETIRED 2026-10-13: testco is retired (docs/platform/decisions.md); this script needs its running services or tree.")  # noqa: E702
 """Run the REAL W1 importer against the lead-sheet COPY fixture.
 
 WHAT IS AND IS NOT STUBBED. Exactly one thing is replaced: the gspread

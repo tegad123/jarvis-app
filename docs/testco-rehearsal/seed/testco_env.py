@@ -1,3 +1,4 @@
+import sys; sys.exit("RETIRED 2026-10-13: testco is retired (docs/platform/decisions.md); this script needs its running services or tree.")  # noqa: E702
 """Point this process at the TESTCO CLONE and nothing else.
 
 THE ISOLATION PATTERN FROM W3, APPLIED BEFORE ANY IMPORT. Every module in the

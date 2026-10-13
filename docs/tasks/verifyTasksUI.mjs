@@ -7,7 +7,7 @@
  * that looks like nobody wrote one, is a screen that lies about the backend
  * even though the backend is right.
  *
- * Run:  node docs/tasks/verifyTasksUI.mjs --base http://127.0.0.1:8710
+ * Run:  node docs/tasks/verifyTasksUI.mjs --base http://127.0.0.1:8711
  */
 import { chromium } from '/usr/local/lib/hermes-agent/node_modules/playwright/index.mjs'
 import { readFileSync, mkdirSync } from 'node:fs'
@@ -16,14 +16,14 @@ const arg = (n, d) => {
   const i = process.argv.indexOf(n)
   return i > -1 ? process.argv[i + 1] : d
 }
-const BASE = arg('--base', 'http://127.0.0.1:8710')
-const PINS = JSON.parse(readFileSync(arg('--pins', '/opt/testco/SEEDED_PINS.json'), 'utf8'))
+const BASE = arg('--base', 'http://127.0.0.1:8711')
+const PINS = JSON.parse(readFileSync(arg('--pins', '/opt/jarvis-verify-fixture/SEEDED_PINS.json'), 'utf8'))
 const pinOf = (who) => (typeof PINS[who] === 'object' ? PINS[who].pin : PINS[who])
 const SHOTS = new URL('./vis/', import.meta.url).pathname
 mkdirSync(SHOTS, { recursive: true })
 
 function passphrase() {
-  for (const l of readFileSync('/opt/testco/hermes/.env', 'utf8').split('\n')) {
+  for (const l of readFileSync('/opt/jarvis-verify-fixture/hermes/.env', 'utf8').split('\n')) {
     const m = /^\s*(?:export\s+)?APP_PASSPHRASE=(.*)$/.exec(l)
     if (m) return m[1].trim().replace(/^["']|["']$/g, '')
   }

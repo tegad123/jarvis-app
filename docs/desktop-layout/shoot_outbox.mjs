@@ -1,7 +1,7 @@
 import { chromium } from 'playwright'
 import { readFileSync } from 'node:fs'
 const BASE=process.argv[2]; const OUT=new URL('./shots/', import.meta.url).pathname
-const pass=()=>{for(const l of readFileSync('/opt/testco/hermes/.env','utf8').split('\n')){const m=/^\s*APP_PASSPHRASE=(.*)$/.exec(l); if(m)return m[1].trim().replace(/^["']|["']$/g,'')}}
+const pass=()=>{for(const l of readFileSync('/opt/jarvis-verify-fixture/hermes/.env','utf8').split('\n')){const m=/^\s*APP_PASSPHRASE=(.*)$/.exec(l); if(m)return m[1].trim().replace(/^["']|["']$/g,'')}}
 const b=await chromium.launch(); const p=await b.newPage({viewport:{width:1440,height:900}})
 await p.goto(BASE,{waitUntil:'networkidle'}); await p.evaluate(()=>localStorage.clear()); await p.reload({waitUntil:'networkidle'})
 await p.getByRole('button',{name:'Operator access'}).click(); await p.getByPlaceholder('Operator passphrase').fill(pass()); await p.keyboard.press('Enter')

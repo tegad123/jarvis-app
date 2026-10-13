@@ -5,7 +5,7 @@ import { readFileSync, mkdirSync } from 'node:fs'
 const BASE = process.argv[2], TAG = process.argv[3] || 'now'
 const OUT = new URL('./shots/', import.meta.url).pathname
 mkdirSync(OUT, { recursive: true })
-const pins = JSON.parse(readFileSync('/opt/testco/SEEDED_PINS.json','utf8'))
+const pins = JSON.parse(readFileSync('/opt/jarvis-verify-fixture/SEEDED_PINS.json','utf8'))
 const b = await chromium.launch({ headless: true })
 for (const [W,H] of [[390,844],[1440,900]]) {
   const ctx = await b.newContext({ viewport:{width:W,height:H}, deviceScaleFactor:1, colorScheme:'light' })

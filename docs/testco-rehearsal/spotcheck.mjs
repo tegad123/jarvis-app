@@ -1,3 +1,4 @@
+console.error("RETIRED 2026-10-13: testco is retired (docs/platform/decisions.md); this script needs its running services or tree."); process.exit(2)
 import { chromium } from 'playwright'
 import { readFileSync, mkdirSync } from 'node:fs'
 const INV = JSON.parse(readFileSync('/opt/testco/fixtures/PASS0_INVENTORY.json','utf8'))

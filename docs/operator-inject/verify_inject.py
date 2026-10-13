@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import sys; sys.exit("RETIRED 2026-10-13: testco is retired (docs/platform/decisions.md); this script needs its running services or tree.")  # noqa: E702
 """
 Operator fixture injection — regression suite. Runs against testco (:8710),
 because the affordance under test IS testco's: the fixtures, the boundary, the

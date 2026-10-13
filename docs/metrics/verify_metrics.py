@@ -10,7 +10,7 @@ value when a row can be read instead.
 
 Runs inside the docs/tasks/env.py box: every store, the feed and sweeps.db
 live under BOX; the live tenant and testco's real state are never touched.
-The role check hits the running testco app on :8710.
+The role check hits the verify sandbox (docs/tasks/tasks_sandbox.sh) on :8711.
 
 Run:  /root/jarvis-app/.venv/bin/python docs/metrics/verify_metrics.py [-v] [--no-live]
 """
@@ -31,7 +31,7 @@ import env  # noqa: E402
 
 env.apply()
 os.environ["HERMES_HOME"] = str(env.BOX)          # sweeps.db and the outbox live under the home
-os.environ["JARVIS_SHEET_FIXTURE"] = "/opt/testco/fixtures/sheet_fixture.json"
+os.environ["JARVIS_SHEET_FIXTURE"] = "/opt/jarvis-verify-fixture/fixtures/sheet_fixture.json"
 BOX = env.BOX
 for name in ("tasks.db", "threads.db", "leads.db", "feed.jsonl", "approvals.jsonl"):
     (BOX / name).unlink(missing_ok=True)
@@ -42,8 +42,8 @@ VERBOSE = "-v" in sys.argv
 LIVE = "--no-live" not in sys.argv
 PYBIN = "/root/jarvis-app/.venv/bin/python"
 SK = env.SKILLS_CODE
-FIXTURES = pathlib.Path("/opt/testco/fixtures")
-BASE = os.environ.get("VERIFY_BASE", "http://127.0.0.1:8710").rstrip("/")
+FIXTURES = pathlib.Path("/opt/jarvis-verify-fixture/fixtures")
+BASE = os.environ.get("VERIFY_BASE", "http://127.0.0.1:8711").rstrip("/")
 if BASE.endswith(":8700"):
     sys.exit("REFUSING: :8700 is the live tenant.")
 
@@ -144,7 +144,7 @@ from email import policy
 from email import message_from_binary_file
 scratch = pathlib.Path(tempfile.mkdtemp(prefix="metrics-ss-"))
 rt = scratch / "runtime.json"; idn = scratch / "identity.json"
-shutil.copy(SK / "_shared" / "runtime.json", rt); shutil.copy(SK / "_shared" / "identity.json", idn)
+shutil.copy(os.environ["JARVIS_RUNTIME_CONFIG"], rt); shutil.copy(env.TESTCO_SKILLS / "_shared" / "identity.json", idn)
 cfg = json.loads(rt.read_text()); cfg["skills"].setdefault("showingsmart-autoreply", {})["standing_authorization"] = True
 rt.write_text(json.dumps(cfg))
 ss_env = dict(os.environ, JARVIS_RUNTIME_CONFIG=str(rt), JARVIS_IDENTITY_CONFIG=str(idn))
@@ -357,7 +357,7 @@ ck("gate in-process: owner 200 · admin 200 · operator 200 · member 403",
     (("owner", "dana"), ("admin", "priya"), ("operator", None), ("member", "omar"))] == [200, 200, 200, 403])
 
 if LIVE:
-    PINS = json.loads(pathlib.Path("/opt/testco/SEEDED_PINS.json").read_text())
+    PINS = json.loads(pathlib.Path("/opt/jarvis-verify-fixture/SEEDED_PINS.json").read_text())
     if isinstance(next(iter(PINS.values())), dict):
         PINS = {k: v.get("pin") for k, v in PINS.items()}
     passphrase = os.environ.get("VERIFY_OPERATOR_PASSPHRASE", "")
