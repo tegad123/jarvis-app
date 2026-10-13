@@ -52,6 +52,21 @@ Where the spec contradicted decisions 2 and 5, notes were added in place in `doc
 
 Gate on the fixture, 2026-10-13, `platform`: `verify_google_connection` 72/72, `verify_creds_cutover` 42/42, PROMPT 1 65/65, 2 20/20 (1 skipped), 3 32/32, 3b 39/39, 4 119/119, 5 69/69 (9 skipped), 6 62/62.
 
+## Decided 2026-10-13: rehearsal credential sequence; the Google broker is next after isolation
+
+**Decision (human):** move rehearsal's skills to the fail-closed `google_creds` so agent-side Google skills give the clear "reconnect Google" refusal instead of a service-account fallback warning. Record the app-side Google broker as **the next build item after the two-user isolation**, not a someday item.
+
+Order on rehearsal (each step needs its own restart yes):
+
+1. **Re-pin code.** Skills `f026b75` → `431525f` and app `c717614` → `10ffbce`, **together**. Rehearsal's app `health.py` calls `google_creds.sa_key_path()`, `mode()` and `subject()`, which `431525f` removes. Re-pinning the skills alone would turn the Sheets health check red with an `AttributeError`; `10ffbce` is the app commit that stops calling them. Rehearsal's uncommitted `app/google_oauth.py` edit is byte-identical to `ecda61c`, so nothing is lost. Rehearsal has a stored connection (1 row with a cipher), so the app's own Google use does not change.
+2. **Two-user isolation** (app `jarvis-rehearsal`, agent `jarvis-rehearsal-agent`). The agent then has no Google token access, as today: the gateway never had `APP_GOOGLE_TOKEN_KEY`.
+3. **App-side Google broker: the next build item.** This is fork 3 option A. The app keeps `APP_GOOGLE_TOKEN_KEY` and the connection; it exposes scoped Gmail, Calendar and Sheets operations to the tenant's gateway over loopback, authenticated per tenant. The agent-side importers (`email-router`, `gmail-push-trigger`, `meeting-briefing`, `task-manager`) call the broker instead of `google_creds.credentials()`.
+   - Acceptance: on rehearsal, those skills work through the broker. As the agent user, opening the accounts database, the token key, the OAuth client, and the app's `/proc/<pid>/environ` still fails (the isolation proof stays green). The Phase 3 check "the runtime never sees the OAuth token" passes.
+   - It is a send-path change and may add a dependency, so its design and build each need an explicit human yes (`AGENTS.md` rule 6). Sending through the broker stays behind `gated_send`.
+   - Until it ships, agent-side Google skills on rehearsal refuse. This is a known, announced gap, not a fallback.
+
+**Found while planning:** with an unreadable connection store, `431525f` `google_creds` logs `connection row read failed` but then refuses with `no stored connection` ("reconnect Google"). On an isolated agent, that sentence is false: the tenant is connected, and the agent cannot read the connection. Proposed fix, with step 1: the refusal says the connection is not readable from this process and the broker is not built yet, and it uses a separate counter.
+
 ## Decided (from the spec, recorded 2026-10-10)
 
 - Customer #1: 34 Dev team.
@@ -99,6 +114,8 @@ Today: per-tenant SQLite under `$HERMES_HOME/state/` plus JSONL files; backups b
 - **B. Keep per-tenant SQLite.** Isolation stays physical (one file set per tenant), existing verify suites keep working, no new server. Costs: the Section 6 tables (`policies`, `actions`, `events`, `usage`) become per-tenant schema migrations; anything org-wide (owner admin view across users, billing) needs a small separate store or aggregation job.
 
 ### Fork 3: Credential boundary — app-hosted tools, or in-process `google_creds` — **RESOLVED 2026-10-13 (first step): remove the SA-key and plaintext fallbacks first, decision 3; end state assumed per spec 9.6, needs human confirmation**
+
+**Sequenced 2026-10-13:** option A (the app-side broker) is the next build item after rehearsal's two-user isolation; see "rehearsal credential sequence" above. The fallbacks this section mentions were removed in skills `ccae204`/`431525f`.
 
 Today: skills in the gateway and timers import `app.google_connection` through `origin:_shared/google_creds.py` and decrypt tokens in their own process; a plaintext `google_token.json` fallback remains.
 
