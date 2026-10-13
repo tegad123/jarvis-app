@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Slice 4 — tenant Google connection canaries against testco (:8710) only.
+"""Slice 4 — tenant Google connection canaries.
+
+Default AUTH_BASE is testco (:8710). That tree is stale; it will not exercise
+this branch. Point AUTH_BASE at a sandbox of /root/jarvis-app (MOCK=1,
+isolated JARVIS_ACCOUNTS_DB, APP_PUBLIC_ORIGIN loopback) and override
+JARVIS_ACCOUNTS_DB to that sandbox file so ledger snaps are not testco.
 
 Presence: connect start dana 302 / omar 403 / operator 403 / logged-out 401;
 owner mock-connect row 0→1, status=connected, google_email set; status JSON
@@ -7,6 +12,12 @@ has no token-ish keys and no base64 blobs; 4-of-5 grant leaves row count 0
 with a visible rejection; disconnect 1→0; connect callback replay rejected;
 callback without staff cookie stores nothing; /api/health has no refresh token
 after connect.
+
+Class: connect never reads email from an id_token. The mock token JSON has
+no id_token/email; the address comes from Gmail users.getProfile emailAddress.
+The owner connect plants the tenant identity's assistant_address; a profile
+with any other address is refused reason=mismatch, writes 0 rows, and the
+refusal log line (VERIFY_APP_LOG, the app's log file) carries no token.
 
 Absence: dana PIN 200; wrong PIN 401 same message; operator person_key=null;
 GET /api/people has no emails.
@@ -27,12 +38,25 @@ if BASE.endswith(":8700"):
     sys.exit("REFUSING: :8700 is the live tenant.")
 
 HOME = pathlib.Path("/opt/testco/hermes")
-ACCOUNTS = HOME / "state" / "jarvis_accounts.db"
+ACCOUNTS = pathlib.Path(
+    os.environ.get("JARVIS_ACCOUNTS_DB", str(HOME / "state" / "jarvis_accounts.db"))
+)
+APP_SRC = pathlib.Path(__file__).resolve().parents[2] / "app" / "google_oauth.py"
 PINS_PATH = pathlib.Path("/opt/testco/SEEDED_PINS.json")
 SCR = pathlib.Path("/tmp/verify-google-connection")
 SCR.mkdir(parents=True, exist_ok=True)
 GENERIC = "That PIN is not right."
-MAILBOX = "mailbox@testco.example.com"
+IDENTITY = pathlib.Path(os.environ.get(
+    "JARVIS_IDENTITY_CONFIG",
+    "/opt/testco/skills/openclaw-imports/_shared/identity.json",
+))
+MAILBOX = (json.loads(IDENTITY.read_text()).get("assistant_address") or "").strip()
+if not MAILBOX:
+    sys.exit(f"REFUSING: {IDENTITY} has no assistant_address")
+WRONG_MAILBOX = "mailbox@testco.example.com"
+if WRONG_MAILBOX.lower() == MAILBOX.lower():
+    sys.exit("REFUSING: mismatch fixture equals the tenant assistant_address")
+APP_LOG = os.environ.get("VERIFY_APP_LOG")
 PARTIAL_MSG = "all five permissions are required"
 SIGNIN_AGAIN = "sign in again then connect"
 TOKENISH = ("token", "refresh", "client_secret", "cipher")
@@ -60,7 +84,7 @@ def passphrase():
     sys.exit("REFUSING: APP_PASSPHRASE missing (presence only; value not printed)")
 
 
-def curl(path, jar=None, method="GET", body=None, headers_path=None):
+def curl(path, jar=None, method="GET", body=None, headers_path=None, form=None):
     out = SCR / "body"
     hdr = headers_path or (SCR / "hdr")
     cmd = [
@@ -71,7 +95,11 @@ def curl(path, jar=None, method="GET", body=None, headers_path=None):
     cmd.append(url)
     if jar:
         cmd += ["-b", jar, "-c", jar]
-    if body is not None:
+    if form is not None:
+        cmd += ["-H", "Content-Type: application/x-www-form-urlencoded"]
+        for k, v in form.items():
+            cmd += ["--data-urlencode", f"{k}={v}"]
+    elif body is not None:
         cmd += ["-H", "Content-Type: application/json", "-d", json.dumps(body)]
     code = subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
     text = out.read_text() if out.exists() else ""
@@ -175,6 +203,17 @@ def jar_without_session(src, dst):
     pathlib.Path(dst).write_text("\n".join(out) + ("\n" if out else ""))
 
 
+def fn_body(name):
+    """Source of one top-level def in app/google_oauth.py. No import of app."""
+    text = APP_SRC.read_text()
+    needle = f"def {name}("
+    start = text.find(needle)
+    if start < 0:
+        return ""
+    nxt = text.find("\ndef ", start + len(needle))
+    return text[start:nxt] if nxt >= 0 else text[start:]
+
+
 def mock_connect_flow(jar, email, grant="full"):
     code, _, heads = curl("/api/google/connect/start", jar)
     loc = location(heads)
@@ -224,6 +263,27 @@ def absence(label):
     return PINS, jar_pin, jar_op
 
 
+print("\n── class: connect email is Gmail profile, not id_token ──")
+ex = fn_body("_exchange_google_connect")
+ck("connect exchange does not read email from an id_token",
+   ".id_token" not in ex
+   and "verify_oauth2_token" not in ex
+   and "_gmail_profile_email" in ex)
+ck("Gmail profile parser uses emailAddress (users.getProfile shape)",
+   "emailAddress" in fn_body("_gmail_profile_email"))
+cb = fn_body("_callback_connect")
+ck("connect callback uses the same exchange for mock and real",
+   "_exchange_google_connect" in cb and "_exchange_mock" not in cb)
+authz_src = fn_body("mock_authorize")
+ck("connect mock authorize plants Gmail profile emailAddress, not an id_token",
+   "_mock_gmail_profiles" in authz_src
+   and "emailAddress" in authz_src
+   and ".id_token" not in authz_src)
+tok_fn = fn_body("mock_token_response")
+ck("mock_token_response never emits an id_token field",
+   '["id_token"]' not in tok_fn and '"id_token":' not in tok_fn and "'id_token':" not in tok_fn)
+
+
 PINS, jar_pin, jar_op = absence("PIN and operator still exist")
 
 print("\n── ledger: google_connection table ──────────────────────")
@@ -265,6 +325,29 @@ code, d, _ = curl("/api/google/connect/start")
 ck("connect start logged-out is 401",
    code == 401, f"HTTP {code}")
 
+print("\n── class: mock token JSON has no id_token; profile still works ──")
+jar_tok = str(SCR / "token-canary.jar")
+pathlib.Path(jar_tok).unlink(missing_ok=True)
+code, _, _ = curl("/api/login", jar_tok, "POST",
+                  {"person_key": "dana", "pin": PINS["dana"]})
+code, cb, _, _, _ = mock_connect_flow(jar_tok, MAILBOX, grant="full")
+ck("token-canary mock authorize redirects to callback",
+   code == 302 and cb and "/oauth/callback" in cb, f"HTTP {code}")
+auth_code = (parse_qs(urlparse(cb).query).get("code") or [""])[0]
+code, tok, _ = curl(
+    "/api/auth/google/mock/token", jar_tok, "POST", form={"code": auth_code},
+)
+ck("POST mock/token on a connect grant is 200 JSON",
+   code == 200 and isinstance(tok, dict), f"HTTP {code}")
+ck("connect mock token response has no id_token",
+   isinstance(tok, dict) and "id_token" not in tok,
+   f"keys={sorted(tok) if isinstance(tok, dict) else type(tok).__name__}")
+ck("connect mock token response has no email (real Google omits it)",
+   isinstance(tok, dict) and "email" not in tok,
+   f"keys={sorted(tok) if isinstance(tok, dict) else type(tok).__name__}")
+ck("connect mock token still returns access_token for users.getProfile",
+   isinstance(tok, dict) and bool(tok.get("access_token")))
+
 print("\n── presence: partial 4-of-5 grant writes nothing ────────")
 _, n_before_partial, _ = snap_connection()
 jar_partial = str(SCR / "partial.jar")
@@ -302,6 +385,46 @@ _, n_after_ns, _ = snap_connection()
 ck("no-staff-cookie callback did not write a row",
    n_before_ns == n_after_ns == 0,
    f"{n_before_ns}→{n_after_ns}")
+
+print("\n── presence: wrong mailbox is refused (mismatch) ────────")
+log_path = pathlib.Path(APP_LOG) if APP_LOG else None
+log_start = log_path.stat().st_size if log_path and log_path.exists() else 0
+_, n_before_mm, _ = snap_connection()
+jar_mm = str(SCR / "mismatch.jar")
+pathlib.Path(jar_mm).unlink(missing_ok=True)
+code, _, _ = curl("/api/login", jar_mm, "POST",
+                  {"person_key": "dana", "pin": PINS["dana"]})
+code, cb_mm, _, _, _ = mock_connect_flow(jar_mm, WRONG_MAILBOX, grant="full")
+ck("mismatch mock authorize redirects to callback",
+   code == 302 and cb_mm and "/oauth/callback" in cb_mm, f"HTTP {code}")
+code, body, _ = curl(cb_mm, jar_mm) if cb_mm else (0, "", "")
+body_s = body if isinstance(body, str) else json.dumps(body)
+ck("mismatch callback is 403 naming both addresses",
+   code == 403 and WRONG_MAILBOX in body_s and MAILBOX in body_s,
+   f"HTTP {code}")
+_, n_after_mm, _ = snap_connection()
+ck("mismatch writes 0 google_connection rows",
+   n_before_mm == 0 and n_after_mm == 0, f"{n_before_mm}→{n_after_mm}")
+new_log = ""
+if log_path and log_path.exists():
+    with open(log_path, "r", errors="replace") as fh:
+        fh.seek(log_start)
+        new_log = fh.read()
+mm_lines = [ln for ln in new_log.splitlines()
+            if "google connect refused:" in ln and "reason=mismatch" in ln]
+ck("app log has one reason=mismatch refusal for this run",
+   len(mm_lines) == 1,
+   f"lines={len(mm_lines)}" if log_path else "VERIFY_APP_LOG not set")
+TOKEN_MARKS = ("mock-access-", "mock-refresh-", "access_token", "refresh_token",
+               "ya29.", "1//0")
+ck("mismatch log line contains no token",
+   len(mm_lines) == 1 and not any(m in mm_lines[0] for m in TOKEN_MARKS),
+   "clean" if mm_lines and not any(m in mm_lines[0] for m in TOKEN_MARKS)
+   else "missing or token-like text present")
+ck("mismatch log line names the wrong and expected address",
+   len(mm_lines) == 1
+   and f"google_email={WRONG_MAILBOX}" in mm_lines[0]
+   and f"expected={MAILBOX}" in mm_lines[0])
 
 print("\n── presence: owner mock-connect 0→1 ─────────────────────")
 _, n_before, _ = snap_connection()

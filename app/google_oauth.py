@@ -12,10 +12,13 @@ one in-memory value for the whole process.
 
 from __future__ import annotations
 
+import html
+import json
 import logging
 import os
 import re
 import secrets
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -59,9 +62,17 @@ _GENERIC = "That PIN is not right."
 _STATE_SALT = "jarvis-oauth-state-v1"
 _PARTIAL_MSG = "all five permissions are required"
 _SIGNIN_AGAIN = "sign in again then connect"
+GMAIL_PROFILE_URL = "https://gmail.googleapis.com/gmail/v1/users/me/profile"
 
 # Mock authorization codes: code -> record. Testco only. Never logged.
 _mock_codes: Dict[str, Dict[str, Any]] = {}
+# Mock Gmail users.getProfile('me') bodies, keyed by access_token. Same JSON
+# shape as Google. Connect must not learn the mailbox from an id_token.
+_mock_gmail_profiles: Dict[str, Dict[str, Any]] = {}
+
+
+class GmailProfileError(RuntimeError):
+    """users.getProfile('me') failed or had no emailAddress."""
 
 
 def _state_serializer() -> URLSafeTimedSerializer:
@@ -131,6 +142,80 @@ def _signin_again_page(status_code: int = 401) -> HTMLResponse:
         "start Connect Google again. Nothing was stored.</p>"
         "<p><a href='/'>Back</a></p>",
         status_code=status_code,
+    )
+
+
+def _no_email_page() -> HTMLResponse:
+    return _mailbox_unidentified_page()
+
+
+def _mailbox_unidentified_page() -> HTMLResponse:
+    return HTMLResponse(
+        "<!doctype html><meta charset=utf-8><title>Google connection incomplete</title>"
+        "<body style='font-family:sans-serif;max-width:36em;margin:4em auto'>"
+        "<h1>The mailbox could not be identified</h1>"
+        "<p>The grant completed but Gmail did not return the mailbox address. "
+        "Nothing was stored. Retry Connect Google signed in as the assistant "
+        "account.</p>"
+        "<p><a href='/'>Back</a></p>",
+        status_code=401,
+    )
+
+
+def _mismatch_page(got: str, expected: str) -> HTMLResponse:
+    """Owner/admin already has a session — naming both addresses is not enumeration."""
+    g = html.escape(got)
+    e = html.escape(expected)
+    return HTMLResponse(
+        "<!doctype html><meta charset=utf-8><title>Wrong Google account</title>"
+        "<body style='font-family:sans-serif;max-width:36em;margin:4em auto'>"
+        "<h1>Connected Google account does not match the assistant mailbox</h1>"
+        f"<p>Google returned <code>{g}</code>. This tenant's assistant is "
+        f"<code>{e}</code>.</p>"
+        "<p>Nothing was stored. Sign out of other Google accounts or use a "
+        "dedicated browser profile, then Connect Google signed in as the "
+        "assistant account.</p>"
+        "<p><a href='/'>Back</a></p>",
+        status_code=403,
+    )
+
+
+def _assistant_address() -> str:
+    try:
+        shared = str(config.SHARED)
+        if shared not in sys.path:
+            sys.path.insert(0, shared)
+        import identity  # noqa: WPS433
+        return (identity.load().get("assistant_address") or "").strip()
+    except Exception:
+        log.warning(
+            "google connect: could not read identity.assistant_address",
+            exc_info=True,
+        )
+        return ""
+
+
+def _emails_match(got: str, expected: str) -> bool:
+    return got.strip().lower() == expected.strip().lower()
+
+
+def _log_connect_refusal(
+    reason: str,
+    *,
+    google_email: str = "",
+    expected: str = "",
+    granted: str = "",
+    outcome: str = "",
+) -> None:
+    """INFO only. Never tokens. google_email/granted/outcome on every refuse."""
+    log.info(
+        "google connect refused: reason=%s google_email=%s expected=%s "
+        "granted=%s outcome=%s",
+        reason,
+        google_email or "(none)",
+        expected or "(none)",
+        granted or "(none)",
+        outcome or reason,
     )
 
 
@@ -298,28 +383,41 @@ def mock_authorize(
     else:
         scopes = LOGIN_SCOPES
     code = secrets.token_urlsafe(24)
-    _mock_codes[code] = {
-        "email": addr,
+    access_token = "mock-access-" + secrets.token_urlsafe(8)
+    rec: Dict[str, Any] = {
         "exp": time.time() + 120,
         "purpose": purpose,
         "scopes": list(scopes),
         "refresh_token": "mock-refresh-" + secrets.token_urlsafe(16),
-        "access_token": "mock-access-" + secrets.token_urlsafe(8),
+        "access_token": access_token,
     }
+    if purpose == PURPOSE_CONNECT:
+        # Same JSON shape as GET .../gmail/v1/users/me/profile. No id_token.
+        _mock_gmail_profiles[access_token] = {"emailAddress": addr}
+    else:
+        rec["email"] = addr
+    _mock_codes[code] = rec
     loc = f"{origin}/oauth/callback?{urlencode({'code': code, 'state': state})}"
     return RedirectResponse(loc, status_code=302)
 
 
 def mock_token_response(code: str) -> dict:
-    """Google-shaped token JSON. Mock mode only; never logs the code."""
+    """Google-shaped token JSON. Mock mode only; never logs the code.
+
+    Connect tokens match real Google: no id_token (openid was not requested).
+    Login may include email for the OpenID mock; connect must not.
+    """
     rec = _exchange_mock(code)
-    return {
+    out: Dict[str, Any] = {
         "token_type": "Bearer",
         "access_token": rec.get("access_token") or "mock",
         "expires_in": 3600,
         "scope": " ".join(rec.get("scopes") or LOGIN_SCOPES),
-        "email": rec["email"],
+        "refresh_token": rec.get("refresh_token"),
     }
+    if rec.get("purpose") == PURPOSE_LOGIN and rec.get("email"):
+        out["email"] = rec["email"]
+    return out
 
 
 def _exchange_mock(code: str) -> Dict[str, Any]:
@@ -377,42 +475,79 @@ def _exchange_google_login(
     return email
 
 
+def _mock_gmail_get_profile(access_token: str) -> dict:
+    """In-process GET .../users/me/profile. Same JSON shape as Google."""
+    body = _mock_gmail_profiles.get(access_token)
+    if body is None:
+        raise KeyError("unknown mock access_token")
+    return dict(body)
+
+
+def _gmail_profile_email(access_token: str) -> str:
+    """Mailbox address from Gmail users.getProfile('me').emailAddress.
+
+    No extra scopes. Mock and real parse the same JSON key. Never reads id_token.
+    """
+    if not access_token:
+        raise GmailProfileError("no access_token")
+    try:
+        if config.oauth_mock():
+            data = _mock_gmail_get_profile(access_token)
+        else:
+            req = urllib.request.Request(
+                GMAIL_PROFILE_URL,
+                headers={"Authorization": "Bearer " + access_token},
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        if not isinstance(data, dict):
+            raise GmailProfileError("gmail profile is not an object")
+        email = (data.get("emailAddress") or "").strip()
+        if not email:
+            raise GmailProfileError("gmail profile has no emailAddress")
+        return email
+    except GmailProfileError:
+        raise
+    except Exception as exc:
+        log.info("google connect: gmail profile failed (%s)", type(exc).__name__)
+        raise GmailProfileError(type(exc).__name__) from exc
+
+
 def _exchange_google_connect(
     code: str, origin: str, code_verifier: Optional[str] = None,
 ) -> Dict[str, Any]:
-    from google_auth_oauthlib.flow import Flow
+    """Token exchange then Gmail profile. Never takes email from an id_token."""
+    if config.oauth_mock():
+        rec = _exchange_mock(code)
+        access = rec.get("access_token") or ""
+        granted = " ".join(rec.get("scopes") or [])
+        refresh = rec.get("refresh_token")
+        expiry = None
+    else:
+        from google_auth_oauthlib.flow import Flow
 
-    redirect_uri = f"{origin}/oauth/callback"
-    _relax_token_scope()
-    flow = Flow.from_client_secrets_file(
-        str(config.oauth_client_path()),
-        scopes=list(CONNECT_SCOPES),
-        redirect_uri=redirect_uri,
-    )
-    if code_verifier:
-        flow.code_verifier = code_verifier
-    flow.fetch_token(code=code)
-    creds = flow.credentials
-    granted = " ".join(creds.scopes or [])
-    email = ""
-    raw = getattr(creds, "id_token", None)
-    if raw:
-        try:
-            from google.auth.transport import requests as greq
-            from google.oauth2 import id_token as gid
-            client_id = flow.client_config.get("client_id") if flow.client_config else None
-            claims = gid.verify_oauth2_token(raw, greq.Request(), audience=client_id)
-            email = (claims.get("email") or "").strip()
-        except Exception:
-            log.info("google connect: id_token email unavailable")
-    expiry = None
-    if creds.expiry:
-        expiry = creds.expiry.isoformat()
+        redirect_uri = f"{origin}/oauth/callback"
+        _relax_token_scope()
+        flow = Flow.from_client_secrets_file(
+            str(config.oauth_client_path()),
+            scopes=list(CONNECT_SCOPES),
+            redirect_uri=redirect_uri,
+        )
+        if code_verifier:
+            flow.code_verifier = code_verifier
+        flow.fetch_token(code=code)
+        creds = flow.credentials
+        access = creds.token or ""
+        granted = " ".join(creds.scopes or [])
+        refresh = creds.refresh_token
+        expiry = creds.expiry.isoformat() if creds.expiry else None
+
+    email = _gmail_profile_email(access)
     return {
         "email": email,
         "scopes": granted,
-        "refresh_token": creds.refresh_token,
-        "access_token": creds.token,
+        "refresh_token": refresh,
+        "access_token": access,
         "expiry": expiry,
     }
 
@@ -533,34 +668,69 @@ def _callback_connect(
 
     verifier = (cookie.get("code_verifier") or "").strip() or None
     try:
-        if config.oauth_mock():
-            rec = _exchange_mock(code)
-            granted = " ".join(rec.get("scopes") or [])
-            payload = {
-                "email": rec["email"],
-                "scopes": granted,
-                "refresh_token": rec.get("refresh_token"),
-                "access_token": rec.get("access_token"),
-                "expiry": None,
-            }
-        else:
-            payload = _exchange_google_connect(
-                code, origin, code_verifier=verifier,
-            )
-            granted = payload.get("scopes") or ""
+        payload = _exchange_google_connect(
+            code, origin, code_verifier=verifier,
+        )
+        granted = payload.get("scopes") or ""
+    except GmailProfileError as exc:
+        cause = type(exc.__cause__).__name__ if exc.__cause__ else type(exc).__name__
+        log.info("google connect: mailbox unidentified (%s)", cause)
+        _log_connect_refusal(
+            "no_email",
+            google_email="",
+            expected=_assistant_address(),
+            outcome=cause,
+        )
+        resp = _mailbox_unidentified_page()
+        _clear_state_cookie(resp)
+        return resp
     except Exception as exc:
         _log_exchange_failure("google connect", exc)
+        _log_connect_refusal(
+            "exchange",
+            outcome=type(exc).__name__,
+        )
         return _fail_response(request, status_code=401)
 
+    email = (payload.get("email") or "").strip()
+    expected = _assistant_address()
+    granted = (payload.get("scopes") or granted or "").strip()
+
     if not granted_all_five(granted):
+        _log_connect_refusal(
+            "partial_grant",
+            google_email=email,
+            expected=expected,
+            granted=granted,
+            outcome="partial_grant",
+        )
         resp = _partial_grant_page()
         _clear_state_cookie(resp)
         return resp
 
-    email = (payload.get("email") or "").strip()
     if not email:
-        log.info("google connect: no mailbox email on grant")
-        return _fail_response(request, status_code=401)
+        _log_connect_refusal(
+            "no_email",
+            google_email="",
+            expected=expected,
+            granted=granted,
+            outcome="no_email",
+        )
+        resp = _no_email_page()
+        _clear_state_cookie(resp)
+        return resp
+
+    if expected and not _emails_match(email, expected):
+        _log_connect_refusal(
+            "mismatch",
+            google_email=email,
+            expected=expected,
+            granted=granted,
+            outcome="mismatch",
+        )
+        resp = _mismatch_page(email, expected)
+        _clear_state_cookie(resp)
+        return resp
 
     try:
         cipher = google_connection.encrypt_tokens({
@@ -581,8 +751,21 @@ def _callback_connect(
             type(exc).__name__,
             _safe_exc_text(exc),
         )
+        _log_connect_refusal(
+            "store",
+            google_email=email,
+            expected=expected,
+            granted=granted,
+            outcome=type(exc).__name__,
+        )
         return _fail_response(request, status_code=401)
 
+    log.info(
+        "google connect: google_email=%s expected=%s granted=%s outcome=connected",
+        email,
+        expected or "(none)",
+        granted,
+    )
     redir = RedirectResponse("/", status_code=302)
     _clear_state_cookie(redir)
     return redir

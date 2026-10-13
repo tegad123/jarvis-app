@@ -59,6 +59,9 @@ emails and texts to real clients. Act accordingly.
 - Role gates (owner/admin/member/operator) are enforced by the API;
   the UI only reflects them. Every hidden control has a server-side twin.
 - Operator (break-glass) sessions see structure, never bodies.
+- A mock may only return what the real dependency returns. Mock-supplied
+  convenience data is a false green — the connect email and PKCE verifier
+  were both hidden this way.
 
 ## Definition of done
 A change is done when, on testco (8710):
