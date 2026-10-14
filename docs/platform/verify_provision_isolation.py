@@ -14,6 +14,7 @@ The on-host half (a real fresh tenant, then scripts/prove_isolation.py) is the
 acceptance run recorded in docs/platform/decisions.md.
 """
 import copy
+import re
 import subprocess
 import sys
 import tempfile
@@ -66,6 +67,17 @@ def main() -> int:
        any(ln.startswith("ExecStart=") and "backup_tenant.py" in ln for ln in directives))
     ck("backup renders Environment=JARVIS_ACCOUNTS_DB in its drop-in",
        out.count("Environment=JARVIS_ACCOUNTS_DB=/opt/isoprint/app-private/jarvis_accounts.db") >= 3)
+    units = dict(re.findall(r"(?ms)^##### (\S+) #####\n(.*?)(?=^##### |\Z)", out))
+    broker = "Environment=JARVIS_APP_BROKER_URL=http://127.0.0.1:8720\n"
+    threads = "Environment=JARVIS_THREADS_DB=/opt/isoprint/app-private/jarvis_threads.db\n"
+    ck("canary: the unit splitter found the four isolation drop-ins",
+       all(u in units for u in ("app.isolation.conf", "gateway.isolation.conf",
+                                "job.isolation.conf", "backup.isolation.conf")), str(sorted(units)))
+    ck("gateway drop-in points the agent at the app broker", broker in units.get("gateway.isolation.conf", ""))
+    ck("only the gateway gets a broker URL (the app refuses to boot with one)",
+       [u for u, body in units.items() if "JARVIS_APP_BROKER_URL" in body] == ["gateway.isolation.conf"])
+    for u in ("app.isolation.conf", "gateway.isolation.conf", "job.isolation.conf", "backup.isolation.conf"):
+        ck(f"{u} names the app-private threads DB", threads in units.get(u, ""))
 
     print("── 1b. twin: isolation: none renders no users and keeps the drop-in key")
     n = copy.deepcopy(m)

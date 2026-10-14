@@ -79,7 +79,7 @@ def main() -> int:
         return f"head -c1 '{path}' >/dev/null"
 
     def counter(name):
-        c = sqlite3.connect(f"file:{H}/state/jarvis_threads.db?mode=ro", uri=True)
+        c = sqlite3.connect(f"file:{PRIV}/jarvis_threads.db?mode=ro", uri=True)
         try:
             row = c.execute("SELECT value FROM counters WHERE name=?", (name,)).fetchone()
         except sqlite3.OperationalError:
@@ -106,6 +106,8 @@ def main() -> int:
     check(f"canary: a wrong passphrase is refused (got {bad.status_code})", bad.status_code in (401, 403))
     check("accounts db lives in app-private", (PRIV / "jarvis_accounts.db").is_file())
     check("no accounts db in hermes/state", not (H / "state/jarvis_accounts.db").exists())
+    check("threads db lives in app-private", (PRIV / "jarvis_threads.db").is_file())
+    check("no threads db in hermes/state", not (H / "state/jarvis_threads.db").exists())
 
     print("── posture: blocked, writes off everywhere")
     app_env, gw_env = proc_env(app_pid), proc_env(gw_pid)
@@ -116,7 +118,8 @@ def main() -> int:
     check("preflight says POSTURE=\"blocked\"", 'POSTURE="blocked"' in (OPT / f"{slug}_preflight.sh").read_text())
 
     print("── the agent cannot read app secrets (runuser, then the unit's sandbox)")
-    for f in (PRIV / "oauth_client.json", PRIV / "jarvis_accounts.db", ENVF, Path(f"/proc/{app_pid}/environ")):
+    for f in (PRIV / "oauth_client.json", PRIV / "jarvis_accounts.db", PRIV / "jarvis_threads.db", ENVF,
+              Path(f"/proc/{app_pid}/environ")):
         check(f"root canary can read {f}", sh("root", read(f)) == 0)
         check(f"agent denied {f}", sh(AGENT, read(f)) != 0)
         check(f"agent denied {f} (sandboxed)", sh(AGENT, read(f), sandbox=True) != 0)
@@ -170,6 +173,10 @@ def main() -> int:
               == hashlib.sha256(want[k].encode()).digest())
     check("gateway process has no APP_GOOGLE_TOKEN_KEY", "APP_GOOGLE_TOKEN_KEY" not in gw_env)
     check("gateway process has no APP_PASSPHRASE", "APP_PASSPHRASE" not in gw_env)
+    broker_url = f"http://127.0.0.1:{port}"
+    check("gateway process is in broker mode (JARVIS_APP_BROKER_URL = the app)",
+          gw_env.get("JARVIS_APP_BROKER_URL") == broker_url)
+    check("app process has no JARVIS_APP_BROKER_URL", "JARVIS_APP_BROKER_URL" not in app_env)
     check("hermes/.env holds API_SERVER_KEY only", sorted(env_file(H / ".env")) == ["API_SERVER_KEY"])
     units = [p for p in Path("/etc/systemd/system").glob(f"{slug}-*") if p.is_file()] + \
             list(Path("/etc/systemd/system").glob(f"{slug}-*.d/*.conf"))
@@ -188,37 +195,62 @@ def main() -> int:
     subprocess.run(["systemctl", "stop", f"isolation-canary-{slug}"], capture_output=True)
     check("canary: systemctl show exposes Environment= to the agent", "CANARY_SECRET=visible" in seen)
 
-    print("── google_creds: the app reads its connection, the agent is refused as unreadable")
+    print("── google_creds: the agent goes through the app broker and never holds tokens")
     base_env = {"PATH": "/usr/bin:/bin", "HERMES_HOME": str(H), "JARVIS_APP_ROOT": str(OPT / "jarvis-app"),
                 "JARVIS_SKILLS_ROOT": str(S), "JARVIS_RUNTIME_CONFIG": str(S / "_shared/runtime.json"),
                 "JARVIS_IDENTITY_CONFIG": str(S / "_shared/identity.json"),
                 "JARVIS_ACCOUNTS_DB": str(PRIV / "jarvis_accounts.db"),
-                "JARVIS_THREADS_DB": str(H / "state/jarvis_threads.db"), "PYTHONDONTWRITEBYTECODE": "1"}
-    probe = (f"import sys,json; sys.path.insert(0,'{S}/_shared'); import google_creds as g\n"
+                "JARVIS_THREADS_DB": str(PRIV / "jarvis_threads.db"), "PYTHONDONTWRITEBYTECODE": "1"}
+    probe = (f"import sys,json,base64; sys.path.insert(0,'{S}/_shared'); import google_creds as g\n"
              "o={'source': g.source()}\n"
              "try:\n    g.credentials(); o['raised']=None\n"
              "except Exception as e:\n    o['raised']=type(e).__name__; o['msg']=str(e)\n"
+             "if '--send' in sys.argv:\n"
+             "    raw=base64.urlsafe_b64encode(b'To: probe@isolation.invalid\\r\\nSubject: p\\r\\n\\r\\nx').decode()\n"
+             "    try:\n        g.gmail().users().messages().send(userId='me', body={'raw': raw}).execute(); o['send']='SENT'\n"
+             "    except Exception as e:\n        o['send']=type(e).__name__\n"
+             "    import app_counters; app_counters.bump('prove_isolation_broker_bump')\n"
              "print(json.dumps(o))")
 
-    def as_user(user, home):
+    def as_user(user, home, broker=False, send=False):
         e = dict(base_env, HOME=home)
-        argv = ["runuser", "-u", user, "--", "env", "-i"] + [f"{k}={v}" for k, v in e.items()] + [PY, "-c", probe]
+        if broker:
+            e["JARVIS_APP_BROKER_URL"] = broker_url
+        argv = (["runuser", "-u", user, "--", "env", "-i"] + [f"{k}={v}" for k, v in e.items()]
+                + [PY, "-c", probe] + (["--send"] if send else []))
         p = subprocess.run(argv, capture_output=True, text=True, timeout=120)
         try:
             return json.loads(p.stdout.strip().splitlines()[-1]), p.stderr
         except Exception:
             return {"error": p.stderr[-400:]}, p.stderr
 
+    a0, w0, b0 = (counter("google_creds_tokens_app_side"), counter("broker_google_write_refused"),
+                  counter("prove_isolation_broker_bump"))
+    agent_out, _ = as_user(AGENT, str(H), broker=True, send=True)
+    check(f"agent source() via broker = {args.expect_app_source} (got {agent_out.get('source')})",
+          agent_out.get("source") == args.expect_app_source)
+    check(f"agent credentials() raises TokensAreAppSide (got {agent_out.get('raised')})",
+          agent_out.get("raised") == "TokensAreAppSide")
+    check("…counted through the broker (google_creds_tokens_app_side +1)",
+          counter("google_creds_tokens_app_side") - a0 == 1)
+    check(f"agent send through the broker is refused, writes blocked (got {agent_out.get('send')})",
+          agent_out.get("send") == "WritesDisabled")
+    check("…counted app-side (broker_google_write_refused +1)", counter("broker_google_write_refused") - w0 == 1)
+    check("agent counter bump lands in the app-private threads db (+1)",
+          counter("prove_isolation_broker_bump") - b0 == 1)
+    check("no stray threads db in hermes/state", not (H / "state/jarvis_threads.db").exists())
+
+    print("── twin: without the broker the agent is refused as unreadable, not told to reconnect")
     u0, n0 = counter("google_creds_connection_unreadable"), counter("google_creds_not_connected")
-    agent_out, agent_err = as_user(AGENT, str(H))
-    check(f"agent source() = connection_unreadable (got {agent_out.get('source')})",
-          agent_out.get("source") == "connection_unreadable")
-    check(f"agent credentials() raises GoogleConnectionUnreadable (got {agent_out.get('raised')})",
-          agent_out.get("raised") == "GoogleConnectionUnreadable")
-    check("agent message does not say reconnect", "Reconnect" not in agent_out.get("msg", "Reconnect"))
-    check("agent refusal is logged", "connection not readable from this process" in agent_err)
-    check("unreadable counter moved by 2 (source + credentials)",
-          counter("google_creds_connection_unreadable") - u0 == 2)
+    direct, direct_err = as_user(AGENT, str(H))
+    check(f"agent source() direct = connection_unreadable (got {direct.get('source')})",
+          direct.get("source") == "connection_unreadable")
+    check(f"agent credentials() direct raises GoogleConnectionUnreadable (got {direct.get('raised')})",
+          direct.get("raised") == "GoogleConnectionUnreadable")
+    check("agent message does not say reconnect", "Reconnect" not in direct.get("msg", "Reconnect"))
+    check("agent refusal is logged", "connection not readable from this process" in direct_err)
+    check("unreadable counter did not move (the agent cannot write the threads db either)",
+          counter("google_creds_connection_unreadable") - u0 == 0)
     check("not-connected counter did not move", counter("google_creds_not_connected") - n0 == 0)
     check("no stray accounts db in hermes/state", not (H / "state/jarvis_accounts.db").exists())
     app_out, _ = as_user(APP, str(PRIV))

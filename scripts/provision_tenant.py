@@ -40,7 +40,7 @@ ETC_JARVIS = Path("/etc/jarvis")
 # app-only copy of it; nothing reads /root/.hermes.
 PLATFORM_OAUTH_CLIENT = ETC_JARVIS / "oauth_client.json"
 ISOLATIONS = ("two_user", "none")
-SHARED_STATE = ("jarvis_threads.db", "jarvis_tasks.db", "jarvis_leads.db", "activity_feed.jsonl",
+SHARED_STATE = ("jarvis_tasks.db", "jarvis_leads.db", "activity_feed.jsonl",
                 "approvals.jsonl", "approvals_decisions.jsonl")
 
 RESERVED_SLUGS = frozenset({"testco", "root", "live", "34dev"})
@@ -317,7 +317,8 @@ def apply_isolation(opt: Path, n: Dict[str, str], data_dirs: List[Path]) -> None
     run(["install", "-m", "600", "-o", app, "-g", app, str(PLATFORM_OAUTH_CLIENT),
          str(private / "oauth_client.json")])
     # Created empty (a valid SQLite database) so it is app-only before first use.
-    run(["install", "-m", "600", "-o", app, "-g", app, "/dev/null", str(private / "jarvis_accounts.db")])
+    for name in ("jarvis_accounts.db", "jarvis_threads.db"):
+        run(["install", "-m", "600", "-o", app, "-g", app, "/dev/null", str(private / name)])
     run(["chown", f"{app}:{app}", str(private)])
     os.chmod(private, 0o700)
     log(f"two-user ownership applied: app={app} agent={agent} group={g}")

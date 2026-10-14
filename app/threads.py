@@ -18,14 +18,18 @@ design. Archiving sets a flag; messages are never removed. A conversation the
 user archived is still a record of what the assistant was asked to do.
 """
 
+import logging
 import os
 import sqlite3
+import sys
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from . import config
+
+log = logging.getLogger("app.threads")
 
 DB_PATH = Path(
     os.environ.get("JARVIS_THREADS_DB", str(config.HERMES_HOME / "state" / "jarvis_threads.db"))
@@ -616,7 +620,12 @@ def bump_counter(name: str, by: int = 1) -> int:
     """Increment a usage counter and return the new value. Never raises: a
     counter must not fail the work it counts. When the store itself cannot be
     reached the failure is announced ONCE per process (app/metrics.py) — a
-    results slide built on silent zeros is worse than one missing bump."""
+    results slide built on silent zeros is worse than one missing bump.
+
+    In broker mode (JARVIS_APP_BROKER_URL, the gateway's processes on a
+    two-user tenant) this store is app-only, so the bump goes to the app."""
+    if os.environ.get("JARVIS_APP_BROKER_URL"):
+        return _bump_via_broker(name, by)
     try:
         conn = _ensure()
         with conn:
@@ -642,6 +651,17 @@ def bump_counter(name: str, by: int = 1) -> int:
     except Exception:
         pass
     return int(row["value"]) if row else 0
+
+
+def _bump_via_broker(name: str, by: int) -> int:
+    try:
+        if str(config.SHARED) not in sys.path:
+            sys.path.insert(0, str(config.SHARED))
+        import app_broker  # noqa: PLC0415
+        return int(app_broker.call("counters", {"op": "bump", "name": name, "by": by}).get("value") or 0)
+    except Exception as exc:
+        log.error("threads: broker counter bump failed (%s): %s", name, exc)
+        return 0
 
 
 def all_counters() -> Dict[str, Any]:

@@ -81,7 +81,8 @@ open(sys.argv[3], 'w').write(json.dumps(cfg, indent=2) + '\n')
   JARVIS_LEADS_DB="$SB/leads.db" \
   JARVIS_ACTIVITY_FEED="$SB/feed.jsonl" \
   JARVIS_TASKS_SOURCE="${TASKS_SOURCE:-store}" \
-  JARVIS_ALLOW_WRITES=1 \
+  JARVIS_ALLOW_WRITES="${VERIFY_ALLOW_WRITES:-1}" \
+  JARVIS_GOOGLE_API_ENDPOINT="${VERIFY_GOOGLE_API_ENDPOINT:-}" \
   APP_PORT="$PORT" \
   APP_HOST=127.0.0.1 \
   nohup "$PYTHON" -m app.main > "$SB/app.log" 2>&1 &

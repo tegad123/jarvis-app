@@ -68,13 +68,15 @@ def snapshot_db(src: Path, dest_dir: Path) -> Path | None:
 
 
 def db_sources(opt: Path) -> list[tuple[str, Path]]:
-    """Where each database lives. The accounts DB can sit outside hermes/state
-    (an app-only directory) and is then named by JARVIS_ACCOUNTS_DB."""
+    """Where each database lives. The accounts and threads DBs can sit outside
+    hermes/state (an app-only directory) and are then named by
+    JARVIS_ACCOUNTS_DB / JARVIS_THREADS_DB."""
     hermes = opt / "hermes"
     state = hermes / "state"
-    accounts = Path(os.environ.get("JARVIS_ACCOUNTS_DB") or state / "jarvis_accounts.db")
-    return ([("jarvis_accounts.db", accounts)]
-            + [(n, state / n) for n in STATE_DBS]
+    named = {"jarvis_accounts.db": os.environ.get("JARVIS_ACCOUNTS_DB"),
+             "jarvis_threads.db": os.environ.get("JARVIS_THREADS_DB")}
+    return ([("jarvis_accounts.db", Path(named["jarvis_accounts.db"] or state / "jarvis_accounts.db"))]
+            + [(n, Path(named.get(n) or state / n)) for n in STATE_DBS]
             + [(n, hermes / n) for n in HERMES_DBS])
 
 

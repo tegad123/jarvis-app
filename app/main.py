@@ -20,6 +20,7 @@ version, credential scopes, tenant slugs) and is reachable from the internet.
 
 import copy
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -64,6 +65,14 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None,
 )
+
+from app import broker as broker_mod  # noqa: E402
+
+if os.environ.get("JARVIS_APP_BROKER_URL"):
+    # Broker mode makes app.threads send counters to the broker, which is this
+    # process: every bump would call itself.
+    raise SystemExit("REFUSED: JARVIS_APP_BROKER_URL is set on the app itself; it belongs on the gateway only")
+app.include_router(broker_mod.router)
 
 
 def _uvicorn_log_config() -> dict:
