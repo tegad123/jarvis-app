@@ -183,6 +183,38 @@ Order on rehearsal (each step needs its own restart yes):
   - The agent still reads and writes the shared tasks and leads databases, the activity feed and the approvals journals. Item 4 moved only the threads database.
   - **Rehearsal is not migrated.** It still runs app `2b20c5d`, skills from before the broker, and a shared threads database. Moving it means a restart of a tenant with a real mailbox connected: a STOP gate (needs a human yes).
 
+## Decided 2026-10-14: Sentinel's deterministic gate and shadow mode (platform build item 5, partial)
+
+**Approval (human):** item 5 of the platform build goal: "Spec Section 9: action classes, approvals (structured callbacks only), grant scopes, taint rule, Sentinel deterministic gate. Shadow mode = every write logged, none executed."
+
+- **Built (`app/sentinel.py`, pure, no I/O):**
+  - The six action classes and their defaults (9.1).
+  - The effective mode: the user's override, never looser than the org ceiling; `locked` ignores the user (9.2).
+  - Grants bound to one connector, one destination (an address or `@domain`) and one skill, with scopes once, session, task, until and always. An approval's grant must name exactly one destination; `locked` takes once only (9.3).
+  - Signed structured approval callbacks: HMAC-SHA256 over the approval id, the user it was issued to, the answer, the scope and the expiry. Free text, a swapped body, another key, another user's session and an expired token are all refused (9.3).
+  - Deterministic verdicts: unknown class, recipient boundary, rate limits (20 external sends per hour, 3 per recipient per day), blocked mode, then grants, auto and taint (9.4, 9.5).
+- **In the broker:** every Google write is classified (internal vs external from `identity.internal_domains`) and decided. The decision is appended to an app-only ledger (`JARVIS_SENTINEL_LEDGER`, `app-private/sentinel_ledger.jsonl`) before anything runs; a decision that cannot be recorded does not run. The ledger holds structure (class, destinations, skill, run, taint, verdict, outcome), never subjects or bodies.
+  - **Taint:** reading mail from outside the org, a thread containing such mail, thread snippets, an attachment, or an event organised outside the org taints the run. The run is `X-Jarvis-Run` (from `JARVIS_RUN_ID`, else the Hermes session); a write with no run identity is decided as tainted.
+  - **Shadow mode** (`JARVIS_SENTINEL_MODE=shadow`): every Google write is ledgered with what Sentinel would have done and none is executed. The skill gets `write_guard.ActionHeld` (a `WritesDisabled` subclass). Shadow is checked before the writes switch, so it holds even with writes on. The app refuses to boot on an unknown mode.
+  - **Recipient parsing:** Python 3.12's strict `getaddresses()` collapses a whole list to one empty address when any element is empty or malformed. The broker therefore saw no recipients for a message with an empty `Cc:` header. That failed closed, but it would have refused a legitimate message. Headers are now parsed one value at a time, and an unparseable non-empty one refuses the send.
+- **Provisioning:** two-user manifests must say `sentinel_mode: shadow | enforce` (all checked-in manifests say `shadow`). `approvals_decisions.jsonl` moved to `app-private`. In the shared state directory the agent could append "approved" to the queue's history. Nothing would have executed, because only the app's `decide()` executes, but the queue would show consent nobody gave. Backup follows the ledger and the decisions file.
+- **Proof:**
+  - `verify_sentinel_gate.py` 64/64 offline; `verify_sentinel_broker.py` 27/27 against two sandboxes (enforce; shadow with writes on); `verify_broker.py` 43/43; `verify_provision_isolation.py` 48/48.
+  - Canaries:
+    - Ignoring taint fails 3; dropping rate limits fails 2; skipping the callback signature check fails 2.
+    - Removing the shadow check fails 6, and the fake Google then receives the send and the insert.
+    - A no-op taint hook fails 3; trusting a missing run identity fails 1; removing the `sentinel_mode` refusal fails 2.
+  - `prove_isolation.py --slug isocheck` 103/103 on isocheck re-stamped in shadow mode at app `a99de0e`, skills `6e56172`. The agent's send through the broker came back `ActionHeld`, with one shadowed `external_send` in the ledger and no body. A real backup run captured the ledger and the decisions file. Full sandbox gate green.
+- **Not built yet:**
+  - **Approvals and grants have no store.** Decision 2 puts approvals, grants, policies and the audit log in Postgres. This host has no Postgres server and neither venv has a driver, so installing them is a new dependency (`AGENTS.md` rule 6, needs a human yes). Until then an `ask` verdict is refused and ledgered; no approval card is created, no grant is persisted, and user overrides and org ceilings are not stored, so every tenant runs the 9.1 defaults. The callback and grant logic is ready for that store.
+  - The model check (9.4, second half), surrogate tokens, the egress proxy and email scrubbing (9.6).
+- **Known gaps:**
+  - Sentinel runs inside the app process: outside the agent's user and process, but not a separate process as 9.4 says.
+  - Run identity is asserted by the agent, so a run could claim a fresh id to shed taint. Gateway-issued run tokens would close this.
+  - Taint is held in app memory; an app restart forgets it for runs still in progress (the taint events stay in the ledger).
+  - Rate limits rescan the ledger, which has no rotation.
+- **Interpretation to confirm (human):** shadow mode covers writes to the outside world, meaning everything that goes through the broker to Google. Jarvis's own stores (tasks, leads, channels, counters, the feed) still write in shadow, and the agent still replies in its chat channel. Without that, practice mode could not show what Jarvis would have done.
+
 ## Decided (from the spec, recorded 2026-10-10)
 
 - Customer #1: 34 Dev team.

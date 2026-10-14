@@ -27,6 +27,10 @@ emails and texts to real clients. Act accordingly.
   channel creation go through the app's loopback /api/broker; the threads and
   accounts databases are in app-private and the agent cannot open them.
   Rehearsal predates this (shared threads database, no broker).
+- Every broker write goes through Sentinel (app/sentinel.py) and is recorded
+  in app-private/sentinel_ledger.jsonl. Two-user manifests set
+  sentinel_mode; shadow (ISOCHECK, and every checked-in manifest) logs each
+  write and runs none. The ledger is the evidence for what a tenant tried.
 - Two-user tenants get their OAuth client from /etc/jarvis/oauth_client.json
   (root 600). Never read /root/.hermes for provisioning.
 - TESTCO (8710/8652, /opt/testco) was RETIRED 2026-10-13. Archive and rollback:
