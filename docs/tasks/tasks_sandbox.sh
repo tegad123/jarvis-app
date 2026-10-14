@@ -85,6 +85,8 @@ open(sys.argv[3], 'w').write(json.dumps(cfg, indent=2) + '\n')
   JARVIS_GOOGLE_API_ENDPOINT="${VERIFY_GOOGLE_API_ENDPOINT:-}" \
   JARVIS_SENTINEL_LEDGER="$SB/sentinel_ledger.jsonl" \
   JARVIS_SENTINEL_MODE="${VERIFY_SENTINEL_MODE:-enforce}" \
+  JARVIS_MODEL_UPSTREAM="${VERIFY_MODEL_UPSTREAM:-}" \
+  ANTHROPIC_API_KEY="${VERIFY_MODEL_KEY:-}" \
   APP_PORT="$PORT" \
   APP_HOST=127.0.0.1 \
   nohup "$PYTHON" -m app.main > "$SB/app.log" 2>&1 &

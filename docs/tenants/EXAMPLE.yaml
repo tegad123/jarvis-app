@@ -37,6 +37,7 @@ skills_origin_sha: 15ea39dcc0499f3fc9cb792411e9234f394d8785
 curator_packs: omit                   # omit | defaults
 
 writes_posture: blocked               # blocked | captured | live
+agent_model: claude-sonnet-4-6        # placeholder until spec open question 2 (model choice) is decided
 venv: platform                        # shared | platform | per-tenant (per-tenant is human-yes)
 isolation: two_user                   # two_user | none (none: captured loopback scratch only)
 sentinel_mode: shadow                 # shadow | enforce (two_user only; shadow logs every Google write, runs none)

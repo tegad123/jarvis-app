@@ -86,6 +86,14 @@ def main() -> int:
        sorted(u for u, body in units.items() if "JARVIS_SENTINEL_LEDGER" in body)
        == ["app.isolation.conf", "backup.isolation.conf"]
        and [u for u, body in units.items() if "JARVIS_SENTINEL_MODE" in body] == ["app.isolation.conf"])
+    hc = units.get("hermes-config.yaml", "")
+    ck("hermes config: provider anthropic through the app's model proxy",
+       "  provider: anthropic\n" in hc and "  base_url: http://127.0.0.1:8720/api/model/anthropic\n" in hc, hc[-300:])
+    ck("hermes config: the manifest's agent_model", f"  default: {m['agent_model']}\n" in hc)
+    ck("hermes config carries no key", "api_key" not in hc and "sk-ant" not in hc)
+    ck("the app (only) reads the platform model key file",
+       [u for u, body in units.items() if "/etc/jarvis/anthropic.env" in body] == ["app.isolation.conf"]
+       and "EnvironmentFile=-/etc/jarvis/anthropic.env\n" in units.get("app.isolation.conf", ""))
     decisions = "Environment=JARVIS_APPROVAL_DECISIONS=/opt/isoprint/app-private/approvals_decisions.jsonl\n"
     for u in ("app.isolation.conf", "job.isolation.conf", "backup.isolation.conf"):
         ck(f"{u} keeps approval decisions app-only", decisions in units.get(u, ""))
@@ -108,6 +116,8 @@ def main() -> int:
          "isolation: none is for captured loopback scratch only"),
         ("two_user on the shared venv", {"venv": "shared"}, "requires venv: platform"),
         ("two_user with no sentinel_mode", {"sentinel_mode": None}, "requires sentinel_mode"),
+        ("no agent_model", {"agent_model": None}, "manifest missing required field agent_model"),
+        ("an agent_model that is not a Claude id", {"agent_model": "gpt-4o"}, "agent_model must be a Claude model id"),
         ("two_user with a misspelt sentinel_mode", {"sentinel_mode": "shdow"}, "requires sentinel_mode"),
         ("slug too long for user names", {"slug": "a" * 20}, "too long for the two-user layout"),
     ]

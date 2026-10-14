@@ -11,6 +11,7 @@ Exit 0 only if every check passes.
 """
 import argparse
 import hashlib
+import hmac
 import json
 import re
 import sqlite3
@@ -188,7 +189,48 @@ def main() -> int:
     check(f"app Sentinel mode is shadow or enforce (got {mode!r})", mode in ("shadow", "enforce"))
     check("app Sentinel ledger is in app-private",
           app_env.get("JARVIS_SENTINEL_LEDGER") == str(PRIV / "sentinel_ledger.jsonl"))
-    check("hermes/.env holds API_SERVER_KEY only", sorted(env_file(H / ".env")) == ["API_SERVER_KEY"])
+    agent_env = env_file(H / ".env")
+    check("hermes/.env holds API_SERVER_KEY and ANTHROPIC_API_KEY only",
+          sorted(agent_env) == ["ANTHROPIC_API_KEY", "API_SERVER_KEY"])
+    check("…and its ANTHROPIC_API_KEY is the stand-in (= API_SERVER_KEY), not a model key",
+          bool(agent_env.get("API_SERVER_KEY")) and hmac.compare_digest(
+              agent_env.get("ANTHROPIC_API_KEY", "").encode(), agent_env["API_SERVER_KEY"].encode()))
+
+    print("── model: Claude through the app's proxy; the agent never holds the model key")
+    hcfg = (H / "config.yaml").read_text()
+    check("hermes config: provider anthropic, base_url = this app's /api/model/anthropic",
+          "provider: anthropic" in hcfg and f"base_url: http://127.0.0.1:{port}/api/model/anthropic" in hcfg)
+    check("agent cannot list /etc/jarvis", sh(AGENT, "ls /etc/jarvis >/dev/null") != 0)
+    check("root canary can list /etc/jarvis", sh("root", "ls /etc/jarvis >/dev/null") == 0)
+    model_file = Path("/etc/jarvis/anthropic.env")
+    real = env_file(model_file).get("ANTHROPIC_API_KEY", "") if model_file.is_file() else ""
+    if real:
+        check("app process ANTHROPIC_API_KEY matches /etc/jarvis/anthropic.env (sha256)",
+              hashlib.sha256(app_env.get("ANTHROPIC_API_KEY", "").encode()).digest()
+              == hashlib.sha256(real.encode()).digest())
+        check("gateway process does not hold the model key", real not in gw_env.values())
+    else:
+        check("no platform model key installed: the app process has none either", "ANTHROPIC_API_KEY" not in app_env)
+    probe_model = (
+        "import json,os,urllib.request,urllib.error,sys\n"
+        f"req=urllib.request.Request('http://127.0.0.1:{port}/api/model/anthropic/v1/messages',method='POST',"
+        "data=json.dumps({'model':sys.argv[1],'max_tokens':1,'messages':[{'role':'user','content':'hi'}]}).encode(),"
+        "headers={'x-api-key':os.environ['PROBE_KEY'],'anthropic-version':'2023-06-01','content-type':'application/json'})\n"
+        "try:\n    r=urllib.request.urlopen(req,timeout=60); print(r.status, json.loads(r.read()).get('type'))\n"
+        "except urllib.error.HTTPError as e:\n    print(e.code, (json.loads(e.read() or b'{}').get('error') or {}).get('type'))\n")
+    model_name = re.search(r"(?m)^\s*default:\s*(\S+)", hcfg)
+    def model_probe(key, model):
+        return subprocess.run(["runuser", "-p", "-u", AGENT, "--", PY, "-c", probe_model, model],
+                              env={"PATH": "/usr/bin:/bin", "PROBE_KEY": key}, cwd="/",
+                              capture_output=True, text=True, timeout=90).stdout.strip()
+    got = model_probe(agent_env.get("API_SERVER_KEY", ""), model_name.group(1) if model_name else "")
+    if real:
+        check(f"agent's stand-in through the proxy gets a model answer (got {got!r})", got == "200 message")
+    else:
+        check(f"agent's stand-in through the proxy: 503 model_not_configured (got {got!r})",
+              got == "503 model_not_configured")
+    bad = model_probe("wrong-key", "x")
+    check(f"canary: a wrong key is refused by the proxy (got {bad!r})", bad.startswith("401"))
     units = [p for p in Path("/etc/systemd/system").glob(f"{slug}-*") if p.is_file()] + \
             list(Path("/etc/systemd/system").glob(f"{slug}-*.d/*.conf"))
     secret_rx = re.compile(r"(APP_GOOGLE_TOKEN_KEY|APP_PASSPHRASE|APP_SESSION_SECRET|API_SERVER_KEY)=")

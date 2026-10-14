@@ -260,17 +260,19 @@ def mint_isolated_secrets(slug: str, hermes_home: Path) -> str:
 
 
 def trim_agent_env(hermes_home: Path) -> None:
-    """Leave the agent's hermes/.env holding API_SERVER_KEY only."""
+    """Leave the agent's hermes/.env holding API_SERVER_KEY and, as
+    ANTHROPIC_API_KEY, the same value: the stand-in Hermes sends to the app's
+    model proxy. No real model key is ever written here."""
     env = hermes_home / ".env"
     keep = [ln for ln in env.read_text().splitlines() if ln.startswith("API_SERVER_KEY=")]
     if len(keep) != 1:
         die(f"expected exactly one API_SERVER_KEY line in {env}, found {len(keep)}")
-    env.write_text(keep[0] + "\n")
+    env.write_text(keep[0] + "\n" + "ANTHROPIC_API_KEY=" + keep[0].split("=", 1)[1] + "\n")
     os.chmod(env, 0o600)
     keys = [ln.split("=", 1)[0] for ln in env.read_text().splitlines() if "=" in ln]
-    if keys != ["API_SERVER_KEY"]:
+    if keys != ["API_SERVER_KEY", "ANTHROPIC_API_KEY"]:
         die(f"{env} still holds {keys} after trimming")
-    log(f"{env}: API_SERVER_KEY only")
+    log(f"{env}: API_SERVER_KEY and its model-proxy stand-in only")
 
 
 def apply_isolation(opt: Path, n: Dict[str, str], data_dirs: List[Path]) -> None:
@@ -802,6 +804,7 @@ def common_map(manifest: dict, posture: dict, fernet: str, force: str,
         "VENV_PYTHON": str(venv_python(manifest)),
         "HERMES_PYTHON": str(HERMES_PYTHON),
         "APP_PORT": str(int(manifest["ports"]["app"])),
+        "AGENT_MODEL": str(manifest.get("agent_model") or ""),
         "GATEWAY_PORT": str(int(manifest["ports"]["gateway"])),
         "HOOKS_PORT": str(int(manifest["ports"]["hooks"])),
         "WRITES_LINE": writes,
@@ -916,9 +919,11 @@ def provision(manifest_path: Path) -> None:
     check_slug(slug)
     for key in ("display_name", "timezone", "assistant_address", "agent_display_name",
                 "mailbox_strategy", "ports", "public_origin", "skills_origin_sha",
-                "curator_packs", "writes_posture", "venv"):
+                "curator_packs", "writes_posture", "venv", "agent_model"):
         if key not in manifest:
             die(f"manifest missing required field {key}")
+    if not re.fullmatch(r"claude-[a-z0-9.-]{1,60}", str(manifest["agent_model"])):
+        die("agent_model must be a Claude model id (claude-...)")
     if manifest["mailbox_strategy"] != "dedicated_account":
         die("mailbox_strategy must be dedicated_account (send_as_alias is rejected)")
     if str(manifest["agent_display_name"]).strip().lower() == "jarvis":
@@ -1191,7 +1196,7 @@ def print_units(manifest_path: Path, posture_override: str | None) -> None:
     print(f"# print-units posture={posture['posture']} cookie={posture['cookie']} "
           f"writes_armed={posture['writes_armed']} oauth={posture['oauth_template']}")
     names = ["app.service", "gateway.service", posture["oauth_template"],
-             "preflight.sh", "backup.service", "backup.timer"]
+             "preflight.sh", "backup.service", "backup.timer", "hermes-config.yaml"]
     if manifest.get("isolation") == "two_user":
         names[2] = "oauth.isolated.conf"
         names += ["app.isolation.conf", "gateway.isolation.conf", "job.isolation.conf", "backup.isolation.conf"]

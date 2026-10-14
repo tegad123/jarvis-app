@@ -8,3 +8,10 @@ platforms:
     port: {{GATEWAY_PORT}}
 curator:
   enabled: false
+# Claude through the tenant app's model proxy: the app holds the real key and
+# Hermes sends its own API_SERVER_KEY (hermes/.env ANTHROPIC_API_KEY) as a
+# stand-in. The path must end in /anthropic or Hermes ignores base_url.
+model:
+  provider: anthropic
+  default: {{AGENT_MODEL}}
+  base_url: http://127.0.0.1:{{APP_PORT}}/api/model/anthropic

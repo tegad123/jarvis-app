@@ -76,6 +76,8 @@ if broker_mod.sentinel_mode() not in ("enforce", broker_mod.SHADOW):
     # A misspelt "shadow" must not quietly run as enforce.
     raise SystemExit("REFUSED: JARVIS_SENTINEL_MODE must be enforce or shadow")
 app.include_router(broker_mod.router)
+from app import model_proxy as model_proxy_mod  # noqa: E402
+app.include_router(model_proxy_mod.router)
 
 
 def _uvicorn_log_config() -> dict:

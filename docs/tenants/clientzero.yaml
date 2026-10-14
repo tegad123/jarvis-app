@@ -34,6 +34,7 @@ skills_origin_sha: 15ea39dcc0499f3fc9cb792411e9234f394d8785
 curator_packs: omit
 
 writes_posture: captured
+agent_model: claude-sonnet-4-6  # placeholder until spec open question 2 (model choice) is decided
 venv: shared
 isolation: none
 
