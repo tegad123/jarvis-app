@@ -16,8 +16,13 @@ emails and texts to real clients. Act accordingly.
 - REHEARSAL: app 8730, gateway 8672, /opt/rehearsal. A real mailbox, writes
   BLOCKED since 2026-10-13. The app runs as jarvis-rehearsal, the gateway as
   jarvis-rehearsal-agent; app secrets are in /etc/jarvis/rehearsal-app.env and
-  /opt/rehearsal/app-private (docs/platform/decisions.md). It is a tenant, NOT
-  a test target: never point verify scripts or sandboxes at its config or stores.
+  /opt/rehearsal/app-private (docs/platform/decisions.md). Since 2026-10-14
+  it runs the current layout (broker, Sentinel shadow, model proxy, Postgres
+  jarvis_rehearsal) at app 6d847b0 / skills 74c0fb1, upgraded in place with
+  `--upgrade`. Its app unit still lacks JARVIS_APP_ROOT (fix c96c500), so its
+  broker reports the mailbox as not_connected until a human-approved restart.
+  It is a tenant, NOT a test target: never point verify scripts or sandboxes
+  at its config or stores.
 - ISOCHECK: app 8740, gateway 8682, /opt/isocheck. A scratch tenant made by
   `scripts/provision_tenant.py` (isolation: two_user, writes blocked, no
   mailbox, `.invalid` addresses). It is the on-host test target for platform
@@ -33,7 +38,6 @@ emails and texts to real clients. Act accordingly.
 - Two-user tenants run the agent in broker mode: Google calls, counters and
   channel creation go through the app's loopback /api/broker; the threads and
   accounts databases are in app-private and the agent cannot open them.
-  Rehearsal predates this (shared threads database, no broker).
 - POSTGRES 16 (cluster 16/main): unix socket only (no TCP listener), peer
   auth only, configured by scripts/setup_postgres.py. Each two-user tenant
   has database jarvis_<slug>; only its app OS user can connect, as
@@ -54,6 +58,13 @@ emails and texts to real clients. Act accordingly.
   closed. To turn one off on a running tenant: edit the manifest, then
   `provision_tenant.py --manifest M --reconfigure` (the same path changes
   display names, timezone and models without re-provisioning).
+- Moving an existing two-user tenant to new commits or a newer layout:
+  `provision_tenant.py --manifest M --upgrade [--restart-approved]`. It keeps
+  data, secrets and the OAuth client, snapshots /opt/<slug> and its units to
+  /root/backups/<slug>/upgrade-<stamp>/, and restores that snapshot by itself
+  if app or gateway is not healthy within 120 s. Prove it first with
+  docs/platform/verify_upgrade.py (builds a replica of rehearsal's tree,
+  never its data).
 - Tenant agents reach Claude only through their app's model proxy
   (/api/model/anthropic). The platform key belongs in
   /etc/jarvis/anthropic.env (root 600, installed by a human); the agent

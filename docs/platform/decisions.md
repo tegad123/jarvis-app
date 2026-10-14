@@ -309,6 +309,37 @@ Order on rehearsal (each step needs its own restart yes):
   - Owner passphrases are in each tenant's app env file and were never printed. A human hands them over.
 - **Memory:** each tenant uses about 200 MB (app about 74 MB, gateway about 126 MB). About 1.5 GB is available with all five tenants and live running.
 
+## Decided 2026-10-14: rehearsal moved to the platform layout in its approved restart window
+
+**Approval (human, verbatim in the conversation):** "Yes, one restart window", on these conditions: the full verify gate green on the exact commits first; take the agent lock and report posture blocked and `JARVIS_ALLOW_WRITES` unset; broker, Sentinel and model proxy behind switches; after the restart, the isolation proof plus a refresh, agent refused by Postgres and the OAuth client, and a held write as "would have"; automatic rollback within 2 minutes; report, release the lock, push.
+
+- **How: `provision_tenant.py --upgrade`.** Rehearsal's two-user layout was made by hand in window 1, so re-provisioning would have meant deleting it. `--upgrade` instead:
+  - stages the new app and skills clones and renders their config while the old version still runs;
+  - stops the tenant and snapshots `/opt/<slug>` plus its units (`/root/backups/<slug>/upgrade-<stamp>/opt.tar`, `units.tar`, root 600);
+  - swaps the code in, carrying skill `data/` dirs and `jarvis-app/data` over;
+  - copies the shared threads database behind the app with the SQLite backup API, checking row counts table by table;
+  - archives every old drop-in, renders units fresh, re-trims the agent `.env`, and applies ownership without replacing the app's databases or OAuth client (a refresh token only works with the client that issued it);
+  - creates the tenant's Postgres database and starts the tenant.
+  If app or gateway is not healthy (unit active, `/api/ping`, gateway `/health` ok, no `JARVIS_ALLOW_WRITES`) within 120 s, it restores the snapshot, drops the new database after dumping it, and restarts the old version. It refuses a mailbox-connected tenant without `--restart-approved`, a manifest that arms writes, and legacy approval files holding records.
+- **Proof before the restart:**
+  - `docs/platform/verify_upgrade.py` 38/38 at `6d847b0`. It builds a replica of rehearsal's tree (same commits, rendered config, preflight, hand-made drop-ins and modes; fresh secrets; no data copied) and seeds tasks, leads, a thread, a counter, an account and skill data files.
+  - A commit whose app cannot start rolled back by itself: old commits, byte-identical units, no database or pg_hba rule left, nothing lost, old version healthy.
+  - The real upgrade kept every row and file, moved threads behind the app (agent denied, the shared tasks database still readable as the twin), archived `writes.conf` and `10-tree.conf`, and passed `prove_isolation.py` 119/119.
+  - Canaries:
+    - Wiping the app databases, skipping the threads move and keeping old drop-ins failed 8 checks; with the app databases wiped, the app still reported healthy, which is why the verify checks data separately.
+    - A rollback that does not restore units failed its 3 checks.
+  - Full sandbox gate (21 suites) green at `6d847b0`.
+- **The window (2026-10-14 04:54 UTC):**
+  - Before the restart: lock taken; posture blocked; `JARVIS_ALLOW_WRITES` absent from both units and the env file; `runtime.safety.allow_writes` false.
+  - `--upgrade --restart-approved` finished in 10 s with app and gateway healthy; no rollback.
+  - Data delta: tasks, leads, threads, the account and the connected Google row unchanged; the OAuth client and both skill data files byte-identical. Counters grew from 4 to 10 rows, from the proof runs.
+- **After the restart:** `prove_isolation.py --slug rehearsal --expect-app-source tenant_connection --refresh-check` passed 118 of 121.
+  - Passed: a real token refresh as the app user (`refreshed_at` moved, no error); the agent refused by pg_hba three ways; the agent denied the OAuth client; the agent's send through the broker held, with one audit row, its proposal and one "would have" feed line; and the rest of the isolation proof.
+  - **Failed: 3 checks, one cause.** The app unit has no `JARVIS_APP_ROOT`, so `google_creds` inside the app cannot find the connection and the broker reports the connected mailbox as `not_connected`. Window 1's `writes.conf` set it, and the upgrade archived that drop-in. The templates never carried it, and the proof's probe supplied it itself, so new tenants (no mailbox, `not_connected` either way) could not show it.
+  - Fixed in `c96c500`: the variable is in the app and job templates; the proof reads it from the running process and its probe no longer supplies it (`verify_provision_isolation.py` 67/67, canary fails 1). Eddie, Blake, Martin and isocheck were reconfigured and pass 120/120.
+  - **Rehearsal needs one more restart for it** (`--reconfigure --restart-approved`). That is a second restart of a mailbox-connected tenant, so it waits for a human yes. Until then rehearsal is safe (practice mode, writes blocked) but the agent cannot read its mail.
+- **Known gap:** `google_creds` returning `not_connected` when it cannot find the app is a silent fallback. The proof now catches the cause on every tenant, but the skills code should log and count it.
+
 ## Decided (from the spec, recorded 2026-10-10)
 
 - Customer #1: 34 Dev team.
