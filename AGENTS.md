@@ -23,6 +23,13 @@ emails and texts to real clients. Act accordingly.
   mailbox, `.invalid` addresses). It is the on-host test target for platform
   work; the lead agent may restart or re-provision it under the agent lock.
   `scripts/prove_isolation.py --slug isocheck` proves its isolation.
+- EDDIE, BLAKE, MARTIN: apps 8750 / 8760 / 8770, gateways 8752 / 8762 / 8772,
+  /opt/<slug>, manifests docs/tenants/<slug>.yaml. Each person's own Jarvis in
+  practice mode (two-user, sentinel shadow, writes blocked), no Google
+  connected, placeholder mailboxes `<slug>-assistant@assistant.invalid`.
+  Connecting a real mailbox is a human STOP gate; after that, restarting
+  the tenant is too (`--reconfigure` refuses without `--restart-approved`).
+  The lead may restart them under the agent lock while no mailbox is connected.
 - Two-user tenants run the agent in broker mode: Google calls, counters and
   channel creation go through the app's loopback /api/broker; the threads and
   accounts databases are in app-private and the agent cannot open them.

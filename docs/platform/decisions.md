@@ -293,6 +293,22 @@ Order on rehearsal (each step needs its own restart yes):
 - The legacy free-text `approval_handler.py` token path still exists in the skills; it needs SMTP, which two-user tenants do not have.
 - The usage day boundary is UTC; prices are provisional.
 
+## Decided 2026-10-14: Eddie, Blake and Martin each have their own Jarvis in practice mode (platform build item 7)
+
+**Approval (human, verbatim in the conversation):** "Provision all three now in shadow mode with provisional values; the agents can rename theirs later." Display names "Eddie's Assistant", "Blake's Assistant", "Martin's Assistant", timezone America/Chicago. Mailbox domain changed to `assistant.invalid` by the human (see the placeholder note above).
+
+- **Tenants:** `docs/tenants/{eddie,blake,martin}.yaml`, provisioned from app `3a349fb`, skills `74c0fb1`. Each has two-user isolation (`jarvis-<slug>` app, `jarvis-<slug>-agent` gateway), its own Postgres database `jarvis_<slug>`, sentinel shadow, writes blocked, switches on, claude-sonnet-5-5 and claude-haiku-5-5, loopback only (apps 8750/8760/8770, gateways 8752/8762/8772), a nightly backup timer, no tunnel, and no Google account.
+- **Proof:**
+  - `prove_isolation.py` 119/119 for each of eddie, blake and martin. This includes the agent's send through the broker held with one audit row, its proposal stored and one "would have" feed line; the agent refused by Postgres; the agent's key refused on approvals.
+  - `verify_postgres.py` 72/72: every agent user, including the three new ones, is refused for its own database, every other tenant's, the verify database and `postgres`.
+  - Cross-tenant file probe: each new agent was denied all 57 reads of the other tenants' secrets, private state, Hermes config and runtime config; each can read its own runtime config (presence twin).
+  - Units report posture blocked, `JARVIS_ALLOW_WRITES` absent, `JARVIS_SENTINEL_MODE=shadow`.
+- **Not yet usable by the people themselves:**
+  - No model key is installed (`/etc/jarvis/anthropic.env`, a human action), so chat answers 503 `model_not_configured`.
+  - There is no tunnel, so they can only be reached from the host. Ingress (cloudflared) is outside the agent's permissions.
+  - Owner passphrases are in each tenant's app env file and were never printed. A human hands them over.
+- **Memory:** each tenant uses about 200 MB (app about 74 MB, gateway about 126 MB). About 1.5 GB is available with all five tenants and live running.
+
 ## Decided (from the spec, recorded 2026-10-10)
 
 - Customer #1: 34 Dev team.
