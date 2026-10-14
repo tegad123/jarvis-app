@@ -8,6 +8,7 @@ endpoints instead:
     GET  /api/broker/google/status    -> {source}
     POST /api/broker/outbound         {kind, platform, destinations, summary, content}
     POST /api/broker/approvals        {skill, summary, payload, kind, requires_role}
+    GET  /api/broker/usage?days=N     -> {days: [model tokens and cost per UTC day], currency, day_boundary}
     POST /api/broker/counters         {op: bump|record, ...}
     POST /api/broker/channels         {op: ensure_deal_channel, name}
 

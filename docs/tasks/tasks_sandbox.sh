@@ -130,6 +130,7 @@ stop)
     for _ in $(seq 1 40); do kill -0 "$PID" 2>/dev/null || break; sleep 0.25; done
     kill -9 "$PID" 2>/dev/null || true
   fi
+  "$PYTHON" "$APP/scripts/pg_tenant.py" verify-db drop "$PGDB" >/dev/null 2>&1 || true
   echo "tasks sandbox stopped"
   ;;
 

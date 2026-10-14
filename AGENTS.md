@@ -8,7 +8,7 @@ emails and texts to real clients. Act accordingly.
 ## Topology — memorize before touching anything
 - LIVE app:    port 8700, runs from /root/jarvis-app. NEVER modify, restart,
   or test against live. It serves a real user.
-- VERIFY SANDBOX: port 8711, `docs/tasks/tasks_sandbox.sh start`, runs the
+- VERIFY SANDBOX: port 8711 (suites also use 8712-8719), `docs/tasks/tasks_sandbox.sh start`, runs the
   code under test (VERIFY_APP_ROOT / VERIFY_SKILLS_ROOT) against the frozen
   verify fixture at /opt/jarvis-verify-fixture (testco's .example config and
   stores, throwaway secrets, mock Google OAuth, dead gateway port). All
@@ -27,10 +27,26 @@ emails and texts to real clients. Act accordingly.
   channel creation go through the app's loopback /api/broker; the threads and
   accounts databases are in app-private and the agent cannot open them.
   Rehearsal predates this (shared threads database, no broker).
-- Every broker write goes through Sentinel (app/sentinel.py) and is recorded
-  in app-private/sentinel_ledger.jsonl. Two-user manifests set
-  sentinel_mode; shadow (ISOCHECK, and every checked-in manifest) logs each
-  write and runs none. The ledger is the evidence for what a tenant tried.
+- POSTGRES 16 (cluster 16/main): unix socket only (no TCP listener), peer
+  auth only, configured by scripts/setup_postgres.py. Each two-user tenant
+  has database jarvis_<slug>; only its app OS user can connect, as
+  jarvis_<slug>_app. Agent users have no pg_hba rule and are refused.
+  Approvals, grants, the append-only audit log (`actions`), held proposals
+  and model usage live there (scripts/pg_tenant.py; schema via Alembic in
+  app/migrations). Verify sandboxes use jarvis_verify_* databases as root.
+  Live keeps its SQLite and never connects.
+- Every broker write and every outbound post, channel or message goes through
+  Sentinel (app/sentinel.py) and is recorded in the tenant's `actions` table.
+  Two-user manifests set sentinel_mode; shadow (ISOCHECK, and every
+  checked-in manifest) holds each such action, keeps the full proposal for
+  the owner and writes a "would have" feed line. The audit log is the
+  evidence for what a tenant tried. Approvals are app-only: the agent can
+  propose through /api/broker/approvals and never decide.
+- Per-piece switches on two-user tenants: JARVIS_SWITCH_BROKER, _SENTINEL,
+  _MODEL_PROXY (manifest `switches`, rendered into the drop-ins). Off fails
+  closed. To turn one off on a running tenant: edit the manifest, then
+  `provision_tenant.py --manifest M --reconfigure` (the same path changes
+  display names, timezone and models without re-provisioning).
 - Tenant agents reach Claude only through their app's model proxy
   (/api/model/anthropic). The platform key belongs in
   /etc/jarvis/anthropic.env (root 600, installed by a human); the agent
@@ -43,7 +59,12 @@ emails and texts to real clients. Act accordingly.
 - Live runs from the venv at /root/jarvis-app/.venv; rehearsal and every
   two-user tenant from its copy at /opt/jarvis/venv (2026-10-13). A pip
   install into either changes a running tenant. Do not install packages
-  without flagging it first.
+  without flagging it first. Install into the platform venv only as
+  `/opt/jarvis/venv/bin/python -m pip`, never `/opt/jarvis/venv/bin/pip`
+  (a copied venv's scripts can still point at live's interpreter; one did,
+  decisions.md 2026-10-14). The provisioner and prove_isolation refuse any
+  platform venv script whose interpreter is under /root. Live's venv must
+  never get psycopg.
 
 ## Hard rules
 1. Work on a branch off main. Never commit directly to main.

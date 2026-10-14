@@ -1167,7 +1167,7 @@ def create_platform_db(jarvis: Path, slug: str, app_user: str) -> None:
     """Database, roles and peer rule from the tenant's own code, so the schema
     matches what it runs. Only the app user gets a rule."""
     out = run([str(PLATFORM_VENV), str(jarvis / "scripts" / "pg_tenant.py"), "create", slug,
-               "--app-user", app_user]).stdout.strip().splitlines()[-1]
+               "--app-user", app_user], capture_output=True, text=True).stdout.strip().splitlines()[-1]
     if json.loads(out).get("dsn") != pg_dsn(slug):
         die(f"pg_tenant created a database whose DSN is not {pg_dsn(slug)}")
     log(f"platform database jarvis_{slug} at schema {json.loads(out)['schema']}, app role only")
