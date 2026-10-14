@@ -67,7 +67,7 @@ Order on rehearsal (each step needs its own restart yes):
 
 **Found while planning:** with an unreadable connection store, `431525f` `google_creds` logs `connection row read failed` but then refuses with `no stored connection` ("reconnect Google"). On an isolated agent, that sentence is false: the tenant is connected, and the agent cannot read the connection. **Fixed in skills `8436f6e` (human yes):** a read failure raises `GoogleConnectionUnreadable` (not a `GoogleNotConnected`), counts `google_creds_connection_unreadable`, and `source()` reports `connection_unreadable`. `_shared/tests/test_google_creds_unreadable.py` runs against the real app modules. It fails on `431525f`, passes on `8436f6e`, and has a presence twin for the not-connected path. Rehearsal is pinned to `8436f6e`, not `431525f`.
 
-**Threads database stays shared: a known gap to close with the broker (human decision).** The isolation moves only `jarvis_accounts.db` (PIN hashes and the encrypted Google connection) into the app-only directory. `jarvis_threads.db` stays in the shared, group-writable `hermes/state`. Agent-side skills write it: `app_channels` creates deal channels and `app_counters` bumps counters, including the `google_creds` counters above. Moving it would make those writes fail with only a stderr line. The cost: the agent user can read every thread body in the tenant. The broker work closes this by giving the agent app-side calls for channels and counters, after which the threads database moves to the app-only directory.
+**Threads database stays shared: a known gap to close with the broker (human decision).** The isolation moves only `jarvis_accounts.db` (PIN hashes and the encrypted Google connection) into the app-only directory. `jarvis_threads.db` stays in the shared, group-writable `hermes/state`. Agent-side skills write it: `app_channels` creates deal channels and `app_counters` bumps counters, including the `google_creds` counters above. Moving it would make those writes fail with only a stderr line. The cost: the agent user can read every thread body in the tenant. The broker work closes this by giving the agent app-side calls for channels and counters, after which the threads database moves to the app-only directory. *Closed for newly provisioned tenants on 2026-10-14 (platform build item 4, below); rehearsal still has the gap.*
 
 **The gateway must name the accounts path.** `app/accounts.py` creates its parent directory and database when they are missing. A gateway that falls back to the default `hermes/state/jarvis_accounts.db` after the move would get a fresh, empty database in the shared directory and report "no stored connection". The isolation drop-in therefore sets `JARVIS_ACCOUNTS_DB` on the gateway to the app-only path, so its read fails as unreadable, and the isolation proof checks that no stray accounts database appears.
 
@@ -156,6 +156,32 @@ Order on rehearsal (each step needs its own restart yes):
   - The accounts database is created lazily, so it did not exist in `app-private` until first use. It is now pre-created empty, app 600.
 - **Kept:** `isocheck` (8740/8682) stays as the on-host test target; see `AGENTS.md` topology.
 - **Rehearsal gap, needs a human yes (it touches `/opt/rehearsal/hermes`, `AGENTS.md` rule 3):** rehearsal has no `activity_feed.jsonl`, `approvals.jsonl` or `approvals_decisions.jsonl` yet. Whichever user creates one first will make it unwritable for the other. The fix is to pre-create the three files as `jarvis-rehearsal-agent:rehearsal` 660. No restart is needed.
+
+## Decided 2026-10-14: app-side Google broker; the threads database leaves shared state (platform build item 4)
+
+**Approval (human):** item 4 of the platform build goal: "App-side Google broker: agent requests Gmail/Calendar actions through an app endpoint and never holds tokens. Move threads-DB writes behind it too." This closes the threads-database gap recorded above, for newly provisioned tenants.
+
+- **The endpoint:** `app/broker.py`, `/api/broker/*`.
+  - Loopback only; a request carrying a forwarding header (`CF-Connecting-IP` and the like) is refused even with the key. Auth is `Authorization: Bearer {API_SERVER_KEY}`, the key the agent already holds to call its own gateway.
+  - `POST /google` runs one method from a fixed allowlist (Gmail v1: profile, messages list/get/attachments, threads, history, labels, send, modify, watch, stop; Calendar v3: calendarList.list, events list/get/insert/patch/delete), using `google_creds.credentials()` inside the app process. A method off the list is 403 and counted.
+  - Writes need `write_guard.writes_allowed()`; `messages.send` also passes `outbound_boundary.check` on the parsed recipients. Both refusals are counted (`broker_google_write_refused`, `broker_google_recipient_refused`) and come back to the skill as `WritesDisabled`.
+  - `GET /google/status`, `POST /counters` (bump, record) and `POST /channels` (`ensure_deal_channel`) cover the agent's other reasons to open `jarvis_threads.db`.
+- **Skills side (jarvis-skills `0edd352`):** setting `JARVIS_APP_BROKER_URL` puts `google_creds`, `app_counters` and `app_channels` in broker mode. `gmail()` and `calendar()` return a proxy with the same call shape as the Google client; errors map back to `GoogleNotConnected`, `HttpError` (with Google's status) or `WritesDisabled`. `credentials()` and `gspread_client()` raise `TokensAreAppSide`, counted. `create_calendar_event` and `meeting-briefing/lib_google` moved off raw access tokens onto `google_creds`.
+- **Provisioner:** the two-user gateway drop-in sets `JARVIS_APP_BROKER_URL=http://127.0.0.1:{app port}`. App, jobs, backup and gateway all name `app-private/jarvis_threads.db` (pre-created app 600; the agent is denied it, so a direct open fails loudly). `jarvis_threads.db` is no longer in `SHARED_STATE`. `backup_tenant.py` honours `JARVIS_THREADS_DB`, or it would have stopped backing the database up without saying so. The app refuses to boot if it is given a broker URL.
+- **Found on the way:** `ensure_deal_channel` looked up existing channels with `list_threads()` and no viewer. Since channel scoping, that returns no channels, so every call opened a duplicate deal channel. The broker and the in-process path now look up with `unscoped=True`. Any tenant on skills older than `0edd352` with a scoped app still has this bug.
+- **Proof:**
+  - `docs/broker/verify_broker.py` 41/41 against a fake Google in two sandboxes (8712 writes off, 8713 writes on behind `.example`). It covers the rewritten callers, invoked as the skills invoke them. Canaries: removing the write gate, the recipient check or the key check each fails 2–3 checks; the pre-change skills fail 23.
+  - `verify_provision_isolation.py` 37/37; dropping the broker URL from the gateway template fails two.
+  - `prove_isolation.py --slug isocheck` 91/91 on isocheck re-stamped at app `ec1a02c`, skills `0edd352`. On the host:
+    - The agent's `source()` comes from the app through the broker; `credentials()` is refused; a send is refused by the blocked posture and counted app-side; a counter bump lands in the app-private database.
+    - Without the broker URL the agent is refused as unreadable and writes nothing.
+    - With the wrong expected source, two checks fail (canary).
+  - A real `isocheck-backup` run captured the app-private threads database.
+  - Full sandbox gate green.
+- **Known gaps:**
+  - Sheets: `gspread_client()` and `sheet_tab` refuse in broker mode, and Sheets is not on the allowlist. Sheet-backed skills do not work on a two-user tenant until it is.
+  - The agent still reads and writes the shared tasks and leads databases, the activity feed and the approvals journals. Item 4 moved only the threads database.
+  - **Rehearsal is not migrated.** It still runs app `2b20c5d`, skills from before the broker, and a shared threads database. Moving it means a restart of a tenant with a real mailbox connected: a STOP gate (needs a human yes).
 
 ## Decided (from the spec, recorded 2026-10-10)
 

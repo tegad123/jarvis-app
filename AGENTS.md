@@ -23,6 +23,10 @@ emails and texts to real clients. Act accordingly.
   mailbox, `.invalid` addresses). It is the on-host test target for platform
   work; the lead agent may restart or re-provision it under the agent lock.
   `scripts/prove_isolation.py --slug isocheck` proves its isolation.
+- Two-user tenants run the agent in broker mode: Google calls, counters and
+  channel creation go through the app's loopback /api/broker; the threads and
+  accounts databases are in app-private and the agent cannot open them.
+  Rehearsal predates this (shared threads database, no broker).
 - Two-user tenants get their OAuth client from /etc/jarvis/oauth_client.json
   (root 600). Never read /root/.hermes for provisioning.
 - TESTCO (8710/8652, /opt/testco) was RETIRED 2026-10-13. Archive and rollback:
