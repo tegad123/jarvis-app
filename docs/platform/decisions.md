@@ -337,7 +337,12 @@ Order on rehearsal (each step needs its own restart yes):
   - Passed: a real token refresh as the app user (`refreshed_at` moved, no error); the agent refused by pg_hba three ways; the agent denied the OAuth client; the agent's send through the broker held, with one audit row, its proposal and one "would have" feed line; and the rest of the isolation proof.
   - **Failed: 3 checks, one cause.** The app unit has no `JARVIS_APP_ROOT`, so `google_creds` inside the app cannot find the connection and the broker reports the connected mailbox as `not_connected`. Window 1's `writes.conf` set it, and the upgrade archived that drop-in. The templates never carried it, and the proof's probe supplied it itself, so new tenants (no mailbox, `not_connected` either way) could not show it.
   - Fixed in `c96c500`: the variable is in the app and job templates; the proof reads it from the running process and its probe no longer supplies it (`verify_provision_isolation.py` 67/67, canary fails 1). Eddie, Blake, Martin and isocheck were reconfigured and pass 120/120.
-  - **Rehearsal needs one more restart for it** (`--reconfigure --restart-approved`). That is a second restart of a mailbox-connected tenant, so it waits for a human yes. Until then rehearsal is safe (practice mode, writes blocked) but the agent cannot read its mail.
+  - **Corrective restart, 2026-10-14 19:45 UTC (human yes with three conditions):**
+    - Rehearsal's drop-ins and the four config files `--reconfigure` may rewrite were archived first to `/root/archives/rehearsal-before-approot-20261014T194518Z/` (root 700). The rollback is one command, `sh …/rollback.sh`, and was stated before the restart.
+    - Posture before and after: blocked; `JARVIS_ALLOW_WRITES` absent from both units, the env file and the app process; `allow_writes` false; Sentinel shadow.
+    - `--reconfigure --restart-approved` changed exactly the six app and job drop-ins and came back healthy.
+    - `prove_isolation.py --slug rehearsal --expect-app-source tenant_connection --refresh-check` passed 121/121: the broker now reports `tenant_connection`, and a real refresh moved `refreshed_at`.
+    - Condition 3 (the provisioner bug): the templates carry `JARVIS_APP_ROOT` (`c96c500`), and the post-provision proof checks the running app's value. Eddie, Blake and Martin each have it in the app process and in all six app and job drop-ins.
 - **Known gap:** `google_creds` returning `not_connected` when it cannot find the app is a silent fallback. The proof now catches the cause on every tenant, but the skills code should log and count it.
 
 ## Decided (from the spec, recorded 2026-10-10)

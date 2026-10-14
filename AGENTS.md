@@ -19,8 +19,7 @@ emails and texts to real clients. Act accordingly.
   /opt/rehearsal/app-private (docs/platform/decisions.md). Since 2026-10-14
   it runs the current layout (broker, Sentinel shadow, model proxy, Postgres
   jarvis_rehearsal) at app 6d847b0 / skills 74c0fb1, upgraded in place with
-  `--upgrade`. Its app unit still lacks JARVIS_APP_ROOT (fix c96c500), so its
-  broker reports the mailbox as not_connected until a human-approved restart.
+  `--upgrade`, then restarted once more (human yes) for JARVIS_APP_ROOT.
   It is a tenant, NOT a test target: never point verify scripts or sandboxes
   at its config or stores.
 - ISOCHECK: app 8740, gateway 8682, /opt/isocheck. A scratch tenant made by
