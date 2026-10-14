@@ -524,7 +524,7 @@ def set_status(task_id: str, status: str, by: str) -> Dict[str, Any]:
                 dl = (current.get("deadline") or "")[:10]
                 if not dl:
                     _bump("tasks_completed_no_deadline")
-                elif now[:10] <= dl:
+                elif _today().isoformat() <= dl:
                     _bump("tasks_completed_on_time")
                 else:
                     _bump("tasks_completed_late")

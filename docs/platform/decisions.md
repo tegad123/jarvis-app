@@ -115,6 +115,17 @@ Order on rehearsal (each step needs its own restart yes):
   - `app/inject.py` still defaults its fixtures to the retired `/opt/testco/fixtures`.
   - Rehearsal's gateway has no model provider configured and has never held a conversation (0 sessions), so chat was not testable before or after.
 
+## Decided 2026-10-14: token refresh reads the OAuth client (platform build item 1)
+
+**Approval (human):** item 1 of the platform build goal: "Token refresh fix (YAMIN_OAUTH_CLIENT, app-side only) + verify."
+
+- `build_credentials` takes `client_id`, `client_secret` and `token_uri` from the file `YAMIN_OAUTH_CLIENT` names (`web` or `installed` key), the same file the connect flow uses. Mock mode keeps `mock`/`mock`.
+- No client file, or one without both fields, raises `OAuthClientMissing` before any network call. It logs, bumps `google_connection_oauth_client_missing` and marks the row `needs_reauth` with `last_error=oauth_client_missing`. Before, the same case built a credential that failed later with `RefreshError`.
+- A successful refresh now sets `status=connected`. Before, it cleared `last_error` but left `needs_reauth`, so a connection could never recover without a reconnect.
+- Found by the gate while verifying this, unrelated to Google: `tasks_store` judged "done on time" against the UTC date, not the tenant's, so a task due today and finished in the evening (US time) counted as late. It now uses the tenant date. `verify_metrics.py` caught it only between 00:00 UTC and tenant midnight.
+- **Proof:** `docs/auth/verify_token_refresh.py` 24/24. It runs the real refresh through skills `google_creds.credentials()` against a local fake token endpoint, and checks what was posted, the re-encrypted row and the status. Its built-in canary runs the same case on `2b20c5d`'s `google_connection.py` and gets the production `RefreshError`. Reverting only the status line fails one check. Full sandbox gate green (13 suites); fixture unchanged.
+- **Not deployed.** Rehearsal still runs `2b20c5d` and its connection reads `needs_reauth`. Deploying needs a restart of a tenant with a real mailbox, which is a STOP gate. The stored refresh token was never sent to Google, so it was never rejected. After the restart, the next app-side refresh should succeed and flip the row back to `connected` without a reconnect. That is unproven until it happens.
+
 ## Decided (from the spec, recorded 2026-10-10)
 
 - Customer #1: 34 Dev team.

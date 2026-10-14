@@ -26,6 +26,12 @@ STATUS_NEEDS_REAUTH = "needs_reauth"
 STATUS_DISCONNECTED = "disconnected"
 
 COUNTER_DECRYPT_FAILED = "google_connection_decrypt_failed"
+COUNTER_OAUTH_CLIENT_MISSING = "google_connection_oauth_client_missing"
+DEFAULT_TOKEN_URI = "https://oauth2.googleapis.com/token"
+
+
+class OAuthClientMissing(RuntimeError):
+    """No usable OAuth client file, so a stored grant can never be refreshed."""
 
 
 class ConnectionCipherError(Exception):
@@ -62,12 +68,16 @@ def _decrypt_tokens(cipher: bytes) -> Dict[str, Any]:
     return data
 
 
-def _bump_decrypt_failed() -> None:
+def _bump_counter(name: str) -> None:
     try:
         from . import threads as threads_mod
-        threads_mod.bump_counter(COUNTER_DECRYPT_FAILED)
+        threads_mod.bump_counter(name)
     except Exception:
-        log.error("google_connection: decrypt-failed counter bump failed")
+        log.error("google_connection: counter bump failed (%s)", name)
+
+
+def _bump_decrypt_failed() -> None:
+    _bump_counter(COUNTER_DECRYPT_FAILED)
 
 
 def _mark_last_error(kind: str) -> None:
@@ -165,14 +175,38 @@ def clear() -> None:
 
 
 def write_refreshed_cipher(token_cipher: bytes) -> None:
-    """After credentials.refresh — new cipher, refreshed_at. Encrypt happened outside."""
+    """After credentials.refresh — new cipher, refreshed_at. Encrypt happened outside.
+
+    A successful refresh proves the grant works, so it also clears needs_reauth."""
     conn = accounts._ensure()
     conn.execute(
-        "UPDATE google_connection SET token_cipher=?, refreshed_at=?, last_error=NULL "
-        "WHERE id=1",
-        (token_cipher, _now()),
+        "UPDATE google_connection SET token_cipher=?, refreshed_at=?, last_error=NULL, "
+        "status=? WHERE id=1",
+        (token_cipher, _now(), STATUS_CONNECTED),
     )
     conn.commit()
+
+
+def _oauth_client() -> Dict[str, str]:
+    """client_id, client_secret and token_uri from YAMIN_OAUTH_CLIENT.
+
+    Google refuses a refresh without the client pair, so a missing or unreadable
+    file is a loud OAuthClientMissing, never a credential that fails later."""
+    path = config.oauth_client_path()
+    cfg: Dict[str, Any] = {}
+    if path is not None:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            cfg = data.get("web") or data.get("installed") or {}
+        except (OSError, ValueError) as exc:
+            log.error("google_connection: OAuth client file unreadable (%s)", type(exc).__name__)
+    if not cfg.get("client_id") or not cfg.get("client_secret"):
+        _bump_counter(COUNTER_OAUTH_CLIENT_MISSING)
+        _mark_last_error("oauth_client_missing")
+        log.error("google_connection: no usable OAuth client (YAMIN_OAUTH_CLIENT); refresh is impossible")
+        raise OAuthClientMissing("OAuth client not configured (YAMIN_OAUTH_CLIENT)")
+    return {"client_id": cfg["client_id"], "client_secret": cfg["client_secret"],
+            "token_uri": cfg.get("token_uri") or DEFAULT_TOKEN_URI}
 
 
 def build_credentials():
@@ -232,12 +266,16 @@ def build_credentials():
     scopes = payload.get("scopes") or []
     if isinstance(scopes, str):
         scopes = scopes.split()
+    if config.oauth_mock():
+        client = {"client_id": "mock", "client_secret": "mock", "token_uri": DEFAULT_TOKEN_URI}
+    else:
+        client = _oauth_client()
     return Credentials(
         token=access or None,
         refresh_token=refresh or None,
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id="mock" if config.oauth_mock() else None,
-        client_secret="mock" if config.oauth_mock() else None,
+        token_uri=client["token_uri"],
+        client_id=client["client_id"],
+        client_secret=client["client_secret"],
         scopes=list(scopes) if scopes else None,
         expiry=expiry,
     )
