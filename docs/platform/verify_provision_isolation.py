@@ -85,6 +85,9 @@ def main() -> int:
        sorted(u for u, body in units.items() if dsn in body)
        == ["app.isolation.conf", "backup.isolation.conf", "job.isolation.conf"]
        and "JARVIS_PG_DSN" not in units.get("gateway.isolation.conf", "x"))
+    ck("app and jobs point google_creds at the tenant's app (JARVIS_APP_ROOT); unset it reports not_connected",
+       sorted(u for u, body in units.items() if "Environment=JARVIS_APP_ROOT=/opt/isoprint/jarvis-app\n" in body)
+       == ["app.isolation.conf", "job.isolation.conf"])
     ck("app and jobs carry the sentinel mode; the gateway does not",
        sorted(u for u, body in units.items() if "JARVIS_SENTINEL_MODE=shadow" in body)
        == ["app.isolation.conf", "job.isolation.conf"])

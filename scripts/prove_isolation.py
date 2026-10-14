@@ -220,6 +220,8 @@ def main() -> int:
     check(f"app Sentinel mode is shadow or enforce (got {mode!r})", mode in ("shadow", "enforce"))
     dsn = f"postgresql:///jarvis_{slug}?host=/var/run/postgresql&user=jarvis_{slug}_app"
     check("app process JARVIS_PG_DSN is this tenant's database as its app role", app_env.get("JARVIS_PG_DSN") == dsn)
+    check("app process JARVIS_APP_ROOT is this tenant's app (google_creds finds the connection through it)",
+          app_env.get("JARVIS_APP_ROOT") == str(OPT / "jarvis-app"))
     check("gateway process has no JARVIS_PG_DSN", "JARVIS_PG_DSN" not in gw_env)
     sw = {n: app_env.get(f"JARVIS_SWITCH_{n.upper()}") for n in ("broker", "sentinel", "model_proxy")}
     check(f"app switches are each on or off (got {sw})", all(v in ("on", "off") for v in sw.values()))
@@ -308,8 +310,10 @@ def main() -> int:
              "    import app_counters; app_counters.bump('prove_isolation_broker_bump')\n"
              "print(json.dumps(o))")
 
-    def as_user(user, home, broker=False, send=False):
+    def as_user(user, home, broker=False, send=False, app_root=None):
         e = dict(base_env, HOME=home)
+        if app_root is not None:
+            e["JARVIS_APP_ROOT"] = app_root
         if broker:
             e["JARVIS_APP_BROKER_URL"] = broker_url
         argv = (["runuser", "-u", user, "--", "env", "-i"] + [f"{k}={v}" for k, v in e.items()]
@@ -378,7 +382,7 @@ def main() -> int:
           counter("google_creds_connection_unreadable") - u0 == 0)
     check("not-connected counter did not move", counter("google_creds_not_connected") - n0 == 0)
     check("no stray accounts db in hermes/state", not (H / "state/jarvis_accounts.db").exists())
-    app_out, _ = as_user(APP, str(PRIV))
+    app_out, _ = as_user(APP, str(PRIV), app_root=app_env.get("JARVIS_APP_ROOT", ""))
     check(f"app source() = {args.expect_app_source} (got {app_out.get('source')})",
           app_out.get("source") == args.expect_app_source)
 
@@ -393,7 +397,7 @@ def main() -> int:
         e = dict(base_env, HOME=str(PRIV), **{k: v for k, v in app_env.items()
                                              if k.startswith(("APP_", "YAMIN_", "JARVIS_PG", "JARVIS_SWITCH"))})
         # Secrets travel in the environment, never in argv (argv is world-readable in /proc).
-        p = subprocess.run(["runuser", "-p", "-u", APP, "--", PY, "-c", refresh], env=e,
+        p = subprocess.run(["/usr/sbin/runuser", "-p", "-u", APP, "--", PY, "-c", refresh], env=e,
                            capture_output=True, text=True, timeout=120, cwd="/")
         try:
             r = json.loads(p.stdout.strip().splitlines()[-1])
