@@ -28,7 +28,7 @@ outbound_suffix_policy: production
 skill_loadout: base
 skill_loadout_optional: []
 
-skills_origin_sha: f026b7573a13a645a8f7df2b40eac04bfb37486f
+skills_origin_sha: 8436f6ee1ab3c096c062dff6c3cf197b657dc549
 curator_packs: omit
 
 writes_posture: blocked

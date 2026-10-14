@@ -65,7 +65,22 @@ Order on rehearsal (each step needs its own restart yes):
    - It is a send-path change and may add a dependency, so its design and build each need an explicit human yes (`AGENTS.md` rule 6). Sending through the broker stays behind `gated_send`.
    - Until it ships, agent-side Google skills on rehearsal refuse. This is a known, announced gap, not a fallback.
 
-**Found while planning:** with an unreadable connection store, `431525f` `google_creds` logs `connection row read failed` but then refuses with `no stored connection` ("reconnect Google"). On an isolated agent, that sentence is false: the tenant is connected, and the agent cannot read the connection. Proposed fix, with step 1: the refusal says the connection is not readable from this process and the broker is not built yet, and it uses a separate counter.
+**Found while planning:** with an unreadable connection store, `431525f` `google_creds` logs `connection row read failed` but then refuses with `no stored connection` ("reconnect Google"). On an isolated agent, that sentence is false: the tenant is connected, and the agent cannot read the connection. **Fixed in skills `8436f6e` (human yes):** a read failure raises `GoogleConnectionUnreadable` (not a `GoogleNotConnected`), counts `google_creds_connection_unreadable`, and `source()` reports `connection_unreadable`. `_shared/tests/test_google_creds_unreadable.py` runs against the real app modules. It fails on `431525f`, passes on `8436f6e`, and has a presence twin for the not-connected path. Rehearsal is pinned to `8436f6e`, not `431525f`.
+
+**Threads database stays shared: a known gap to close with the broker (human decision).** The isolation moves only `jarvis_accounts.db` (PIN hashes and the encrypted Google connection) into the app-only directory. `jarvis_threads.db` stays in the shared, group-writable `hermes/state`. Agent-side skills write it: `app_channels` creates deal channels and `app_counters` bumps counters, including the `google_creds` counters above. Moving it would make those writes fail with only a stderr line. The cost: the agent user can read every thread body in the tenant. The broker work closes this by giving the agent app-side calls for channels and counters, after which the threads database moves to the app-only directory.
+
+**The gateway must name the accounts path.** `app/accounts.py` creates its parent directory and database when they are missing. A gateway that falls back to the default `hermes/state/jarvis_accounts.db` after the move would get a fresh, empty database in the shared directory and report "no stored connection". The isolation drop-in therefore sets `JARVIS_ACCOUNTS_DB` on the gateway to the app-only path, so its read fails as unreadable, and the isolation proof checks that no stray accounts database appears.
+
+**Rehearsal was running live, not blocked (found 2026-10-13).** The manifest (`docs/tenants/rehearsal.yaml`) says `writes_posture: blocked`. The running units had `JARVIS_ALLOW_WRITES=1`, the preflight had `POSTURE="live"`, `runtime.safety.allow_writes` was `true`, and the only boundary was `identity.internal_domains` = `gmail.com`. It was switched to blocked in window 1 (human yes): the preflight is blocked, `JARVIS_ALLOW_WRITES` is unset, and runtime safety is `false`. Arming it again needs a human yes.
+
+**Window 1 done 2026-10-13** (backups and `rollback.sh` in `/root/archives/rehearsal-window1/`, root-only):
+- **What changed:** skills `f026b75` → `8436f6e`, app `c717614` → `10ffbce`, posture blocked. Downtime was about 4.6 s.
+- **Startup:** both services passed `posture=blocked`, `writes=0`; no tracebacks; `JARVIS_ALLOW_WRITES` absent from both process environments.
+- **Guard:** under the app's exact environment, `write_guard.block_if_readonly` and the real `send_gate.gated_send` both raised `WritesDisabled`. The transports and the ops alert were stubbed to raise, so nothing could send. Canary: with the flag added, the guard allows.
+- **Google:** `google_creds.source()` under the app's environment = `tenant_connection`; the service-account functions are gone; `google_creds_sa_fallback` stayed at 1.
+- **Tests:** the unit test passed 2/2 on rehearsal's tree.
+- **HTTP:** `/` 200, `/api/session` 401, public origin 200.
+- **Live:** pid unchanged.
 
 ## Decided (from the spec, recorded 2026-10-10)
 
