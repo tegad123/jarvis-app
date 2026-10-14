@@ -31,7 +31,8 @@ skills_origin_sha: 15ea39dcc0499f3fc9cb792411e9234f394d8785
 curator_packs: omit
 
 writes_posture: blocked
-venv: shared
+venv: platform
+isolation: two_user
 
 backup:
   destination: /root/backups/clientzero

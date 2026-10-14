@@ -35,6 +35,7 @@ curator_packs: omit
 
 writes_posture: captured
 venv: shared
+isolation: none
 
 backup:
   destination: /root/backups/clientzero

@@ -18,12 +18,20 @@ emails and texts to real clients. Act accordingly.
   jarvis-rehearsal-agent; app secrets are in /etc/jarvis/rehearsal-app.env and
   /opt/rehearsal/app-private (docs/platform/decisions.md). It is a tenant, NOT
   a test target: never point verify scripts or sandboxes at its config or stores.
+- ISOCHECK: app 8740, gateway 8682, /opt/isocheck. A scratch tenant made by
+  `scripts/provision_tenant.py` (isolation: two_user, writes blocked, no
+  mailbox, `.invalid` addresses). It is the on-host test target for platform
+  work; the lead agent may restart or re-provision it under the agent lock.
+  `scripts/prove_isolation.py --slug isocheck` proves its isolation.
+- Two-user tenants get their OAuth client from /etc/jarvis/oauth_client.json
+  (root 600). Never read /root/.hermes for provisioning.
 - TESTCO (8710/8652, /opt/testco) was RETIRED 2026-10-13. Archive and rollback:
   docs/platform/decisions.md. Scripts that needed it refuse with RETIRED.
 - Hermes gateways: /usr/local/lib/hermes-agent, branch scale-vault-local.
-- Live runs from the venv at /root/jarvis-app/.venv; rehearsal from its copy at
-  /opt/jarvis/venv (2026-10-13). A pip install into either changes a running
-  tenant. Do not install packages without flagging it first.
+- Live runs from the venv at /root/jarvis-app/.venv; rehearsal and every
+  two-user tenant from its copy at /opt/jarvis/venv (2026-10-13). A pip
+  install into either changes a running tenant. Do not install packages
+  without flagging it first.
 
 ## Hard rules
 1. Work on a branch off main. Never commit directly to main.

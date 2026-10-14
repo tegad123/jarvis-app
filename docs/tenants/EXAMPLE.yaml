@@ -37,7 +37,8 @@ skills_origin_sha: 15ea39dcc0499f3fc9cb792411e9234f394d8785
 curator_packs: omit                   # omit | defaults
 
 writes_posture: blocked               # blocked | captured | live
-venv: shared                          # shared | per-tenant (per-tenant is human-yes)
+venv: platform                        # shared | platform | per-tenant (per-tenant is human-yes)
+isolation: two_user                   # two_user | none (none: captured loopback scratch only)
 
 # Digest / sweep / schedule knobs (also stamped into runtime.json).
 digest:

@@ -17,7 +17,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 import yaml
 from cryptography.fernet import Fernet
@@ -30,8 +30,18 @@ LEGACY_LOADOUTS_FILE = HERE / "loadouts.yaml"
 
 SKILLS_ORIGIN = Path("/root/git/openclaw-imports.git")
 SHARED_VENV = Path("/root/jarvis-app/.venv/bin/python")
+# A copy of the live venv: a pip install here does not reach live, and tenant
+# users can run it (/root is not reachable under ProtectHome).
+PLATFORM_VENV = Path("/opt/jarvis/venv/bin/python")
 HERMES_PYTHON = Path("/usr/local/lib/hermes-agent/venv/bin/python")
 OAUTH_CLIENT = Path("/root/.hermes/yamin_oauth_client.json")
+ETC_JARVIS = Path("/etc/jarvis")
+# Root-only platform copy of the OAuth client. Two-user tenants get their own
+# app-only copy of it; nothing reads /root/.hermes.
+PLATFORM_OAUTH_CLIENT = ETC_JARVIS / "oauth_client.json"
+ISOLATIONS = ("two_user", "none")
+SHARED_STATE = ("jarvis_threads.db", "jarvis_tasks.db", "jarvis_leads.db", "activity_feed.jsonl",
+                "approvals.jsonl", "approvals_decisions.jsonl")
 
 RESERVED_SLUGS = frozenset({"testco", "root", "live", "34dev"})
 RFC2606 = (".example", ".test", ".invalid", ".localhost",
@@ -183,6 +193,134 @@ def _unit_env_files() -> List[Path]:
         if p.is_file() and (p.suffix in {".service", ".timer", ".conf"} or ".service.d" in p.parts):
             files.append(p)
     return files
+
+
+def isolation_names(slug: str) -> Dict[str, str]:
+    names = {"app_user": f"jarvis-{slug}", "agent_user": f"jarvis-{slug}-agent", "group": slug}
+    if len(names["agent_user"]) > 32:
+        die(f"slug {slug!r} is too long for the two-user layout (user {names['agent_user']} > 32 chars)")
+    return names
+
+
+def _getent(db: str, name: str) -> Optional[str]:
+    r = subprocess.run(["getent", db, name], capture_output=True, text=True, check=False)
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def identity_collisions(slug: str) -> List[str]:
+    n = isolation_names(slug)
+    hits = [f"user exists: {n[k]}" for k in ("app_user", "agent_user") if _getent("passwd", n[k])]
+    if _getent("group", n["group"]):
+        hits.append(f"group exists: {n['group']}")
+    env_file = ETC_JARVIS / f"{slug}-app.env"
+    if env_file.exists():
+        hits.append(f"secrets file exists: {env_file}")
+    return hits
+
+
+def create_identities(slug: str) -> Dict[str, str]:
+    n = isolation_names(slug)
+    nologin = "/usr/sbin/nologin"
+    run(["groupadd", "--system", n["group"]])
+    run(["useradd", "--system", "--user-group", "--no-create-home", "--shell", nologin,
+         "--home-dir", f"/opt/{slug}/app-private", "--groups", n["group"], n["app_user"]])
+    run(["useradd", "--system", "--user-group", "--no-create-home", "--shell", nologin,
+         "--home-dir", f"/opt/{slug}/hermes", "--groups", n["group"], n["agent_user"]])
+    return n
+
+
+def mint_isolated_secrets(slug: str, hermes_home: Path) -> str:
+    """App secrets into /etc/jarvis/{slug}-app.env (root 600, read by systemd
+    before the user switch); the agent's hermes/.env gets API_SERVER_KEY only."""
+    env_file = ETC_JARVIS / f"{slug}-app.env"
+    if env_file.exists() or (hermes_home / ".env").exists():
+        die(f"{env_file} or {hermes_home / '.env'} already exists — refusing to rotate secrets")
+    alphabet = "abcdefghjkmnpqrstuvwxyz23456789"
+    passphrase = "-".join("".join(secrets.choice(alphabet) for _ in range(4)) for _ in range(3))
+    api_key = secrets.token_urlsafe(32)
+    ETC_JARVIS.mkdir(mode=0o750, exist_ok=True)
+    fd = os.open(env_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(f"# {slug}-app secrets. root 600; read by systemd before the user switch.\n"
+                 f"APP_GOOGLE_TOKEN_KEY={Fernet.generate_key().decode('ascii')}\n"
+                 f"APP_PASSPHRASE={passphrase}\n"
+                 f"APP_SESSION_SECRET={secrets.token_hex(32)}\n"
+                 f"API_SERVER_KEY={api_key}\n")
+    # provision_client mints (and prints) any APP_* key missing from hermes/.env,
+    # so the app keys sit there until trim_agent_env() runs after it.
+    session = next(ln.split("=", 1)[1] for ln in env_file.read_text().splitlines()
+                   if ln.startswith("APP_SESSION_SECRET="))
+    fd = os.open(hermes_home / ".env", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(f"API_SERVER_KEY={api_key}\nAPP_PASSPHRASE={passphrase}\nAPP_SESSION_SECRET={session}\n")
+    log(f"minted APP_GOOGLE_TOKEN_KEY, APP_PASSPHRASE, APP_SESSION_SECRET, API_SERVER_KEY into {env_file} "
+        f"(root 600)")
+    return passphrase
+
+
+def trim_agent_env(hermes_home: Path) -> None:
+    """Leave the agent's hermes/.env holding API_SERVER_KEY only."""
+    env = hermes_home / ".env"
+    keep = [ln for ln in env.read_text().splitlines() if ln.startswith("API_SERVER_KEY=")]
+    if len(keep) != 1:
+        die(f"expected exactly one API_SERVER_KEY line in {env}, found {len(keep)}")
+    env.write_text(keep[0] + "\n")
+    os.chmod(env, 0o600)
+    keys = [ln.split("=", 1)[0] for ln in env.read_text().splitlines() if "=" in ln]
+    if keys != ["API_SERVER_KEY"]:
+        die(f"{env} still holds {keys} after trimming")
+    log(f"{env}: API_SERVER_KEY only")
+
+
+def apply_isolation(opt: Path, n: Dict[str, str], data_dirs: List[Path]) -> None:
+    """Ownership and modes for the two-user layout. Code is root:{group} and
+    read-only to both users; the app owns app-private and jarvis-app/data; the
+    agent owns the hermes home; state/, outbox/ and skill data/ are shared
+    setgid group dirs."""
+    app, agent, g = n["app_user"], n["agent_user"], n["group"]
+    jarvis, skills, hermes, private = opt / "jarvis-app", opt / "skills", opt / "hermes", opt / "app-private"
+    run(["chown", f"root:{g}", str(opt)])
+    os.chmod(opt, 0o750)
+    for f in opt.iterdir():
+        if f.is_file():
+            run(["chown", f"root:{g}", str(f)])
+            os.chmod(f, 0o750 if f.suffix == ".sh" else 0o640)
+    for tree in (jarvis, skills):
+        run(["chown", "-R", f"root:{g}", str(tree)])
+        run(["chmod", "-R", "g+rX,g-w,o-rwx", str(tree)])
+    for p in (skills / "openclaw-imports" / "_shared").glob("*-provision.json"):
+        run(["chown", "root:root", str(p)])
+        os.chmod(p, 0o600)
+    (jarvis / "data" / "tmp-transcribe").mkdir(parents=True, exist_ok=True)
+    run(["chown", "-R", f"{app}:{app}", str(jarvis / "data")])
+    run(["chmod", "-R", "u+rwX,go-rwx", str(jarvis / "data")])
+    for d in data_dirs:
+        d.mkdir(parents=True, exist_ok=True)
+        run(["chown", "-R", f"root:{g}", str(d)])
+        run(["find", str(d), "-type", "d", "-exec", "chmod", "2770", "{}", "+"])
+        run(["find", str(d), "-type", "f", "-exec", "chmod", "660", "{}", "+"])
+    run(["chown", "-R", "-h", f"{agent}:{agent}", str(hermes)])
+    run(["chown", f"{agent}:{g}", str(hermes), str(hermes / "config.yaml")])
+    os.chmod(hermes, 0o710)
+    os.chmod(hermes / "config.yaml", 0o640)
+    # SQLite creates databases 0644 whatever the umask, so a store first opened
+    # by one user would be read-only to the other. Pre-create them 660.
+    for name in SHARED_STATE:
+        (hermes / "state" / name).touch(exist_ok=True)
+    for d in ("state", "outbox"):
+        run(["chown", "-R", f"{agent}:{g}", str(hermes / d)])
+        run(["find", str(hermes / d), "-type", "d", "-exec", "chmod", "2770", "{}", "+"])
+        run(["find", str(hermes / d), "-type", "f", "-exec", "chmod", "660", "{}", "+"])
+    run(["chmod", "-R", "o-rwx", str(hermes)])
+    os.chmod(hermes / ".env", 0o600)
+    private.mkdir(mode=0o700, exist_ok=True)
+    run(["install", "-m", "600", "-o", app, "-g", app, str(PLATFORM_OAUTH_CLIENT),
+         str(private / "oauth_client.json")])
+    # Created empty (a valid SQLite database) so it is app-only before first use.
+    run(["install", "-m", "600", "-o", app, "-g", app, "/dev/null", str(private / "jarvis_accounts.db")])
+    run(["chown", f"{app}:{app}", str(private)])
+    os.chmod(private, 0o700)
+    log(f"two-user ownership applied: app={app} agent={agent} group={g}")
 
 
 def structural_collisions(slug: str, ports: dict) -> List[str]:
@@ -596,7 +734,7 @@ def build_client_config(manifest: dict, paths: dict, shipped: List[str], loadout
     }
 
 
-def run_provision_client(skills_clone: Path, cfg: dict, hermes_home: Path) -> None:
+def run_provision_client(skills_clone: Path, cfg: dict, hermes_home: Path, python: Path) -> bool:
     cfg_path = skills_clone / "_shared" / f"{cfg['client']['slug']}-provision.json"
     cfg_path.write_text(json.dumps(cfg, indent=2) + "\n")
     os.chmod(cfg_path, 0o600)
@@ -612,12 +750,19 @@ def run_provision_client(skills_clone: Path, cfg: dict, hermes_home: Path) -> No
             log(f"removing clone-baked {name} before provision_client")
             p.unlink()
     log(f"running provision_client.py --config {cfg_path}")
-    subprocess.run(
-        [str(SHARED_VENV), str(skills_clone / "_shared" / "provision_client.py"),
+    p = subprocess.run(
+        [str(python), str(skills_clone / "_shared" / "provision_client.py"),
          "--config", str(cfg_path)],
-        check=True,
-        env=env,
+        env=env, capture_output=True, text=True,
     )
+    out = re.sub(r"(APP_PASSPHRASE:\s*)\S+", r"\1[REDACTED]", p.stdout + p.stderr)
+    sys.stdout.write(out)
+    if p.returncode != 0:
+        die(f"provision_client.py exited {p.returncode}")
+    minted = "[REDACTED]" in out
+    if minted:
+        log("provision_client minted and printed its own passphrase (redacted above)")
+    return minted
 
 
 def stamp_identity_mailbox(skills_clone: Path, manifest: dict) -> None:
@@ -631,11 +776,19 @@ def stamp_identity_mailbox(skills_clone: Path, manifest: dict) -> None:
     log("stamped mailbox_strategy + agent_display_name onto identity.json")
 
 
-def common_map(manifest: dict, posture: dict, fernet: str, force: str) -> Dict[str, str]:
+def common_map(manifest: dict, posture: dict, fernet: str, force: str,
+               shipped: Sequence[str] = ()) -> Dict[str, str]:
     slug = manifest["slug"]
     opt = f"/opt/{slug}"
     writes = "Environment=JARVIS_ALLOW_WRITES=1" if posture["writes_armed"] else ""
+    iso: Dict[str, str] = {}
+    if manifest.get("isolation") == "two_user":
+        n = isolation_names(slug)
+        iso = {"APP_USER": n["app_user"], "AGENT_USER": n["agent_user"], "GROUP": n["group"],
+               "APP_PRIVATE": f"{opt}/app-private", "ENV_FILE": str(ETC_JARVIS / f"{slug}-app.env"),
+               "DATA_DIRS": " ".join(str(d) for d in skill_data_dirs(Path(opt), shipped))}
     return {
+        **iso,
         "SLUG": slug,
         "DISPLAY_NAME": manifest["display_name"],
         "OPT": opt,
@@ -643,7 +796,7 @@ def common_map(manifest: dict, posture: dict, fernet: str, force: str) -> Dict[s
         "HERMES_HOME": f"{opt}/hermes",
         "SKILLS": f"{opt}/skills/openclaw-imports",
         "PREFLIGHT": f"{opt}/{slug}_preflight.sh",
-        "VENV_PYTHON": str(SHARED_VENV),
+        "VENV_PYTHON": str(venv_python(manifest)),
         "HERMES_PYTHON": str(HERMES_PYTHON),
         "APP_PORT": str(int(manifest["ports"]["app"])),
         "GATEWAY_PORT": str(int(manifest["ports"]["gateway"])),
@@ -660,6 +813,15 @@ def common_map(manifest: dict, posture: dict, fernet: str, force: str) -> Dict[s
                            or Path("/root/backups") / slug),
         "BACKUP_KEEP": str((manifest.get("backup") or {}).get("keep_daily") or 14),
     }
+
+
+def venv_python(manifest: dict) -> Path:
+    return PLATFORM_VENV if manifest.get("venv") == "platform" else SHARED_VENV
+
+
+def skill_data_dirs(opt: Path, shipped: List[str]) -> List[Path]:
+    """Every shipped skill gets a shared data/ dir; skill code itself is read-only."""
+    return [opt / "skills" / "openclaw-imports" / s / "data" for s in sorted(shipped)]
 
 
 def write_file(path: Path, text: str, mode: int = 0o644) -> None:
@@ -686,7 +848,10 @@ def install_units(manifest: dict, mapping: Dict[str, str]) -> None:
     write_file(UNIT_DIR / f"{slug}-gateway.service", fill(read_template("gateway.service"), mapping))
     oauth_tmpl = mapping.get("OAUTH_TEMPLATE") or "oauth.scratch.conf"
     dropin = UNIT_DIR / f"{slug}-app.service.d" / "oauth.conf"
-    write_file(dropin, fill(read_template(oauth_tmpl), mapping), 0o600)
+    if manifest.get("isolation") == "two_user":
+        write_file(dropin, fill(read_template("oauth.isolated.conf"), mapping), 0o644)
+    else:
+        write_file(dropin, fill(read_template(oauth_tmpl), mapping), 0o600)
     write_file(UNIT_DIR / f"{slug}-backup.service", fill(read_template("backup.service"), mapping))
     write_file(UNIT_DIR / f"{slug}-backup.timer", fill(read_template("backup.timer"), mapping))
     logrotate = Path("/etc/logrotate.d") / f"jarvis-{slug}"
@@ -707,6 +872,17 @@ def install_units(manifest: dict, mapping: Dict[str, str]) -> None:
     write_file(UNIT_DIR / f"{slug}-metrics-monthly.service", fill(read_template("metrics.service"), mapping))
     write_file(UNIT_DIR / f"{slug}-metrics-monthly.timer", fill(read_template("metrics.timer"), mapping))
     log("timer units written; NOT enabled (optional until knobs land)")
+    if manifest.get("isolation") == "two_user":
+        dropins = {f"{slug}-app.service": "app.isolation.conf",
+                   f"{slug}-gateway.service": "gateway.isolation.conf",
+                   f"{slug}-backup.service": "backup.isolation.conf",
+                   f"{slug}-task-digest.service": "job.isolation.conf",
+                   f"{slug}-metrics-monthly.service": "job.isolation.conf"}
+        for sweep in SWEEPS:
+            dropins[f"{slug}-sweep-{sweep.replace('_', '-')}.service"] = "job.isolation.conf"
+        for unit, tmpl in dropins.items():
+            write_file(UNIT_DIR / f"{unit}.d" / "10-isolation.conf", fill(read_template(tmpl), mapping))
+        log(f"two-user isolation drop-ins written for {len(dropins)} units")
 
 
 def print_ingress(slug: str, origin: str) -> None:
@@ -750,10 +926,24 @@ def provision(manifest_path: Path) -> None:
     if packs not in ("omit", "defaults"):
         die("curator_packs must be omit | defaults")
     if manifest["venv"] == "per-tenant":
-        die("venv: per-tenant is human-yes; this slice uses shared only")
-    if manifest["venv"] != "shared":
-        die("venv must be shared | per-tenant")
-    log("venv=shared: a pip install on /root/jarvis-app/.venv also affects live :8700")
+        die("venv: per-tenant is human-yes; this slice uses shared or platform")
+    if manifest["venv"] not in ("shared", "platform"):
+        die("venv must be shared | platform | per-tenant")
+    isolation = manifest.get("isolation")
+    if isolation not in ISOLATIONS:
+        die(f"isolation must be one of {ISOLATIONS}")
+    if isolation == "none" and manifest.get("writes_posture") != "captured":
+        die("isolation: none is for captured loopback scratch only; blocked and live tenants are two_user")
+    if isolation == "two_user":
+        if manifest["venv"] != "platform":
+            die("isolation: two_user requires venv: platform (tenant users cannot reach /root)")
+        if not PLATFORM_VENV.is_file():
+            die(f"platform venv missing: {PLATFORM_VENV}")
+        isolation_names(slug)
+    if manifest["venv"] == "shared":
+        log("venv=shared: a pip install on /root/jarvis-app/.venv also affects live :8700")
+    else:
+        log(f"venv=platform: {PLATFORM_VENV} (a copy; pip installs there do not reach live)")
 
     ports = manifest["ports"]
     for k in ("app", "gateway", "hooks"):
@@ -769,6 +959,8 @@ def provision(manifest_path: Path) -> None:
 
     posture = posture_rules(manifest)
     hits = structural_collisions(slug, ports)
+    if isolation == "two_user":
+        hits += identity_collisions(slug)
     if hits:
         die("structural collision:\n  " + "\n  ".join(hits))
     for label, port in (("app", ports["app"]), ("gateway", ports["gateway"]), ("hooks", ports["hooks"])):
@@ -784,8 +976,9 @@ def provision(manifest_path: Path) -> None:
         ).strip()
         log(f"app_origin_sha omitted; using invoking repo HEAD {sha_app}")
 
-    if not OAUTH_CLIENT.is_file():
-        die(f"YAMIN_OAUTH_CLIENT path missing (not reading contents): {OAUTH_CLIENT}")
+    client_src = PLATFORM_OAUTH_CLIENT if isolation == "two_user" else OAUTH_CLIENT
+    if not client_src.is_file():
+        die(f"OAuth client missing (not reading contents): {client_src}")
 
     opt = Path(f"/opt/{slug}")
     opt.mkdir(mode=0o700, parents=False)
@@ -827,7 +1020,7 @@ def provision(manifest_path: Path) -> None:
         f"{manifest['display_name']}.\n",
     )
 
-    passphrase = mint_env(hermes)
+    passphrase = mint_isolated_secrets(slug, hermes) if isolation == "two_user" else mint_env(hermes)
     print_passphrase_once(passphrase)
 
     paths = {
@@ -840,7 +1033,11 @@ def provision(manifest_path: Path) -> None:
         "cloudflared_dir": "/etc/cloudflared",
     }
     cfg = build_client_config(manifest, paths, shipped, loadout)
-    run_provision_client(skills_clone, cfg, hermes)
+    minted = run_provision_client(skills_clone, cfg, hermes, venv_python(manifest))
+    if isolation == "two_user":
+        if minted:
+            die("provision_client minted a second passphrase on a two-user tenant; the app env file is the only source")
+        trim_agent_env(hermes)
     stamp_identity_mailbox(skills_clone, manifest)
     runtime = json.loads((skills_clone / "_shared" / "runtime.json").read_text())
     # Dual source: runtime.safety.allow_writes matches JARVIS_ALLOW_WRITES.
@@ -861,13 +1058,17 @@ def provision(manifest_path: Path) -> None:
         if not isinstance(block, dict) or "enabled" not in block:
             die(f"runtime.json missing enabled key for shipped skill {name}")
 
-    fernet = Fernet.generate_key().decode("ascii")
+    # Two-user tenants keep the token key in the EnvironmentFile, not a drop-in.
+    fernet = "IN-ENV-FILE" if isolation == "two_user" else Fernet.generate_key().decode("ascii")
     force = " --force" if another_gateway_running() else ""
     if force:
         log("another gateway run is on this host; gateway unit will use --force")
-    mapping = common_map(manifest, posture, fernet, force)
+    mapping = common_map(manifest, posture, fernet, force, shipped)
     install_units(manifest, mapping)
     write_file(opt / "ONBOARDING-MAILBOX.md", (TEMPLATES / "ONBOARDING-MAILBOX.md").read_text())
+    if isolation == "two_user":
+        names = create_identities(slug)
+        apply_isolation(opt, names, skill_data_dirs(opt, shipped))
     print_ingress(slug, manifest["public_origin"])
 
     run(["systemctl", "daemon-reload"])
@@ -915,12 +1116,33 @@ def teardown(slug: str, yes: bool) -> None:
     if opt.exists():
         shutil.rmtree(opt)
         log(f"removed {opt}")
+    env_file = ETC_JARVIS / f"{slug}-app.env"
+    if env_file.exists():
+        env_file.unlink()
+        log(f"removed {env_file}")
+    n = isolation_names(slug)
+    ours = {n["app_user"], n["agent_user"]}
+    grp = _getent("group", n["group"])
+    members = {m for m in grp.split(":")[3].split(",") if m} if grp else set()
+    for user in sorted(ours):
+        if _getent("passwd", user):
+            run(["userdel", user])
+    if grp:
+        if members and members <= ours:
+            run(["groupdel", n["group"]])
+        else:
+            log(f"NOT removing group {n['group']}: members {sorted(members)} are not exactly this tenant's users")
     print_unroute(slug)
     tree_hits = []
     if opt.exists():
         tree_hits.append(f"tree still exists: {opt}")
     for p in sorted(UNIT_DIR.glob(f"{slug}-*")):
         tree_hits.append(f"unit path still exists: {p}")
+    if env_file.exists():
+        tree_hits.append(f"secrets file still exists: {env_file}")
+    for user in (n["app_user"], n["agent_user"]):
+        if _getent("passwd", user):
+            tree_hits.append(f"user still exists: {user}")
     if tree_hits:
         die("teardown incomplete:\n  " + "\n  ".join(tree_hits))
     log("teardown complete")
@@ -963,8 +1185,12 @@ def print_units(manifest_path: Path, posture_override: str | None) -> None:
     })
     print(f"# print-units posture={posture['posture']} cookie={posture['cookie']} "
           f"writes_armed={posture['writes_armed']} oauth={posture['oauth_template']}")
-    for name in ("app.service", "gateway.service", posture["oauth_template"],
-                 "preflight.sh", "backup.service", "backup.timer"):
+    names = ["app.service", "gateway.service", posture["oauth_template"],
+             "preflight.sh", "backup.service", "backup.timer"]
+    if manifest.get("isolation") == "two_user":
+        names[2] = "oauth.isolated.conf"
+        names += ["app.isolation.conf", "gateway.isolation.conf", "job.isolation.conf", "backup.isolation.conf"]
+    for name in names:
         print(f"\n##### {name} #####")
         print(fill(read_template(name), mapping))
 

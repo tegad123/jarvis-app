@@ -32,7 +32,8 @@ skills_origin_sha: 8436f6ee1ab3c096c062dff6c3cf197b657dc549
 curator_packs: omit
 
 writes_posture: blocked
-venv: shared
+venv: platform
+isolation: two_user
 
 backup:
   destination: /root/backups/rehearsal

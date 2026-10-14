@@ -110,7 +110,7 @@ Order on rehearsal (each step needs its own restart yes):
 - **Downtime:** the app was down 52 s (stopped 00:24:52 UTC, serving again 00:25:44), almost all of it the crash loop. The gateway was down a few seconds at the cutover, then 3.6 s for the `HERMES_HOME_MODE` restart.
 - **Pre-existing, not caused by isolation: production token refresh cannot work.** `app/google_connection.build_credentials` passes `client_id=None` and `client_secret=None` outside mock mode, in `c717614`, `10ffbce`, `2b20c5d` and live's checkout. Once the stored access token expires, every refresh fails with `RefreshError`. The window 1 check read only `source()`, which does not refresh. The window 2 health probe ran the refresh, and the connection row moved from `connected` to `needs_reauth` with `last_error=RefreshError`. That is true, so it was left as is; no alert fired, because alerts are for `invalid_grant` only. Reconnecting would work for about an hour. The fix is to read the client from `YAMIN_OAUTH_CLIENT`; it changes the credential path and needs a human yes.
 - **Known gaps:**
-  - `scripts/provision_tenant.py` knows neither the two users nor the venv copy (it accepts only `venv: shared`). Re-provisioning rehearsal would undo this window.
+  - `scripts/provision_tenant.py` knows neither the two users nor the venv copy (it accepts only `venv: shared`). Re-provisioning rehearsal would undo this window. *(Closed 2026-10-14 by platform build item 3, below.)*
   - `inbound_queue.db` and `inbound_cursor.db` would be created in the read-only skills `_shared` directory; they must move to `hermes/state` before inbound runs on an isolated tenant.
   - `app/inject.py` still defaults its fixtures to the retired `/opt/testco/fixtures`.
   - Rehearsal's gateway has no model provider configured and has never held a conversation (0 sessions), so chat was not testable before or after.
@@ -134,6 +134,28 @@ Order on rehearsal (each step needs its own restart yes):
 - This followed an unannounced second agent restarting rehearsal on 2026-10-13 (see window 1).
 - **Proof:** `docs/platform/verify_agent_lock.py` 16/16, including 20 simultaneous acquires with exactly one winner. Canaries: without `O_EXCL`, 5 checks fail (all 20 racers win); without the ownership check, 4 fail.
 - Rule 5 now says why rehearsal restarts need a yes (a real mailbox is connected). It had still called rehearsal live-posture.
+
+## Decided 2026-10-14: the provisioner stamps the two-user layout (platform build item 3)
+
+**Approval (human):** item 3 of the platform build goal: "Provisioner produces the two-user isolated layout; acceptance = the 63-check proof on a fresh tenant."
+
+- **Manifest:** `isolation: two_user | none` is required. Blocked and live tenants must be `two_user`; `none` is for captured loopback scratch only. `two_user` requires `venv: platform` (`/opt/jarvis/venv`), because tenant users cannot reach `/root` under `ProtectHome`. Slugs longer than 19 characters are refused, because `jarvis-{slug}-agent` must fit in 32.
+- **What it stamps:** the same layout rehearsal got by hand in window 2.
+  - Users `jarvis-{slug}` (app) and `jarvis-{slug}-agent` (gateway), both in group `{slug}`.
+  - App secrets in `/etc/jarvis/{slug}-app.env` (root 600). `hermes/.env` holds `API_SERVER_KEY` only.
+  - `app-private/` (app 700) holds the OAuth client and the accounts database.
+  - Each unit gets a `10-isolation.conf` drop-in: the app, the gateway (with `HERMES_HOME_MODE=0710`), the digest, sweep and metrics jobs (which run as the app user) and backup (root, the tenant's own script). The OAuth drop-in carries no key.
+  - Ownership and modes are as in window 2's `apply.sh`.
+- **Teardown** also removes the users, the group (only if its members are exactly that tenant's two users, read before the users are deleted) and the env file.
+- **OAuth client source:** `/etc/jarvis/oauth_client.json` (root 600), installed with `install` from rehearsal's app-private copy (same sha256). The provisioner no longer reads `/root/.hermes` for two-user tenants.
+- **`backup.service` ran live's code:** the template had `/root/jarvis-app/scripts/backup_tenant.py` hardcoded for every tenant. It now runs the tenant's own tree.
+- **Proof:** `scripts/prove_isolation.py --slug isocheck` 77/77 on a freshly provisioned scratch tenant (blocked, no mailbox, `.invalid` addresses). It generalizes window 2's 63 checks and adds posture, shared-state permission, and wrong-passphrase checks. The `sa_jarvis_prod.json` probe is replaced by "the agent cannot list `/root`", so the proof reads nothing under `/root/.hermes`. `docs/platform/verify_provision_isolation.py` 30/30 offline. Canaries: removing the isolation-field refusal fails one check, and only the last-resort port refusal stops the run; reverting `backup.service` fails two. Full sandbox gate green.
+- **Found by the proof on the first stamp (all fixed, then re-stamped from scratch):**
+  - `provision_client.py` (skills) minted its own `APP_PASSPHRASE` and `APP_SESSION_SECRET` into the agent's `hermes/.env` and printed the passphrase. The provisioner now stages the env-file values there while `provision_client` runs, trims `hermes/.env` to `API_SERVER_KEY` afterwards, refuses if `provision_client` mints anyway, and redacts any printed passphrase. That first scratch tenant's passphrase appeared once in the agent's own tool output. The tenant was torn down minutes later.
+  - SQLite creates databases 0644 whatever the umask, and hermes wrote `activity_feed.jsonl` 0644. The first user to open a shared store made it read-only to the other: the agent's counter bump failed, and the app could not append to the feed. The provisioner now pre-creates the shared state files 660 (`SHARED_STATE`). `-wal` and `-shm` take the database's mode.
+  - The accounts database is created lazily, so it did not exist in `app-private` until first use. It is now pre-created empty, app 600.
+- **Kept:** `isocheck` (8740/8682) stays as the on-host test target; see `AGENTS.md` topology.
+- **Rehearsal gap, needs a human yes (it touches `/opt/rehearsal/hermes`, `AGENTS.md` rule 3):** rehearsal has no `activity_feed.jsonl`, `approvals.jsonl` or `approvals_decisions.jsonl` yet. Whichever user creates one first will make it unwritable for the other. The fix is to pre-create the three files as `jarvis-rehearsal-agent:rehearsal` 660. No restart is needed.
 
 ## Decided (from the spec, recorded 2026-10-10)
 

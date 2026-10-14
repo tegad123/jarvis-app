@@ -4,8 +4,8 @@ After={{SLUG}}-app.service
 
 [Service]
 Type=oneshot
-WorkingDirectory=/root/jarvis-app
-ExecStart={{VENV_PYTHON}} /root/jarvis-app/scripts/backup_tenant.py --slug {{SLUG}} --dest {{BACKUP_ROOT}} --keep-daily {{BACKUP_KEEP}}
+WorkingDirectory={{JARVIS_APP}}
+ExecStart={{VENV_PYTHON}} {{JARVIS_APP}}/scripts/backup_tenant.py --slug {{SLUG}} --dest {{BACKUP_ROOT}} --keep-daily {{BACKUP_KEEP}}
 Environment=PYTHONUNBUFFERED=1
 Nice=10
 StandardOutput=journal
