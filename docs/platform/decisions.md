@@ -126,6 +126,15 @@ Order on rehearsal (each step needs its own restart yes):
 - **Proof:** `docs/auth/verify_token_refresh.py` 24/24. It runs the real refresh through skills `google_creds.credentials()` against a local fake token endpoint, and checks what was posted, the re-encrypted row and the status. Its built-in canary runs the same case on `2b20c5d`'s `google_connection.py` and gets the production `RefreshError`. Reverting only the status line fails one check. Full sandbox gate green (13 suites); fixture unchanged.
 - **Not deployed.** Rehearsal still runs `2b20c5d` and its connection reads `needs_reauth`. Deploying needs a restart of a tenant with a real mailbox, which is a STOP gate. The stored refresh token was never sent to Google, so it was never rejected. After the restart, the next app-side refresh should succeed and flip the row back to `connected` without a reconnect. That is unproven until it happens.
 
+## Decided 2026-10-14: one agent changes the server at a time (platform build item 2)
+
+**Decision (human):** "You alone change the server (restarts, users, permissions, services, provisioning). Take /root/.jarvis-agent-lock before any server change; release it after." Helpers work only in their own worktree on a feature branch and never touch the server.
+
+- `AGENTS.md` hard rule 8 states it. `scripts/agent_lock.py` takes the lock with `O_EXCL`, refuses a second holder (including the same name), lets only the holder release, and never breaks a stale lock on its own.
+- This followed an unannounced second agent restarting rehearsal on 2026-10-13 (see window 1).
+- **Proof:** `docs/platform/verify_agent_lock.py` 16/16, including 20 simultaneous acquires with exactly one winner. Canaries: without `O_EXCL`, 5 checks fail (all 20 racers win); without the ownership check, 4 fail.
+- Rule 5 now says why rehearsal restarts need a yes (a real mailbox is connected). It had still called rehearsal live-posture.
+
 ## Decided (from the spec, recorded 2026-10-10)
 
 - Customer #1: 34 Dev team.

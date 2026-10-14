@@ -36,7 +36,8 @@ emails and texts to real clients. Act accordingly.
    sk-ant-*. If you need to know whether a variable exists, test for its
    presence, never its value.
 5. Never restart jarvis-app.service. Restarting rehearsal-app or
-   rehearsal-gateway needs an explicit human yes (it is a live-posture tenant).
+   rehearsal-gateway needs an explicit human yes (a real mailbox is
+   connected), as does restarting any tenant with a real mailbox.
    The verify sandbox may be started and stopped freely.
 6. No new dependencies, schema migrations, or send-path changes without an
    explicit human yes in the conversation.
@@ -45,6 +46,14 @@ emails and texts to real clients. Act accordingly.
    report. A report claiming a commit without its hash from the log is
    unverified. Do not report a task complete on the strength of having
    run `git commit` — report it complete on the strength of the log.
+8. One agent changes the server at a time. Only the lead agent makes server
+   changes (restarts, users, groups, permissions, services, provisioning,
+   anything under /opt or /etc), and only while holding the lock:
+   `scripts/agent_lock.py acquire --who NAME --why TEXT` before, and
+   `scripts/agent_lock.py release --who NAME` after. If acquire returns 2,
+   someone else holds it: stop and ask the human. Never delete a lock you
+   did not take. Helper agents never take the lock and never touch the
+   server; they work in their own git worktree on a feature branch.
 
 ## Engineering principles (these are law, learned from real failures here)
 - A fallback that does not announce itself is a false green. Every fallback
