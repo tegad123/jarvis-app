@@ -1,0 +1,143 @@
+# Blake's own Jarvis, practice mode (shadow): every write is held and logged, nothing is sent.
+# Names are provisional (the agent may rename; --reconfigure applies it). Mailbox and owner address
+# are .invalid placeholders: connecting a real Google account is a STOP gate (decisions.md).
+# Discord ids are fixture values; no guild is connected.
+
+slug: blake
+display_name: 34 Dev
+business_description: Blake's practice-mode Jarvis on the 34 Dev team
+timezone: America/Chicago
+assistant_address: blake-assistant@34dev.invalid
+agent_display_name: Blake's Assistant
+mailbox_strategy: dedicated_account
+ports:
+  app: 8760
+  gateway: 8762
+  hooks: 18796
+public_origin: http://127.0.0.1:8760
+sheet_id: ''
+boundary_domains:
+- 34dev.invalid
+outbound_suffix_policy: production
+skill_loadout: base
+skill_loadout_optional: []
+skills_origin_sha: 74c0fb1ecc8fee53f2bac6827169be768f7b6649
+curator_packs: omit
+writes_posture: blocked
+agent_model: claude-sonnet-5-5
+background_model: claude-haiku-5-5
+venv: platform
+isolation: two_user
+sentinel_mode: shadow
+backup:
+  destination: /root/backups/blake
+  keep_daily: 14
+digest:
+  times_local:
+  - 05:00
+  - '15:00'
+  default_assignee: ''
+sweeps:
+  stale_email_hours: 24
+  email_grace_days: 2
+  task_quiet_hours: 24
+  task_escalate_after: 3
+  lead_quiet_days: 3
+  hot_lead_quiet_days: 1
+  lead_nudge_backoff_days: 3
+  min_interval_minutes: 30
+schedule:
+  digest_tick_seconds: 300
+  sweep_tick_seconds: 1800
+  metrics_calendar: '*-*-* 08:30:00'
+  digest_on_boot_sec: 120
+  sweep_on_boot_sec:
+  - 180
+  - 240
+  - 300
+  digest_accuracy_sec: 30
+  sweep_accuracy_sec: 60
+  metrics_accuracy: 5m
+email_router:
+  lookback_days: 7
+  recording_subject_prefix: 'PLAUD:'
+  deal_channel_prefix: deals-
+email_monitor:
+  lookback_days: 14
+gmail_push_trigger:
+  webhook_port: 18796
+  mailbox: ''
+  gcp_project: ''
+  pubsub_topic: ''
+  pubsub_subscription: ''
+  tunnel_hostname: ''
+cost_guard:
+  spend_warn_usd: 5
+  spend_pause_usd: 10
+leads:
+  source: store
+  export_enabled: false
+  export_sheet_id: ''
+tasks:
+  source: store
+lead_reply:
+  sheet_id: ''
+  exclude_tabs:
+  - SEND LOG
+  - OLD LEADS
+google_calendar:
+  default_calendar_id: ''
+email_to_calendar:
+  calendar_id: ''
+  always_attendee: ''
+meeting_briefing:
+  owner_person: ''
+owner_email_voice:
+  voice_corpus_path: ''
+feed:
+  team_destinations:
+  - ops
+  - deals
+safety:
+  outbound_recipient_suffix: []
+  allow_writes: false
+gateway:
+  base_url: http://127.0.0.1:8762
+paths:
+  app_root: /opt/blake/jarvis-app
+platform:
+  primary: discord
+  discord:
+    guild_id: '888111222333444555'
+people:
+  owner:
+    name: Blake
+    display_name: Blake
+    title: owner
+    roles:
+    - owner
+    email:
+    - blake@34dev.invalid
+    platform_ids:
+      discord:
+      - '888111222333444999'
+  assistant:
+    name: Blake's Assistant
+    display_name: Blake's Assistant
+    title: assistant
+    roles:
+    - assistant
+    email:
+    - blake-assistant@34dev.invalid
+    platform_ids:
+      discord: []
+destinations:
+  ops:
+    name: ops
+    discord: '888111222333444001'
+  tasks:
+    name: tasks
+    discord: '888111222333444002'
+  assistant:
+    name: assistant
+    discord: '888111222333444003'
