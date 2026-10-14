@@ -26,7 +26,7 @@ NOW = s.utcnow()
 def act(cls, dests=(), tainted=False, **kw):
     base = dict(connector="gmail", method="users.messages.send", cls=cls, destinations=tuple(dests),
                 skill="showing-pipeline", user="eddie", run_id="run-1", session_id="sess-1",
-                task_id="task-1", tainted=tainted)
+                task_id="task-1", tainted=tainted, source_kind="gmail", source_id="msg-1")
     base.update(kw)
     return s.Action(**base)
 
@@ -93,6 +93,16 @@ def main() -> int:
     ck("boundary refusal → deny even when auto",
        verdict(act(s.INTERNAL_SEND, ["pat@acme.example"]), boundary_refusal="outside suffix") == s.DENY)
     ck("unknown class → deny", verdict(act("teleport"), mode=s.AUTO) == s.DENY)
+
+    print("── 6 source record rule")
+    ck("a write with no source record → deny, even when auto",
+       verdict(act(s.INTERNAL_SEND, ["pat@acme.example"], source_kind="", source_id="")) == s.DENY)
+    ck("…a source kind with no id is no source", verdict(act(s.INTERNAL_WRITE, source_id="")) == s.DENY)
+    ck("…twin: the same write with a source → allow", verdict(act(s.INTERNAL_SEND, ["pat@acme.example"])) == s.ALLOW)
+    ck("a read needs no source record",
+       verdict(act(s.READ, method="users.messages.get", source_kind="", source_id="")) == s.ALLOW)
+    ck("summary carries the source record", s.summarize(act(s.INTERNAL_WRITE), s.decide(
+        act(s.INTERNAL_WRITE), mode=s.AUTO, now=NOW))["source_id"] == "msg-1")
 
     print("── 9.4 check 4: rate limits")
     a = act(s.EXTERNAL_SEND, ["buyer@client.example"])

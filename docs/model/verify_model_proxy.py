@@ -8,14 +8,19 @@ client against a fake Anthropic upstream.
     VERIFY_OPERATOR_PASSPHRASE=... python docs/model/verify_model_proxy.py
 """
 import json
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+import psycopg
+from psycopg.rows import dict_row
 
 HERE = Path(__file__).resolve()
 sys.path.insert(0, str(HERE.parents[1] / "broker"))
@@ -181,6 +186,66 @@ def main() -> int:
            not any("authorization" in s["headers"] for s in FakeAnthropic.seen))
         ck("the request body arrived intact", all(s["body"].get("messages") == [{"role": "user", "content": "ping"}]
                                                   for s in FakeAnthropic.seen))
+
+        print("── U: tokens and cost per day, into the platform database")
+        dsn = (box / "pg_dsn").read_text().strip()
+
+        def usage():
+            with psycopg.connect(dsn, autocommit=True, row_factory=dict_row) as c:
+                return {(r["model"], r["purpose"]): r for r in c.execute("SELECT * FROM usage")}
+
+        U = usage()
+        v = U.get(("claude-verify", "agent")) or {}
+        ck("create + stream recorded as two agent requests; count_tokens and the 429 not metered",
+           len(U) == 1 and v.get("requests") == 2, str(U))
+        ck("…tokens read from the JSON body and from the SSE stream (in 3+3, out 1+2)",
+           (v.get("input_tokens"), v.get("output_tokens")) == (6, 3), str(v))
+        ck("…a model with no price is recorded as unpriced, never as $0 spent",
+           v.get("unpriced_requests") == 2 and float(v.get("cost_usd") or 0) == 0, str(v))
+        ck("…and counted (model_usage_unpriced)", vb.counter(tdb, "model_usage_unpriced") == 2)
+        req = urllib.request.Request(
+            "http://127.0.0.1:8716/api/model/anthropic/v1/messages", method="POST",
+            data=json.dumps({"model": "claude-sonnet-5-5", "max_tokens": 1,
+                             "messages": [{"role": "user", "content": "x"}]}).encode(),
+            headers={"Content-Type": "application/json", "x-api-key": key, "x-jarvis-purpose": "background"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            r.read()
+        time.sleep(0.5)
+        s = usage().get(("claude-sonnet-5-5", "background")) or {}
+        ck("a priced background request lands in its own row", s.get("requests") == 1, str(usage()))
+        ck("…costed from model_prices.json (3 in × $3 + 1 out × $15 per MTok = $0.000024)",
+           abs(float(s.get("cost_usd") or -1) - 0.000024) < 1e-9 and s.get("unpriced_requests") == 0, str(s))
+        code, d = vb.http(8716, "usage?days=1", None, {"Authorization": f"Bearer {key}"})
+        rows = {(r["model"], r["purpose"]): r for r in d.get("days", [])}
+        ck("GET /api/broker/usage reports both rows, UTC day, USD",
+           code == 200 and set(rows) == {("claude-verify", "agent"), ("claude-sonnet-5-5", "background")}
+           and d.get("day_boundary") == "UTC" and d.get("currency") == "USD", f"{code} {d}")
+        ck("no usage write failed (model_usage_record_failed 0)",
+           vb.counter(tdb, "model_usage_record_failed") == 0)
+
+        print("── G: the cost guard reads that spend through the broker")
+        cg = Path(tempfile.mkdtemp(prefix="costguard-"))
+        for d in ("_shared", "cost-guard"):
+            shutil.copytree(vb.SKILLS / d, cg / d, ignore=shutil.ignore_patterns("data", "__pycache__"))
+
+        def guard(url):
+            p = subprocess.run([sys.executable, str(cg / "cost-guard/scripts/check_daily_spend.py")],
+                               capture_output=True, text=True, timeout=120,
+                               env={"PATH": "/usr/bin:/bin", "HOME": str(cg), "HERMES_HOME": str(cg),
+                                    "JARVIS_APP_BROKER_URL": url, "API_SERVER_KEY": key,
+                                    "JARVIS_RUNTIME_CONFIG": str(box / "runtime.json"),
+                                    "JARVIS_IDENTITY_CONFIG": str(vb.FIXTURE_IDENTITY),
+                                    "JARVIS_ACTIVITY_FEED": str(cg / "feed.jsonl")})
+            return p.returncode, p.stdout + p.stderr
+
+        code, out = guard("http://127.0.0.1:8716")
+        ck("cost guard: exit 0, today's spend from the platform database ($0.000024)",
+           code == 0 and "$0.000024" in out and "source: platform database via app broker" in out, out[-400:])
+        ck("…says spend is a floor while unpriced requests exist", "2 request(s) for unpriced models" in out, out[-300:])
+        code, out = guard("http://127.0.0.1:9")
+        ck("broker unreachable: exit 1, 'cannot read usage', never a $0 report",
+           code == 1 and "cannot read usage" in out and "spend today" not in out, f"{code} {out[-300:]}")
+        shutil.rmtree(cg, ignore_errors=True)
 
         print("── N: no key configured")
         os.environ.pop("VERIFY_MODEL_KEY")

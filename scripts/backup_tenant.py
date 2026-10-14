@@ -6,6 +6,12 @@ Reference: .cursor/skills/verify-jarvis/SKILL.md ledger snapshot
 
 Does not install sqlite3. Uses the shared venv's sqlite3 module.
 Does not write into /opt/{slug}. Default keep_daily=14.
+
+Platform tenants (JARVIS_PG_DSN set on the unit) also get platform.dump, a
+pg_dump of jarvis_{slug}, and every backup proves that dump restores: it is
+restored into a scratch database, the append-only trigger is checked, and the
+restored row counts go into MANIFEST.json. A configured database that cannot
+be dumped or restored fails the run (exit 1); it is never just "missing".
 """
 from __future__ import annotations
 
@@ -14,6 +20,7 @@ import json
 import os
 import shutil
 import sqlite3
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -84,6 +91,22 @@ def db_sources(opt: Path) -> list[tuple[str, Path]]:
             + [(n, hermes / n) for n in HERMES_DBS])
 
 
+def backup_platform_db(slug: str, dest: Path) -> dict:
+    """pg_dump jarvis_{slug} into dest/platform.dump, then prove it restores."""
+    tool = Path(__file__).resolve().parent / "pg_tenant.py"
+    out = dest / "platform.dump"
+    for cmd in (["dump", slug, str(out)], ["restore-check", str(out)]):
+        p = subprocess.run([sys.executable, str(tool), *cmd], capture_output=True, text=True)
+        if p.returncode != 0:
+            print(f"backup: platform database {cmd[0]} FAILED: {(p.stderr or p.stdout)[-400:]}", file=sys.stderr)
+            raise SystemExit(1)
+    result = json.loads(p.stdout.strip().splitlines()[-1])
+    rows = {t: v[0] for t, v in result["restored"].items()}
+    print(f"backup: platform.dump restores (append-only {result['append_only_after_restore']}), rows {rows}")
+    return {"file": "platform.dump", "restored_rows": rows,
+            "append_only_after_restore": result["append_only_after_restore"]}
+
+
 def rotate(dest_root: Path, keep: int) -> None:
     dirs = sorted([p for p in dest_root.iterdir() if p.is_dir() and p.name[:1].isdigit()],
                   reverse=True)
@@ -119,6 +142,9 @@ def backup_slug(slug: str, dest_root: Path, keep: int) -> Path:
         if src.is_file():
             shutil.copy2(src, dest / name)
             written.append(name)
+    platform = backup_platform_db(slug, dest) if os.environ.get("JARVIS_PG_DSN", "").strip() else None
+    if platform:
+        written.append("platform.dump")
     outbox = opt / "hermes" / "outbox" / "captured_mail.jsonl"
     if outbox.is_file():
         (dest / "outbox").mkdir()
@@ -130,6 +156,7 @@ def backup_slug(slug: str, dest_root: Path, keep: int) -> Path:
         "files": written,
         "missing": missing,
         "keep_daily": keep,
+        "platform_db": platform,
         "note": "DBs are consistent sqlite copies (WAL merged via backup()). "
                 "staging/ holds the raw db+wal+shm copies.",
     }

@@ -98,6 +98,8 @@ class Action:
     session_id: str = ""
     task_id: str = ""
     tainted: bool = True
+    source_kind: str = ""
+    source_id: str = ""
 
 
 @dataclass
@@ -247,13 +249,15 @@ def _rate_refusal(action: Action, rates: Rates) -> Optional[str]:
 
 def decide(action: Action, *, mode: str, grants: Sequence[Grant] = (), now: datetime,
            rates: Optional[Rates] = None, boundary_refusal: Optional[str] = None) -> Decision:
-    """The deterministic verdict. Order: unknown class, boundary, rate limits,
-    blocked mode, then grants, auto and taint."""
+    """The deterministic verdict. Order: unknown class, source record,
+    boundary, rate limits, blocked mode, then grants, auto and taint."""
     def out(verdict, reason, grant=None):
         return Decision(verdict, reason, action.cls, mode, grant.id if grant else None)
 
     if action.cls not in CLASSES or mode not in MODES:
         return out(DENY, f"unknown class or mode ({action.cls}, {mode})")
+    if action.cls in WRITE_CLASSES and not (action.source_kind and action.source_id):
+        return out(DENY, "no source record: every write names the record it acts on (spec 6)")
     if boundary_refusal:
         return out(DENY, f"recipient boundary: {boundary_refusal}")
     refusal = _rate_refusal(action, rates or Rates())
@@ -360,8 +364,10 @@ def summarize(action: Action, decision: Decision) -> dict:
     """Structure for the ledger: who, what class, where, verdict. No bodies."""
     return {"connector": action.connector, "method": action.method, "class": action.cls,
             "destinations": list(action.destinations), "skill": action.skill, "user": action.user,
-            "run_id": action.run_id, "tainted": action.tainted, "verdict": decision.verdict,
-            "mode": decision.mode, "reason": decision.reason, "grant_id": decision.grant_id}
+            "run_id": action.run_id, "session_id": action.session_id, "task_id": action.task_id,
+            "tainted": action.tainted, "source_kind": action.source_kind, "source_id": action.source_id,
+            "verdict": decision.verdict, "mode": decision.mode, "reason": decision.reason,
+            "grant_id": decision.grant_id}
 
 
 def untrusted_sender(headers: List[dict], org_domains: Sequence[str]) -> bool:

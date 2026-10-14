@@ -16,6 +16,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -41,8 +43,13 @@ ETC_JARVIS = Path("/etc/jarvis")
 PLATFORM_OAUTH_CLIENT = ETC_JARVIS / "oauth_client.json"
 ISOLATIONS = ("two_user", "none")
 SENTINEL_MODES = ("shadow", "enforce")
-SHARED_STATE = ("jarvis_tasks.db", "jarvis_leads.db", "activity_feed.jsonl",
-                "approvals.jsonl")
+SWITCHES = ("broker", "sentinel", "model_proxy")
+DEFAULT_AGENT_MODEL = "claude-sonnet-5-5"
+DEFAULT_BACKGROUND_MODEL = "claude-haiku-5-5"
+MODEL_ID = re.compile(r"claude-[a-z0-9.-]{1,60}")
+# Approvals are not here: they live in the tenant's Postgres database, which
+# the agent user cannot connect to (a tricked agent must not approve itself).
+SHARED_STATE = ("jarvis_tasks.db", "jarvis_leads.db", "activity_feed.jsonl")
 
 RESERVED_SLUGS = frozenset({"testco", "root", "live", "34dev"})
 RFC2606 = (".example", ".test", ".invalid", ".localhost",
@@ -320,7 +327,7 @@ def apply_isolation(opt: Path, n: Dict[str, str], data_dirs: List[Path]) -> None
     run(["install", "-m", "600", "-o", app, "-g", app, str(PLATFORM_OAUTH_CLIENT),
          str(private / "oauth_client.json")])
     # Created empty (a valid SQLite database) so it is app-only before first use.
-    for name in ("jarvis_accounts.db", "jarvis_threads.db", "sentinel_ledger.jsonl", "approvals_decisions.jsonl"):
+    for name in ("jarvis_accounts.db", "jarvis_threads.db"):
         run(["install", "-m", "600", "-o", app, "-g", app, "/dev/null", str(private / name)])
     run(["chown", f"{app}:{app}", str(private)])
     os.chmod(private, 0o700)
@@ -791,7 +798,12 @@ def common_map(manifest: dict, posture: dict, fernet: str, force: str,
         iso = {"APP_USER": n["app_user"], "AGENT_USER": n["agent_user"], "GROUP": n["group"],
                "APP_PRIVATE": f"{opt}/app-private", "ENV_FILE": str(ETC_JARVIS / f"{slug}-app.env"),
                "SENTINEL_MODE": str(manifest.get("sentinel_mode") or ""),
+               "PG_DSN": pg_dsn(slug),
                "DATA_DIRS": " ".join(str(d) for d in skill_data_dirs(Path(opt), shipped))}
+    sw = switch_states(manifest)
+    # A tenant without two-user isolation runs as root and has no platform
+    # database, so Sentinel is off: writes and approvals refuse (503).
+    no_db_line = "" if iso else "Environment=JARVIS_SWITCH_SENTINEL=off"
     return {
         **iso,
         "SLUG": slug,
@@ -805,6 +817,11 @@ def common_map(manifest: dict, posture: dict, fernet: str, force: str,
         "HERMES_PYTHON": str(HERMES_PYTHON),
         "APP_PORT": str(int(manifest["ports"]["app"])),
         "AGENT_MODEL": str(manifest.get("agent_model") or ""),
+        "BACKGROUND_MODEL": str(manifest.get("background_model") or DEFAULT_BACKGROUND_MODEL),
+        "SWITCH_BROKER": sw["broker"],
+        "SWITCH_SENTINEL": sw["sentinel"],
+        "SWITCH_MODEL_PROXY": sw["model_proxy"],
+        "NO_PLATFORM_DB_LINE": no_db_line,
         "GATEWAY_PORT": str(int(manifest["ports"]["gateway"])),
         "HOOKS_PORT": str(int(manifest["ports"]["hooks"])),
         "WRITES_LINE": writes,
@@ -819,6 +836,55 @@ def common_map(manifest: dict, posture: dict, fernet: str, force: str,
                            or Path("/root/backups") / slug),
         "BACKUP_KEEP": str((manifest.get("backup") or {}).get("keep_daily") or 14),
     }
+
+
+def venv_shebang_leaks(venv_bin: Path = PLATFORM_VENV.parent) -> List[str]:
+    """Scripts in the platform venv whose interpreter is under /root. One of
+    these once sent a pip install into live's venv (decisions.md)."""
+    leaks = []
+    for f in sorted(venv_bin.iterdir()):
+        if f.is_file() and not f.is_symlink():
+            with open(f, "rb") as fh:
+                first = fh.readline(300)
+            if first.startswith(b"#!") and b"/root/" in first:
+                leaks.append(f.name)
+    return leaks
+
+
+def pg_dsn(slug: str) -> str:
+    return f"postgresql:///jarvis_{slug}?host=/var/run/postgresql&user=jarvis_{slug}_app"
+
+
+def switch_states(manifest: dict) -> Dict[str, str]:
+    """manifest.switches -> on/off per piece. YAML reads a bare on/off as a
+    bool, so both spellings are accepted; anything else refuses."""
+    raw = manifest.get("switches") or {}
+    if not isinstance(raw, dict) or set(raw) - set(SWITCHES):
+        die(f"switches must be a mapping of {SWITCHES}")
+    out = {}
+    for name in SWITCHES:
+        v = raw.get(name, "on")
+        v = {True: "on", False: "off"}.get(v, v) if isinstance(v, bool) else str(v).strip().lower()
+        if v not in ("on", "off"):
+            die(f"switches.{name} must be on or off")
+        out[name] = v
+    return out
+
+
+def model_settings(manifest: dict) -> Dict[str, str]:
+    """runtime.json models: the agent's chat model and the cheaper model for
+    background parsing and extraction. Per tenant, from the manifest."""
+    return {"agent": str(manifest["agent_model"]),
+            "background": str(manifest.get("background_model") or DEFAULT_BACKGROUND_MODEL)}
+
+
+def check_models(manifest: dict) -> None:
+    for key in ("agent_model", "background_model"):
+        v = manifest.get(key)
+        if key == "background_model" and v is None:
+            continue
+        if not MODEL_ID.fullmatch(str(v)):
+            die(f"{key} must be a Claude model id (claude-...)")
 
 
 def venv_python(manifest: dict) -> Path:
@@ -922,8 +988,8 @@ def provision(manifest_path: Path) -> None:
                 "curator_packs", "writes_posture", "venv", "agent_model"):
         if key not in manifest:
             die(f"manifest missing required field {key}")
-    if not re.fullmatch(r"claude-[a-z0-9.-]{1,60}", str(manifest["agent_model"])):
-        die("agent_model must be a Claude model id (claude-...)")
+    check_models(manifest)
+    switch_states(manifest)
     if manifest["mailbox_strategy"] != "dedicated_account":
         die("mailbox_strategy must be dedicated_account (send_as_alias is rejected)")
     if str(manifest["agent_display_name"]).strip().lower() == "jarvis":
@@ -947,6 +1013,9 @@ def provision(manifest_path: Path) -> None:
             die("isolation: two_user requires venv: platform (tenant users cannot reach /root)")
         if not PLATFORM_VENV.is_file():
             die(f"platform venv missing: {PLATFORM_VENV}")
+        leaks = venv_shebang_leaks()
+        if leaks:
+            die(f"platform venv scripts run an interpreter under /root: {leaks}")
         if manifest.get("sentinel_mode") not in SENTINEL_MODES:
             die(f"isolation: two_user requires sentinel_mode: {' | '.join(SENTINEL_MODES)}")
         isolation_names(slug)
@@ -1054,6 +1123,7 @@ def provision(manifest_path: Path) -> None:
     # provision_client refused true in its *input*; the provisioner patches the
     # stamped output so captured/blocked/live stay in sync with the unit env.
     runtime.setdefault("safety", {})["allow_writes"] = bool(posture["writes_armed"])
+    runtime["models"] = model_settings(manifest)
     (skills_clone / "_shared" / "runtime.json").write_text(json.dumps(runtime, indent=2) + "\n")
     log(f"runtime.safety.allow_writes={runtime['safety']['allow_writes']} (synced to env)")
     if (runtime.get("gateway") or {}).get("base_url") != f"http://127.0.0.1:{int(ports['gateway'])}":
@@ -1079,6 +1149,7 @@ def provision(manifest_path: Path) -> None:
     if isolation == "two_user":
         names = create_identities(slug)
         apply_isolation(opt, names, skill_data_dirs(opt, shipped))
+        create_platform_db(jarvis, slug, names["app_user"])
     print_ingress(slug, manifest["public_origin"])
 
     run(["systemctl", "daemon-reload"])
@@ -1090,6 +1161,35 @@ def provision(manifest_path: Path) -> None:
             die(f"{unit} is {st} after enable --now — preflight/start failed (see journalctl -u {unit})")
     run(["systemctl", "enable", "--now", f"{slug}-backup.timer"])
     log(f"enabled {slug}-app, {slug}-gateway, and {slug}-backup.timer")
+
+
+def create_platform_db(jarvis: Path, slug: str, app_user: str) -> None:
+    """Database, roles and peer rule from the tenant's own code, so the schema
+    matches what it runs. Only the app user gets a rule."""
+    out = run([str(PLATFORM_VENV), str(jarvis / "scripts" / "pg_tenant.py"), "create", slug,
+               "--app-user", app_user]).stdout.strip().splitlines()[-1]
+    if json.loads(out).get("dsn") != pg_dsn(slug):
+        die(f"pg_tenant created a database whose DSN is not {pg_dsn(slug)}")
+    log(f"platform database jarvis_{slug} at schema {json.loads(out)['schema']}, app role only")
+
+
+def archive_platform_db(slug: str) -> None:
+    """Teardown keeps the tenant's approvals, grants and audit log: a dump in
+    the backup root, written before the database is dropped."""
+    tool = REPO / "scripts" / "pg_tenant.py"
+    exists = subprocess.run(["runuser", "-u", "postgres", "--", "psql", "-XqAt", "-c",
+                             f"SELECT 1 FROM pg_database WHERE datname = 'jarvis_{slug}'"],
+                            capture_output=True, text=True, cwd="/").stdout.strip() == "1"
+    if not exists:
+        log(f"no platform database jarvis_{slug}; nothing to archive")
+        return
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    dump = Path("/root/backups") / slug / f"teardown-{stamp}-platform.dump"
+    run([str(PLATFORM_VENV), str(tool), "dump", slug, str(dump)])
+    run([str(PLATFORM_VENV), str(tool), "restore-check", str(dump)])
+    log(f"archived jarvis_{slug} to {dump} (restore proven)")
+    run([str(PLATFORM_VENV), str(tool), "drop", slug, "--yes"])
+    log(f"dropped jarvis_{slug} and its roles")
 
 
 def teardown(slug: str, yes: bool) -> None:
@@ -1126,6 +1226,7 @@ def teardown(slug: str, yes: bool) -> None:
     if opt.exists():
         shutil.rmtree(opt)
         log(f"removed {opt}")
+    archive_platform_db(slug)
     env_file = ETC_JARVIS / f"{slug}-app.env"
     if env_file.exists():
         env_file.unlink()
@@ -1156,6 +1257,115 @@ def teardown(slug: str, yes: bool) -> None:
     if tree_hits:
         die("teardown incomplete:\n  " + "\n  ".join(tree_hits))
     log("teardown complete")
+
+
+ISOLATION_TEMPLATE = {"app": "app.isolation.conf", "gateway": "gateway.isolation.conf",
+                      "backup": "backup.isolation.conf"}
+
+
+def mailbox_connected(opt: Path) -> bool:
+    db = opt / "app-private" / "jarvis_accounts.db"
+    if not db.is_file():
+        return False
+    import sqlite3  # noqa: PLC0415
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        return bool(con.execute("SELECT count(*) FROM google_connection WHERE coalesce(token_cipher, '') != ''")
+                    .fetchone()[0])
+    except sqlite3.OperationalError:
+        return False
+    finally:
+        con.close()
+
+
+def rewrite_keeping_owner(path: Path, text: str) -> bool:
+    """Replace a file's contents, keeping its owner and mode. True if it changed."""
+    st = path.stat()
+    if path.read_text() == text:
+        return False
+    path.write_text(text)
+    os.chown(path, st.st_uid, st.st_gid)
+    os.chmod(path, st.st_mode & 0o7777)
+    log(f"rewrote {path}")
+    return True
+
+
+def reconfigure(manifest_path: Path, restart_approved: bool) -> None:
+    """Display names, timezone, models and switches from the manifest onto an
+    existing two-user tenant, then restart its app and gateway. No re-clone,
+    no new secrets, no data touched. Ports, posture and isolation are not
+    reconfigurable; those re-provision."""
+    manifest = load_yaml(manifest_path)
+    slug = manifest.get("slug")
+    check_slug(slug)
+    for key in ("display_name", "agent_display_name", "timezone", "agent_model", "ports"):
+        if key not in manifest:
+            die(f"manifest missing required field {key}")
+    check_models(manifest)
+    switch_states(manifest)
+    name = str(manifest["agent_display_name"]).strip()
+    if not name or name.lower() == "jarvis":
+        die("agent_display_name must be tenant-chosen, not Jarvis")
+    opt = Path(f"/opt/{slug}")
+    if manifest.get("isolation") != "two_user" or not (opt / "app-private").is_dir():
+        die(f"--reconfigure is for provisioned two-user tenants; {opt} is not one")
+    if mailbox_connected(opt) and not restart_approved:
+        die(f"STOP gate: {slug} has a Google mailbox connected. Restarting it needs a human yes; "
+            "re-run with --restart-approved once you have it.")
+    hermes, shared = opt / "hermes", opt / "skills" / "openclaw-imports" / "_shared"
+    cfg_text = (hermes / "config.yaml").read_text()
+    if f"port: {int(manifest['ports']['gateway'])}" not in cfg_text \
+            or f"127.0.0.1:{int(manifest['ports']['app'])}/" not in cfg_text:
+        die("manifest ports differ from the running tenant; ports change only by re-provisioning")
+
+    changed = []
+    ident_p = shared / "identity.json"
+    ident = json.loads(ident_p.read_text())
+    ident["agent_display_name"] = name
+    for person in (ident.get("people") or {}).values():
+        if "assistant" in (person.get("roles") or []):
+            person["name"] = person["display_name"] = name
+    changed += [ident_p] if rewrite_keeping_owner(ident_p, json.dumps(ident, indent=2) + "\n") else []
+    rt_p = shared / "runtime.json"
+    rt = json.loads(rt_p.read_text())
+    rt.setdefault("client", {}).update(display_name=manifest["display_name"], timezone=manifest["timezone"])
+    rt["models"] = model_settings(manifest)
+    changed += [rt_p] if rewrite_keeping_owner(rt_p, json.dumps(rt, indent=2) + "\n") else []
+    soul = hermes / "SOUL.md"
+    changed += [soul] if rewrite_keeping_owner(
+        soul, f"You are {name}, the assistant for {manifest['display_name']}.\n") else []
+
+    shipped = sorted(d.name for d in (opt / "skills" / "openclaw-imports").iterdir() if (d / "data").is_dir())
+    mapping = common_map(manifest, posture_rules(manifest), "IN-ENV-FILE", "", shipped)
+    cfg = hermes / "config.yaml"
+    changed += [cfg] if rewrite_keeping_owner(cfg, fill(read_template("hermes-config.yaml"), mapping)) else []
+    for dropin in sorted(UNIT_DIR.glob(f"{slug}-*.service.d/10-isolation.conf")):
+        role = dropin.parent.name[len(slug) + 1:-len(".service.d")]
+        tmpl = ISOLATION_TEMPLATE.get(role, "job.isolation.conf")
+        changed += [dropin] if rewrite_keeping_owner(dropin, fill(read_template(tmpl), mapping)) else []
+    log(f"reconfigure {slug}: {len(changed)} file(s) changed")
+
+    run(["systemctl", "daemon-reload"])
+    units = [f"{slug}-app.service", f"{slug}-gateway.service"]
+    run(["systemctl", "restart", *units])
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        states = [subprocess.run(["systemctl", "is-active", u], capture_output=True, text=True).stdout.strip()
+                  for u in units]
+        if states == ["active", "active"] and _ping(int(manifest["ports"]["app"])):
+            log(f"reconfigured {slug}: app and gateway active, app answers /api/ping")
+            return
+        time.sleep(2)
+    die(f"{slug} not healthy within 120s after reconfigure: {states} (journalctl -u {units[0]})")
+
+
+def _ping(port: int) -> bool:
+    import urllib.request  # noqa: PLC0415
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/ping", timeout=3) as r:
+            return r.status == 200
+    except Exception:
+        return False
 
 
 def print_units(manifest_path: Path, posture_override: str | None) -> None:
@@ -1274,6 +1484,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--manifest", type=Path, help="ops YAML (docs/tenants/{slug}.yaml)")
     ap.add_argument("--teardown", metavar="SLUG")
     ap.add_argument("--yes", action="store_true", help="confirm teardown")
+    ap.add_argument("--reconfigure", action="store_true",
+                    help="with --manifest: re-apply names, timezone, models and switches, then restart")
+    ap.add_argument("--restart-approved", action="store_true",
+                    help="with --reconfigure: a human said yes to restarting a tenant with a mailbox connected")
     ap.add_argument("--check-collisions", action="store_true")
     ap.add_argument("--check-loadout", action="store_true",
                     help="completeness + prune dry-run; no /opt stamp")
@@ -1311,6 +1525,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         die("--manifest is required unless --teardown")
     if args.check_collisions:
         check_only(args.manifest)
+        return 0
+    if args.reconfigure:
+        reconfigure(args.manifest, args.restart_approved)
         return 0
     provision(args.manifest)
     return 0

@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Prove a provisioned tenant's two-user isolation. Run as root on the host.
 
-    prove_isolation.py --slug SLUG [--expect-app-source not_connected|tenant_connection]
+    prove_isolation.py --slug SLUG [--expect-app-source not_connected|tenant_connection] [--refresh-check]
+
+--refresh-check (with a connected mailbox only): as the app user, force one
+real token refresh through google_creds and check refreshed_at moved.
 
 Prints results only, never a secret value. Every denial has a root canary
 (the same read succeeds as root, so the file exists and the probe works) and
@@ -55,6 +58,7 @@ def main() -> int:
     ap.add_argument("--slug", required=True)
     ap.add_argument("--expect-app-source", default="not_connected",
                     choices=("not_connected", "tenant_connection"))
+    ap.add_argument("--refresh-check", action="store_true")
     args = ap.parse_args()
     slug = args.slug
     OPT = Path(f"/opt/{slug}")
@@ -109,8 +113,36 @@ def main() -> int:
     check("no accounts db in hermes/state", not (H / "state/jarvis_accounts.db").exists())
     check("threads db lives in app-private", (PRIV / "jarvis_threads.db").is_file())
     check("no threads db in hermes/state", not (H / "state/jarvis_threads.db").exists())
-    check("approval decisions live in app-private, none in hermes/state (the agent cannot forge consent)",
-          (PRIV / "approvals_decisions.jsonl").is_file() and not (H / "state/approvals_decisions.jsonl").exists())
+    legacy = [n for n in ("approvals.jsonl", "approvals_decisions.jsonl", "sentinel_ledger.jsonl")
+              if (H / "state" / n).exists()]
+    check(f"no approvals or ledger file in the agent-writable state dir (found {legacy})", not legacy)
+    approvals_api = httpx.get(f"http://127.0.0.1:{port}/api/approvals", headers={"cookie": cookie}, timeout=20)
+    check(f"canary: the approvals queue is behind the owner gate (operator got {approvals_api.status_code})",
+          approvals_api.status_code == 403)
+
+    print("── platform database: the app's alone")
+    db, role = f"jarvis_{slug}", f"jarvis_{slug}_app"
+    refused = ("no pg_hba.conf entry", "Peer authentication failed")
+
+    def psql(user, sql, as_role=role, dbname=db):
+        p = subprocess.run(["runuser", "-u", user, "--", "psql", "-X", "-qAt", "-h", "/var/run/postgresql",
+                            "-d", dbname, "-U", as_role, "-c", sql], capture_output=True, text=True, cwd="/",
+                           timeout=30)
+        return p.returncode, (p.stdout + p.stderr).strip()
+    rc, out = psql(APP, "SELECT current_user || ' ' || (SELECT version_num FROM alembic_version)")
+    check(f"app user connects to {db} as {role}, schema 0001 (got {out[-80:]!r})", rc == 0 and out == f"{role} 0001")
+    for as_role, dbname in ((role, db), ("postgres", "postgres"), ("postgres", db)):
+        rc, out = psql(AGENT, "INSERT INTO approvals (id) VALUES ('apr_000000000000')", as_role, dbname)
+        check(f"agent → {dbname} as {as_role}: refused by pg_hba, so it cannot write approvals",
+              rc != 0 and any(r in out for r in refused))
+    rc, out = psql(APP, "DELETE FROM actions")
+    check("app role cannot delete from the audit log", rc != 0 and "permission denied" in out)
+    rc, out = psql(APP, "UPDATE approvals SET status = status WHERE false")
+    check("canary: the same role can UPDATE approvals (the refusal above is the grant, not a typo)", rc == 0)
+    agent_key = env_file(H / ".env").get("API_SERVER_KEY", "")
+    dec = httpx.post(f"http://127.0.0.1:{port}/api/approvals/apr_000000000000", json={"decision": "approve"},
+                     headers={"Authorization": f"Bearer {agent_key}"}, timeout=20)
+    check(f"the agent's key cannot decide an approval (got {dec.status_code})", dec.status_code == 401)
 
     print("── posture: blocked, writes off everywhere")
     app_env, gw_env = proc_env(app_pid), proc_env(gw_pid)
@@ -121,8 +153,7 @@ def main() -> int:
     check("preflight says POSTURE=\"blocked\"", 'POSTURE="blocked"' in (OPT / f"{slug}_preflight.sh").read_text())
 
     print("── the agent cannot read app secrets (runuser, then the unit's sandbox)")
-    for f in (PRIV / "oauth_client.json", PRIV / "jarvis_accounts.db", PRIV / "jarvis_threads.db",
-              PRIV / "sentinel_ledger.jsonl", PRIV / "approvals_decisions.jsonl", ENVF,
+    for f in (PRIV / "oauth_client.json", PRIV / "jarvis_accounts.db", PRIV / "jarvis_threads.db", ENVF,
               Path(f"/proc/{app_pid}/environ")):
         check(f"root canary can read {f}", sh("root", read(f)) == 0)
         check(f"agent denied {f}", sh(AGENT, read(f)) != 0)
@@ -187,8 +218,20 @@ def main() -> int:
           and not (Path(gw_env.get("HOME", str(H))) / ".openclaw/workspace/credentials").exists())
     mode = app_env.get("JARVIS_SENTINEL_MODE", "")
     check(f"app Sentinel mode is shadow or enforce (got {mode!r})", mode in ("shadow", "enforce"))
-    check("app Sentinel ledger is in app-private",
-          app_env.get("JARVIS_SENTINEL_LEDGER") == str(PRIV / "sentinel_ledger.jsonl"))
+    dsn = f"postgresql:///jarvis_{slug}?host=/var/run/postgresql&user=jarvis_{slug}_app"
+    check("app process JARVIS_PG_DSN is this tenant's database as its app role", app_env.get("JARVIS_PG_DSN") == dsn)
+    check("gateway process has no JARVIS_PG_DSN", "JARVIS_PG_DSN" not in gw_env)
+    sw = {n: app_env.get(f"JARVIS_SWITCH_{n.upper()}") for n in ("broker", "sentinel", "model_proxy")}
+    check(f"app switches are each on or off (got {sw})", all(v in ("on", "off") for v in sw.values()))
+    h = httpx.get(f"http://127.0.0.1:{port}/api/health", headers={"cookie": cookie}, timeout=30)
+    check(f"/api/health reports the same switches (got {h.json().get('switches') if h.content else None})",
+          (h.json() if h.content else {}).get("switches") == sw)
+    leaks = []
+    for f in sorted(Path(PY).parent.iterdir()):
+        if f.is_file() and not f.is_symlink() and open(f, "rb").readline(300).startswith(b"#!") \
+                and b"/root/" in open(f, "rb").readline(300):
+            leaks.append(f.name)
+    check(f"no platform venv script runs an interpreter under /root (found {leaks})", not leaks)
     agent_env = env_file(H / ".env")
     check("hermes/.env holds API_SERVER_KEY and ANTHROPIC_API_KEY only",
           sorted(agent_env) == ["ANTHROPIC_API_KEY", "API_SERVER_KEY"])
@@ -277,9 +320,19 @@ def main() -> int:
         except Exception:
             return {"error": p.stderr[-400:]}, p.stderr
 
+    import psycopg
+    from psycopg.rows import dict_row
+
     def ledger_lines():
-        p = PRIV / "sentinel_ledger.jsonl"
+        with psycopg.connect(host="/var/run/postgresql", user="postgres", dbname=f"jarvis_{slug}",
+                             row_factory=dict_row) as c:
+            return c.execute("SELECT a.*, h.action_json IS NOT NULL AS held FROM actions a "
+                             "LEFT JOIN held_actions h ON h.action_id = a.id ORDER BY a.id").fetchall()
+
+    def feed_lines():
+        p = H / "state/activity_feed.jsonl"
         return [json.loads(x) for x in p.read_text().splitlines() if x.strip()] if p.exists() else []
+    f0 = len(feed_lines())
     refusal_counter = "broker_sentinel_shadowed" if mode == "shadow" else "broker_google_write_refused"
     a0, w0, b0 = (counter("google_creds_tokens_app_side"), counter(refusal_counter),
                   counter("prove_isolation_broker_bump"))
@@ -297,9 +350,17 @@ def main() -> int:
     check(f"…counted app-side ({refusal_counter} +1)", counter(refusal_counter) - w0 == 1)
     new = ledger_lines()[l0:]
     want_outcome = "shadowed" if mode == "shadow" else "writes_disabled"
-    check(f"…one ledger entry, outcome {want_outcome}, class external_send (.invalid is outside the org)",
-          [(e.get("outcome"), e.get("class")) for e in new] == [(want_outcome, "external_send")])
-    check("…the ledger holds no message body", all("raw" not in e and "body" not in e for e in new))
+    check(f"…one audit row, outcome {want_outcome}, class external_send (.invalid is outside the org)",
+          [(e["outcome"], e["action_class"]) for e in new] == [(want_outcome, "external_send")])
+    check("…the audit row holds no message body",
+          all("probe@isolation" not in json.dumps(e["detail"] or {}) for e in new) and new)
+    if mode == "shadow":
+        check("…and the full proposal is kept in held_actions for the owner", [e["held"] for e in new] == [True])
+        wh = [f for f in feed_lines()[f0:] if f.get("kind") == "sentinel.would_have"]
+        check(f"held write shows up in the feed as 'would have' ({len(wh)} line)",
+              len(wh) == 1 and "would have" in wh[0].get("headline", "")
+              and f"held action #{new[0]['id']}" in wh[0].get("detail", "") if new else False)
+        check("…the feed line names no subject or body", wh and "Subject" not in json.dumps(wh))
     check("agent counter bump lands in the app-private threads db (+1)",
           counter("prove_isolation_broker_bump") - b0 == 1)
     check("no stray threads db in hermes/state", not (H / "state/jarvis_threads.db").exists())
@@ -320,6 +381,26 @@ def main() -> int:
     app_out, _ = as_user(APP, str(PRIV))
     check(f"app source() = {args.expect_app_source} (got {app_out.get('source')})",
           app_out.get("source") == args.expect_app_source)
+
+    if args.refresh_check:
+        print("── a real token refresh, as the app user (prints timestamps only)")
+        refresh = (f"import sys,json; sys.path.insert(0,'{S}/_shared'); sys.path.insert(0,'{OPT}/jarvis-app')\n"
+                   "import google_creds as g\nfrom app import google_connection as gc\n"
+                   "before=gc.status_public().get('refreshed_at')\n"
+                   "try:\n    c=g.credentials(); g._do_refresh(c); g._persist_refreshed(gc, c); err=None\n"
+                   "except Exception as e:\n    err=type(e).__name__\n"
+                   "print(json.dumps({'before': before, 'after': gc.status_public().get('refreshed_at'), 'error': err}))")
+        e = dict(base_env, HOME=str(PRIV), **{k: v for k, v in app_env.items()
+                                             if k.startswith(("APP_", "YAMIN_", "JARVIS_PG", "JARVIS_SWITCH"))})
+        # Secrets travel in the environment, never in argv (argv is world-readable in /proc).
+        p = subprocess.run(["runuser", "-p", "-u", APP, "--", PY, "-c", refresh], env=e,
+                           capture_output=True, text=True, timeout=120, cwd="/")
+        try:
+            r = json.loads(p.stdout.strip().splitlines()[-1])
+        except Exception:
+            r = {"error": "no output"}
+        check(f"refresh succeeded and refreshed_at moved ({r.get('before')} -> {r.get('after')}, error {r.get('error')})",
+              r.get("error") is None and r.get("after") and r.get("after") != r.get("before"))
 
     print(f"\n{len(passed)}/{len(passed) + len(fails)} passed")
     return 1 if fails else 0

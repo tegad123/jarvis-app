@@ -17,8 +17,11 @@ No key configured is a loud 503, never a silent fallback to another model.
 JARVIS_MODEL_UPSTREAM is honoured in mock mode only (verify sandboxes).
 """
 import hmac
+import json
 import logging
 import os
+from datetime import datetime, timezone
+from pathlib import Path
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -26,6 +29,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
 
 from . import config
+from . import switches
 from . import threads as threads_mod
 
 log = logging.getLogger("app.model_proxy")
@@ -74,6 +78,11 @@ def _upstream() -> str:
 @router.post("/{path:path}")
 async def proxy(path: str, request: Request):
     _authorize(request)
+    if not switches.on("model_proxy"):
+        _bump("model_proxy_switch_off")
+        return JSONResponse(status_code=503, content={
+            "type": "error", "error": {"type": "model_disabled",
+                                       "message": "The model proxy is switched off for this tenant."}})
     if path not in PATHS:
         _bump("model_proxy_refused_path")
         raise HTTPException(status_code=404, detail=f"/{path} is not proxied.")
@@ -111,5 +120,107 @@ async def proxy(path: str, request: Request):
         await client.aclose()
 
     out_headers = {h: upstream.headers[h] for h in PASS_RESPONSE_HEADERS if h in upstream.headers}
-    return StreamingResponse(upstream.aiter_bytes(), status_code=upstream.status_code, headers=out_headers,
+    meter = UsageMeter(_requested_model(body), _purpose(request), path == "v1/messages" and upstream.status_code < 400)
+
+    async def stream():
+        async for chunk in upstream.aiter_bytes():
+            meter.feed(chunk)
+            yield chunk
+        await meter.finish()
+
+    return StreamingResponse(stream(), status_code=upstream.status_code, headers=out_headers,
                              background=BackgroundTask(close))
+
+
+PURPOSES = ("agent", "background")
+PRICES_PATH = Path(__file__).with_name("model_prices.json")
+
+
+def _requested_model(body: bytes) -> str:
+    try:
+        return str(json.loads(body).get("model") or "")[:80]
+    except Exception:
+        return ""
+
+
+def _purpose(request: Request) -> str:
+    p = request.headers.get("x-jarvis-purpose", "agent").strip().lower()
+    return p if p in PURPOSES else "agent"
+
+
+def price(model: str, usage: dict):
+    """USD for one response's usage, or None when the model has no price."""
+    table = json.loads(PRICES_PATH.read_text())
+    p = table.get(model)
+    if not isinstance(p, dict):
+        return None
+    return (usage.get("input_tokens", 0) * p["input"] + usage.get("output_tokens", 0) * p["output"]
+            + usage.get("cache_creation_input_tokens", 0) * p["cache_write"]
+            + usage.get("cache_read_input_tokens", 0) * p["cache_read"]) / 1_000_000
+
+
+class UsageMeter:
+    """Reads the token counts out of an Anthropic response as it streams
+    past (SSE message_start / message_delta, or a plain JSON body) and adds
+    them to the tenant's usage table for today. A response it cannot read is
+    counted, never guessed."""
+
+    def __init__(self, model: str, purpose: str, active: bool):
+        self.model, self.purpose, self.active = model, purpose, active
+        self.buf = b""
+        self.usage = {}
+        self.seen = False
+
+    def feed(self, chunk: bytes) -> None:
+        if self.active and len(self.buf) < MAX_BODY:
+            self.buf += chunk
+
+    def _merge(self, u: dict) -> None:
+        for k in ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"):
+            if isinstance(u.get(k), int):
+                self.usage[k] = u[k]
+        self.seen = True
+
+    def _parse(self) -> None:
+        text = self.buf.decode("utf-8", "replace")
+        if text.lstrip().startswith("{"):
+            obj = json.loads(text)
+            self.model = obj.get("model") or self.model
+            self._merge(obj.get("usage") or {})
+            return
+        for line in text.splitlines():
+            if not line.startswith("data:"):
+                continue
+            try:
+                ev = json.loads(line[5:].strip())
+            except ValueError:
+                continue
+            if ev.get("type") == "message_start":
+                msg = ev.get("message") or {}
+                self.model = msg.get("model") or self.model
+                self._merge(msg.get("usage") or {})
+            elif ev.get("type") == "message_delta":
+                self._merge(ev.get("usage") or {})
+
+    async def finish(self) -> None:
+        if not self.active or not switches.on("sentinel"):
+            return
+        try:
+            self._parse()
+            if not self.seen:
+                raise ValueError("no usage in the response")
+            from . import platform_store  # noqa: PLC0415
+            from starlette.concurrency import run_in_threadpool  # noqa: PLC0415
+            cost = price(self.model, self.usage)
+            if cost is None:
+                _bump("model_usage_unpriced")
+                log.error("model proxy: no price for %s; tokens recorded, cost unknown", self.model)
+            await run_in_threadpool(
+                platform_store.add_usage, datetime.now(timezone.utc).date(), self.model or "unknown",
+                self.purpose, input_tokens=self.usage.get("input_tokens", 0),
+                output_tokens=self.usage.get("output_tokens", 0),
+                cache_read=self.usage.get("cache_read_input_tokens", 0),
+                cache_write=self.usage.get("cache_creation_input_tokens", 0), cost_usd=cost)
+        except Exception as exc:
+            _bump("model_usage_record_failed")
+            log.error("model proxy: usage not recorded (%s: %s)", type(exc).__name__, str(exc)[:200])

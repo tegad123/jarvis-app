@@ -37,6 +37,7 @@ from pydantic import BaseModel, Field  # noqa: E402
 from fastapi.responses import FileResponse, StreamingResponse  # noqa: E402
 
 from app import approvals as approvals_mod  # noqa: E402
+from app import sentinel as sentinel_mod  # noqa: E402
 from app import attachments as attachments_mod  # noqa: E402
 from app import accounts as accounts_mod  # noqa: E402
 from app import google_connection as google_conn_mod  # noqa: E402
@@ -75,6 +76,22 @@ if os.environ.get("JARVIS_APP_BROKER_URL"):
 if broker_mod.sentinel_mode() not in ("enforce", broker_mod.SHADOW):
     # A misspelt "shadow" must not quietly run as enforce.
     raise SystemExit("REFUSED: JARVIS_SENTINEL_MODE must be enforce or shadow")
+from app import switches as switches_mod  # noqa: E402
+from app import platform_db  # noqa: E402
+
+try:
+    SWITCHES = switches_mod.state()
+except switches_mod.BadSwitch as _exc:
+    raise SystemExit(f"REFUSED: {_exc}")
+if SWITCHES["sentinel"]:
+    # Sentinel's policies, grants, approvals and audit log live here; without
+    # them every write would be undecidable, so the app does not start.
+    try:
+        PLATFORM_DB = platform_db.check()
+    except platform_db.Unavailable as _exc:
+        raise SystemExit(f"REFUSED: Sentinel is on but {_exc}")
+else:
+    PLATFORM_DB = None
 app.include_router(broker_mod.router)
 from app import model_proxy as model_proxy_mod  # noqa: E402
 app.include_router(model_proxy_mod.router)
@@ -96,7 +113,11 @@ def _uvicorn_log_config() -> dict:
 
 @app.on_event("startup")
 def _announce_app_logging() -> None:
-    logging.getLogger("app").info("app logging wired to stderr at INFO")
+    lg = logging.getLogger("app")
+    lg.info("app logging wired to stderr at INFO")
+    lg.warning("switches: %s; sentinel mode %s; platform db %s",
+               " ".join(f"{k}={'on' if v else 'off'}" for k, v in SWITCHES.items()),
+               broker_mod.sentinel_mode(), PLATFORM_DB or "not used (sentinel off)")
 
 
 class LoginRequest(BaseModel):
@@ -558,20 +579,27 @@ def delete_thread_member(
 
 
 class DecisionRequest(BaseModel):
-    decision: str = Field(..., pattern="^(approve|reject|approved|rejected)$")
+    decision: Optional[str] = Field(None, pattern="^(approve|reject|approved|rejected)$")
+    callback: Optional[str] = Field(None, max_length=2000)
+
+
+def _approvals_on() -> None:
+    if not switches_mod.on("sentinel"):
+        raise HTTPException(status_code=503, detail="sentinel_off: approvals are unavailable while Sentinel is off.")
 
 
 @app.get("/api/approvals")
 def get_approvals(
     sess: dict = Depends(auth.current_session),
-    status: Optional[str] = Query(None, pattern="^(pending|approved|rejected)$"),
+    status: Optional[str] = Query(None, pattern="^(pending|approved|rejected|expired)$"),
 ):
     # OWNER-ONLY (spec W3). A member must not even see the queue: it contains
     # draft outbound mail and config changes. Break-glass operator is excluded
     # too — support may READ the tenant's world but must never approve on their
     # behalf.
     auth.require_owner(sess)
-    return approvals_mod.query(status=status)
+    _approvals_on()
+    return approvals_mod.query(status=status, person=auth.person_of(sess) or "owner")
 
 
 @app.post("/api/approvals/{request_id}")
@@ -580,20 +608,27 @@ def post_approval(
     body: DecisionRequest,
     sess: dict = Depends(auth.current_session),
 ):
-    # Accept both the imperative and past-tense forms; store the past tense.
-    decision = body.decision.lower()
-    decision = {"approve": "approved", "reject": "rejected"}.get(decision, decision)
-
     # OWNER-ONLY, enforced server-side.
     auth.require_owner(sess)
+    _approvals_on()
     # Who decided — now a real person, not "whoever held the shared passphrase".
-    # A person key when there is one. Approvals are owner-only, so the fallback
-    # is unreachable today; it stays as a defined value rather than a None in
-    # the record if that ever changes.
     decided_by = auth.person_of(sess) or "owner"
+    decision = {"approve": "approved", "reject": "rejected"}.get((body.decision or "").lower(), body.decision)
+    scope, via = "once", "pwa_session"
+    if body.callback:
+        try:
+            answer = approvals_mod.answer_from_callback(request_id, body.callback, decided_by)
+        except sentinel_mod.CallbackRefused as exc:
+            threads_mod.bump_counter("approvals_callback_refused")
+            raise HTTPException(status_code=403, detail=f"Approval callback refused: {exc}.")
+        if decision and decision != answer["decision"]:
+            raise HTTPException(status_code=409, detail="The decision does not match the signed callback.")
+        decision, scope, via = answer["decision"], answer["scope"], "signed_callback"
+    if decision not in ("approved", "rejected"):
+        raise HTTPException(status_code=422, detail="Send the card's signed callback or a decision.")
 
     try:
-        updated = approvals_mod.decide(request_id, decision, decided_by)
+        updated = approvals_mod.decide(request_id, decision, decided_by, scope=scope, via=via)
     except LookupError:
         raise HTTPException(status_code=404, detail="No such approval request.")
     except approvals_mod.ConfigChangeRefused as exc:
@@ -607,6 +642,20 @@ def post_approval(
         # Already resolved, or a decision value that got past the pattern.
         raise HTTPException(status_code=409, detail=str(exc))
     return {"ok": True, "approval": updated}
+
+
+@app.get("/api/sentinel/held/{action_id}")
+def get_held_action(action_id: int, sess: dict = Depends(auth.current_session)):
+    """What a held action would have done, in full, so the owner can judge it.
+    The feed line and the audit row carry structure only; this carries the
+    message. Owner-only: the operator sees structure, never bodies."""
+    auth.require_owner(sess)
+    _approvals_on()
+    from app import platform_store  # noqa: PLC0415
+    row = platform_store.get_held(action_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="No held action with that id.")
+    return {k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in row.items()}
 
 
 class LeadCreate(BaseModel):
@@ -1032,6 +1081,14 @@ def get_health(sess: dict = Depends(auth.current_session)):
         report["google_connection"] = google_conn_mod.status_public()
     except Exception:
         pass
+    report["switches"] = {k: ("on" if v else "off") for k, v in switches_mod.state().items()}
+    report["sentinel_mode"] = broker_mod.sentinel_mode()
+    if switches_mod.on("sentinel"):
+        from app import platform_store  # noqa: PLC0415
+        try:
+            report["model_usage"] = [{**r, "day": r["day"].isoformat()} for r in platform_store.usage_by_day(7)]
+        except platform_db.Unavailable as exc:
+            report["model_usage_error"] = str(exc)
     # A failing subsystem is reported with 503 so monitoring does not have to
     # parse the body to notice, while the body still carries the full detail.
     code = 503 if report["status"] == "fail" else 200

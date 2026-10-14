@@ -28,10 +28,17 @@ TESTCO_SKILLS="$FIXTURE/skills/openclaw-imports"
 # Code under test; config stays the fixture's.
 APP="${VERIFY_APP_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 SKILLS_CODE="${VERIFY_SKILLS_ROOT:-$TESTCO_SKILLS}"
-PYTHON="${VERIFY_PYTHON:-/root/jarvis-app/.venv/bin/python}"
+# The platform venv: the app needs psycopg, which live's venv must not have.
+PYTHON="${VERIFY_PYTHON:-/opt/jarvis/venv/bin/python}"
+PGDB="jarvis_verify_${PORT}"
 
 case "${1:-}" in
 start)
+  # A leftover app on this port would answer the readiness ping for a new one
+  # that failed to bind, and every check after that tests the wrong code.
+  if curl -s -o /dev/null "http://127.0.0.1:$PORT/api/ping"; then
+    echo "REFUSING: something already answers on :$PORT"; exit 1
+  fi
   rm -rf "$SB"; mkdir -p "$SB"
   # The app derives approvals, outbox and inject journals from HERMES_HOME, so
   # it gets a private copy: nothing the sandbox does can land in the fixture.
@@ -56,6 +63,9 @@ src.backup(dst); dst.close(); src.close()
   LIVE_FEED_BEFORE=$(grep -c . "$TESTCO_HOME/state/activity_feed.jsonl" 2>/dev/null || echo 0)
 
   (umask 077; "$PYTHON" -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" > "$SB/token_key")
+  # A fresh platform database per start: approvals, grants, audit log, usage.
+  PG_DSN=$("$PYTHON" "$APP/scripts/pg_tenant.py" verify-db create "$PGDB" | tail -1)
+  case "$PG_DSN" in postgresql://*) echo "$PG_DSN" > "$SB/pg_dsn" ;; *) echo "REFUSING: verify database not created"; exit 1 ;; esac
   # Skills find the app only through paths.app_root; aim it at the code under test.
   python3 -c "
 import json, sys
@@ -83,8 +93,11 @@ open(sys.argv[3], 'w').write(json.dumps(cfg, indent=2) + '\n')
   JARVIS_TASKS_SOURCE="${TASKS_SOURCE:-store}" \
   JARVIS_ALLOW_WRITES="${VERIFY_ALLOW_WRITES:-1}" \
   JARVIS_GOOGLE_API_ENDPOINT="${VERIFY_GOOGLE_API_ENDPOINT:-}" \
-  JARVIS_SENTINEL_LEDGER="$SB/sentinel_ledger.jsonl" \
+  JARVIS_PG_DSN="${VERIFY_PG_DSN-$PG_DSN}" \
   JARVIS_SENTINEL_MODE="${VERIFY_SENTINEL_MODE:-enforce}" \
+  JARVIS_SWITCH_BROKER="${VERIFY_SWITCH_BROKER:-on}" \
+  JARVIS_SWITCH_SENTINEL="${VERIFY_SWITCH_SENTINEL:-on}" \
+  JARVIS_SWITCH_MODEL_PROXY="${VERIFY_SWITCH_MODEL_PROXY:-on}" \
   JARVIS_MODEL_UPSTREAM="${VERIFY_MODEL_UPSTREAM:-}" \
   ANTHROPIC_API_KEY="${VERIFY_MODEL_KEY:-}" \
   APP_PORT="$PORT" \
@@ -111,8 +124,12 @@ open(sys.argv[3], 'w').write(json.dumps(cfg, indent=2) + '\n')
   ;;
 
 stop)
-  if [ -f "$SB/app.pid" ]; then kill "$(cat "$SB/app.pid")" 2>/dev/null || true; fi
-  sleep 0.5
+  if [ -f "$SB/app.pid" ]; then
+    PID="$(cat "$SB/app.pid")"
+    kill "$PID" 2>/dev/null || true
+    for _ in $(seq 1 40); do kill -0 "$PID" 2>/dev/null || break; sleep 0.25; done
+    kill -9 "$PID" 2>/dev/null || true
+  fi
   echo "tasks sandbox stopped"
   ;;
 

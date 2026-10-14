@@ -344,7 +344,9 @@ ck("the whole summary carries no address and no lead/task name",
    "@" not in json.dumps(s) and "Verify" not in json.dumps(s))
 
 # The gate itself, in-process: the live check below sees the RUNNING copy of
-# the app, which a mutation of this tree cannot reach.
+# the app, which a mutation of this tree cannot reach. Importing main runs
+# its boot checks; this box has no platform database, so Sentinel is off.
+os.environ["JARVIS_SWITCH_SENTINEL"] = "off"
 from app import main as app_main  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
 def gate(sess):

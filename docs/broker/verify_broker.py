@@ -177,7 +177,7 @@ def skill_probe(port, key, to, broker=True, probe=SKILL_PROBE, extra=None):
            "APPROOT": str(APP), "JARVIS_APP_ROOT": str(APP), "JARVIS_SKILLS_ROOT": str(SKILLS),
            "JARVIS_ACCOUNTS_DB": str(tmp / "no-such-dir" / "accounts.db"),
            "JARVIS_THREADS_DB": str(tmp / "no-such-dir" / "threads.db"),
-           "API_SERVER_KEY": key, "TO": to, "PYTHONDONTWRITEBYTECODE": "1"}
+           "API_SERVER_KEY": key, "TO": to, "PYTHONDONTWRITEBYTECODE": "1", "JARVIS_SOURCE": "gmail:m1"}
     if broker:
         env["JARVIS_APP_BROKER_URL"] = f"http://127.0.0.1:{port}"
     env.update(extra or {})
@@ -301,6 +301,12 @@ def main() -> int:
            (out.get("send", {}).get("ok") or {}).get("id") == "sent1", str(out.get("send")))
         posts = [s for s in FakeGoogle.seen if s["method"] == "POST"]
         ck("fake Google saw exactly one send", len(posts) == 1, str(len(posts)))
+        FakeGoogle.seen.clear()
+        out = skill_probe(8713, key_b, "dana@testco.example.com", extra={"JARVIS_SOURCE": ""})
+        ck("the same internal send with no source record is refused (spec 6)",
+           out.get("send", {}).get("raised") == "ActionHeld" and "source record" in out["send"].get("msg", ""),
+           str(out.get("send")))
+        ck("…and fake Google saw no send", not [s for s in FakeGoogle.seen if s["method"] == "POST"])
         FakeGoogle.seen.clear()
         out = skill_probe(8713, key_b, "someone@fixture.example")
         ck("external send inside the boundary is held for approval (9.1 default)",

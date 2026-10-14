@@ -80,12 +80,24 @@ def main() -> int:
         ck(f"{u} names the app-private threads DB", threads in units.get(u, ""))
     app_iso = units.get("app.isolation.conf", "")
     ck("app drop-in carries the manifest's sentinel mode (shadow)", "Environment=JARVIS_SENTINEL_MODE=shadow\n" in app_iso)
-    ck("app drop-in puts the Sentinel ledger in app-private",
-       "Environment=JARVIS_SENTINEL_LEDGER=/opt/isoprint/app-private/sentinel_ledger.jsonl\n" in app_iso)
-    ck("only the app and backup name the Sentinel ledger; only the app sets the mode",
-       sorted(u for u, body in units.items() if "JARVIS_SENTINEL_LEDGER" in body)
-       == ["app.isolation.conf", "backup.isolation.conf"]
-       and [u for u, body in units.items() if "JARVIS_SENTINEL_MODE" in body] == ["app.isolation.conf"])
+    dsn = "Environment=JARVIS_PG_DSN=postgresql:///jarvis_isoprint?host=/var/run/postgresql&user=jarvis_isoprint_app\n"
+    ck("app, jobs and backup get the platform database DSN; the gateway does not",
+       sorted(u for u, body in units.items() if dsn in body)
+       == ["app.isolation.conf", "backup.isolation.conf", "job.isolation.conf"]
+       and "JARVIS_PG_DSN" not in units.get("gateway.isolation.conf", "x"))
+    ck("app and jobs carry the sentinel mode; the gateway does not",
+       sorted(u for u, body in units.items() if "JARVIS_SENTINEL_MODE=shadow" in body)
+       == ["app.isolation.conf", "job.isolation.conf"])
+    legacy = ("JARVIS_SENTINEL_LEDGER", "JARVIS_APPROVAL_DECISIONS", "JARVIS_APPROVALS=")
+    ck("no unit names a JSONL ledger, decisions or approvals file any more",
+       not [u for u, body in units.items() if any(k in body for k in legacy)],
+       str([u for u, body in units.items() if any(k in body for k in legacy)]))
+    for sw in ("BROKER", "SENTINEL", "MODEL_PROXY"):
+        ck(f"app and jobs render JARVIS_SWITCH_{sw}=on by default",
+           all(f"Environment=JARVIS_SWITCH_{sw}=on\n" in units.get(u, "") for u in ("app.isolation.conf", "job.isolation.conf")))
+    ck("models: the manifest's agent model and the haiku background default",
+       f"Environment=JARVIS_AGENT_MODEL={m['agent_model']}\n" in app_iso
+       and "Environment=JARVIS_BACKGROUND_MODEL=claude-haiku-5-5\n" in app_iso, app_iso[-400:])
     hc = units.get("hermes-config.yaml", "")
     ck("hermes config: provider anthropic through the app's model proxy",
        "  provider: anthropic\n" in hc and "  base_url: http://127.0.0.1:8720/api/model/anthropic\n" in hc, hc[-300:])
@@ -94,11 +106,18 @@ def main() -> int:
     ck("the app (only) reads the platform model key file",
        [u for u, body in units.items() if "/etc/jarvis/anthropic.env" in body] == ["app.isolation.conf"]
        and "EnvironmentFile=-/etc/jarvis/anthropic.env\n" in units.get("app.isolation.conf", ""))
-    decisions = "Environment=JARVIS_APPROVAL_DECISIONS=/opt/isoprint/app-private/approvals_decisions.jsonl\n"
-    for u in ("app.isolation.conf", "job.isolation.conf", "backup.isolation.conf"):
-        ck(f"{u} keeps approval decisions app-only", decisions in units.get(u, ""))
-    ck("the gateway is not told where approval decisions live",
-       "JARVIS_APPROVAL_DECISIONS" not in units.get("gateway.isolation.conf", "x"))
+
+    print("── 1a. switches and models from the manifest")
+    o = copy.deepcopy(m)
+    o["switches"] = {"sentinel": False, "model_proxy": "off"}
+    o["background_model"] = "claude-haiku-9-9"
+    rc, out = run(o, "--print-units")
+    units_o = dict(re.findall(r"(?ms)^##### (\S+) #####\n(.*?)(?=^##### |\Z)", out))
+    ai = units_o.get("app.isolation.conf", "")
+    ck("YAML false and 'off' both render off; an unnamed switch stays on",
+       "JARVIS_SWITCH_SENTINEL=off\n" in ai and "JARVIS_SWITCH_MODEL_PROXY=off\n" in ai
+       and "JARVIS_SWITCH_BROKER=on\n" in ai, ai[-500:])
+    ck("background_model is taken from the manifest", "JARVIS_BACKGROUND_MODEL=claude-haiku-9-9\n" in ai)
 
     print("── 1b. twin: isolation: none renders no users and keeps the drop-in key")
     n = copy.deepcopy(m)
@@ -108,6 +127,8 @@ def main() -> int:
     ck("print-units exits 0", rc == 0, out[-300:])
     ck("no User= line", "\nUser=" not in out)
     ck("legacy oauth drop-in still carries the key placeholder value", "APP_GOOGLE_TOKEN_KEY=" in out)
+    ck("no platform database there, so the app unit switches Sentinel off (fails closed)",
+       "Environment=JARVIS_SWITCH_SENTINEL=off\n" in out and "JARVIS_PG_DSN" not in out)
 
     print("── 2. refusals (all also carry app port 8700, the last-resort stop)")
     cases = [
@@ -120,6 +141,10 @@ def main() -> int:
         ("an agent_model that is not a Claude id", {"agent_model": "gpt-4o"}, "agent_model must be a Claude model id"),
         ("two_user with a misspelt sentinel_mode", {"sentinel_mode": "shdow"}, "requires sentinel_mode"),
         ("slug too long for user names", {"slug": "a" * 20}, "too long for the two-user layout"),
+        ("a switch that is not on/off", {"switches": {"broker": "maybe"}}, "switches.broker must be on or off"),
+        ("an unknown switch", {"switches": {"egress": "on"}}, "switches must be a mapping"),
+        ("a background_model that is not a Claude id", {"background_model": "gpt-4o-mini"},
+         "background_model must be a Claude model id"),
     ]
     for label, patch, msg in cases:
         bad = copy.deepcopy(m)
