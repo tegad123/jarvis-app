@@ -282,11 +282,13 @@ def trim_agent_env(hermes_home: Path) -> None:
     log(f"{env}: API_SERVER_KEY and its model-proxy stand-in only")
 
 
-def apply_isolation(opt: Path, n: Dict[str, str], data_dirs: List[Path]) -> None:
+def apply_isolation(opt: Path, n: Dict[str, str], data_dirs: List[Path], keep_private: bool = False) -> None:
     """Ownership and modes for the two-user layout. Code is root:{group} and
     read-only to both users; the app owns app-private and jarvis-app/data; the
     agent owns the hermes home; state/, outbox/ and skill data/ are shared
-    setgid group dirs."""
+    setgid group dirs. keep_private (upgrade): the app's databases and OAuth
+    client are created only if missing, never replaced; a refresh token is
+    only valid with the client that issued it."""
     app, agent, g = n["app_user"], n["agent_user"], n["group"]
     jarvis, skills, hermes, private = opt / "jarvis-app", opt / "skills", opt / "hermes", opt / "app-private"
     run(["chown", f"root:{g}", str(opt)])
@@ -324,11 +326,16 @@ def apply_isolation(opt: Path, n: Dict[str, str], data_dirs: List[Path]) -> None
     run(["chmod", "-R", "o-rwx", str(hermes)])
     os.chmod(hermes / ".env", 0o600)
     private.mkdir(mode=0o700, exist_ok=True)
-    run(["install", "-m", "600", "-o", app, "-g", app, str(PLATFORM_OAUTH_CLIENT),
-         str(private / "oauth_client.json")])
+    if not (keep_private and (private / "oauth_client.json").exists()):
+        run(["install", "-m", "600", "-o", app, "-g", app, str(PLATFORM_OAUTH_CLIENT),
+             str(private / "oauth_client.json")])
     # Created empty (a valid SQLite database) so it is app-only before first use.
     for name in ("jarvis_accounts.db", "jarvis_threads.db"):
-        run(["install", "-m", "600", "-o", app, "-g", app, "/dev/null", str(private / name)])
+        if not (keep_private and (private / name).exists()):
+            run(["install", "-m", "600", "-o", app, "-g", app, "/dev/null", str(private / name)])
+    if keep_private:
+        run(["chown", "-R", f"{app}:{app}", str(private)])
+        run(["chmod", "-R", "u+rwX,go-rwx", str(private)])
     run(["chown", f"{app}:{app}", str(private)])
     os.chmod(private, 0o700)
     log(f"two-user ownership applied: app={app} agent={agent} group={g}")
@@ -981,6 +988,149 @@ def print_unroute(slug: str) -> None:
 
 def provision(manifest_path: Path) -> None:
     manifest = load_yaml(manifest_path)
+    slug, isolation, posture, ports, packs = validate_manifest(manifest)
+    hits = structural_collisions(slug, ports)
+    if isolation == "two_user":
+        hits += identity_collisions(slug)
+    if hits:
+        die("structural collision:\n  " + "\n  ".join(hits))
+    for label, port in (("app", ports["app"]), ("gateway", ports["gateway"]), ("hooks", ports["hooks"])):
+        if ss_listen(int(port)):
+            die(f"ss supplementary: port {port} ({label}) already listening")
+    log("structural collision checks passed; ss supplementary clean")
+
+    sha_skills, sha_app = origin_shas(manifest)
+
+    client_src = PLATFORM_OAUTH_CLIENT if isolation == "two_user" else OAUTH_CLIENT
+    if not client_src.is_file():
+        die(f"OAuth client missing (not reading contents): {client_src}")
+
+    opt = Path(f"/opt/{slug}")
+    opt.mkdir(mode=0o700, parents=False)
+    log(f"mkdir {opt}")
+    jarvis = opt / "jarvis-app"
+    skills_root = opt / "skills"
+    skills_clone = skills_root / "openclaw-imports"
+    hermes = opt / "hermes"
+    skills_root.mkdir()
+    clone_app(jarvis, sha_app)
+    clone_skills(skills_clone, sha_skills)
+    loadout = load_loadout(skills_clone, manifest.get("skill_loadout") or "base")
+    log(f"loadout from {loadout['source']}")
+    shipped = prune_to_loadout(
+        skills_clone, loadout, manifest.get("skill_loadout_optional") or []
+    )
+    log(f"shipped skills: {shipped}")
+
+    hermes.mkdir()
+    for d in ("state", "credentials", "workspace", "outbox"):
+        (hermes / d).mkdir()
+    (jarvis / "data" / "attachments").mkdir(parents=True, exist_ok=True)
+    (hermes / "skills").symlink_to(skills_root)
+    log(f"symlink {hermes / 'skills'} → {skills_root}")
+    if packs == "omit":
+        (hermes / ".no-bundled-skills").write_text(
+            "omit: hermes must not seed bundled curator packs\n"
+        )
+        log("curator_packs=omit: wrote hermes/.no-bundled-skills")
+    else:
+        log("curator_packs=defaults: leaving bundled sync enabled (no cp from testco/live)")
+
+    mapping_pre = common_map(manifest, posture, "PENDING", "")
+    write_file(opt / f"{slug}_preflight.sh", fill(read_template("preflight.sh"), mapping_pre), 0o755)
+    write_file(hermes / "config.yaml", fill(read_template("hermes-config.yaml"), mapping_pre))
+    write_file(
+        hermes / "SOUL.md",
+        f"You are {manifest['agent_display_name']}, the assistant for "
+        f"{manifest['display_name']}.\n",
+    )
+
+    passphrase = mint_isolated_secrets(slug, hermes) if isolation == "two_user" else mint_env(hermes)
+    print_passphrase_once(passphrase)
+
+    minted = render_skill_config(manifest, posture, opt, skills_clone, shipped, loadout, hermes)
+    if isolation == "two_user":
+        if minted:
+            die("provision_client minted a second passphrase on a two-user tenant; the app env file is the only source")
+        trim_agent_env(hermes)
+
+    # Two-user tenants keep the token key in the EnvironmentFile, not a drop-in.
+    fernet = "IN-ENV-FILE" if isolation == "two_user" else Fernet.generate_key().decode("ascii")
+    force = " --force" if another_gateway_running() else ""
+    if force:
+        log("another gateway run is on this host; gateway unit will use --force")
+    mapping = common_map(manifest, posture, fernet, force, shipped)
+    install_units(manifest, mapping)
+    write_file(opt / "ONBOARDING-MAILBOX.md", (TEMPLATES / "ONBOARDING-MAILBOX.md").read_text())
+    if isolation == "two_user":
+        names = create_identities(slug)
+        apply_isolation(opt, names, skill_data_dirs(opt, shipped))
+        create_platform_db(jarvis, slug, names["app_user"])
+    print_ingress(slug, manifest["public_origin"])
+
+    run(["systemctl", "daemon-reload"])
+    run(["systemctl", "enable", "--now", f"{slug}-app.service", f"{slug}-gateway.service"])
+    for unit in (f"{slug}-app.service", f"{slug}-gateway.service"):
+        r = subprocess.run(["systemctl", "is-active", unit], capture_output=True, text=True)
+        st = (r.stdout or "").strip() or "unknown"
+        if st != "active":
+            die(f"{unit} is {st} after enable --now — preflight/start failed (see journalctl -u {unit})")
+    run(["systemctl", "enable", "--now", f"{slug}-backup.timer"])
+    log(f"enabled {slug}-app, {slug}-gateway, and {slug}-backup.timer")
+
+
+def origin_shas(manifest: dict) -> tuple:
+    sha_skills = str(manifest["skills_origin_sha"]).strip()
+    sha_app = str(manifest.get("app_origin_sha") or "").strip()
+    if not sha_app:
+        sha_app = subprocess.check_output(
+            ["git", "-C", str(REPO), "rev-parse", "HEAD"], text=True
+        ).strip()
+        log(f"app_origin_sha omitted; using invoking repo HEAD {sha_app}")
+    return sha_skills, sha_app
+
+
+def render_skill_config(manifest: dict, posture: dict, opt: Path, skills_clone: Path,
+                        shipped: List[str], loadout: dict, hermes_home: Path) -> bool:
+    """identity/channels/runtime.json into skills_clone/_shared, for a tenant
+    whose tree is (or will be) at opt. True if provision_client minted secrets."""
+    ports = manifest["ports"]
+    jarvis, hermes = opt / "jarvis-app", opt / "hermes"
+    paths = {
+        "app_root": str(jarvis),
+        "workspace": str(hermes / "workspace"),
+        "skills_root": str(opt / "skills" / "openclaw-imports"),
+        "tasks_db": str(hermes / "state" / "jarvis_tasks.db"),
+        "media_inbound": str(hermes / "media" / "inbound"),
+        "render_output": str(hermes / "workspace" / "renders"),
+        "cloudflared_dir": "/etc/cloudflared",
+    }
+    cfg = build_client_config(manifest, paths, shipped, loadout)
+    minted = run_provision_client(skills_clone, cfg, hermes_home, venv_python(manifest))
+    stamp_identity_mailbox(skills_clone, manifest)
+    runtime = json.loads((skills_clone / "_shared" / "runtime.json").read_text())
+    # Dual source: runtime.safety.allow_writes matches JARVIS_ALLOW_WRITES.
+    # provision_client refused true in its *input*; the provisioner patches the
+    # stamped output so captured/blocked/live stay in sync with the unit env.
+    runtime.setdefault("safety", {})["allow_writes"] = bool(posture["writes_armed"])
+    runtime["models"] = model_settings(manifest)
+    (skills_clone / "_shared" / "runtime.json").write_text(json.dumps(runtime, indent=2) + "\n")
+    log(f"runtime.safety.allow_writes={runtime['safety']['allow_writes']} (synced to env)")
+    if (runtime.get("gateway") or {}).get("base_url") != f"http://127.0.0.1:{int(ports['gateway'])}":
+        die("runtime gateway.base_url does not equal HERMES_API_URL target")
+    if (runtime.get("paths") or {}).get("app_root") != str(jarvis):
+        die("runtime paths.app_root missing after provision_client")
+    gpt_port = ((runtime.get("skills") or {}).get("gmail-push-trigger") or {}).get("webhook_port")
+    if int(gpt_port) != int(ports["hooks"]):
+        die("runtime webhook_port != ports.hooks")
+    for name in shipped:
+        block = (runtime.get("skills") or {}).get(name)
+        if not isinstance(block, dict) or "enabled" not in block:
+            die(f"runtime.json missing enabled key for shipped skill {name}")
+    return minted
+
+
+def validate_manifest(manifest: dict) -> tuple:
     slug = manifest.get("slug")
     check_slug(slug)
     for key in ("display_name", "timezone", "assistant_address", "agent_display_name",
@@ -1037,130 +1187,7 @@ def provision(manifest_path: Path) -> None:
         die("gmail_push_trigger.webhook_port must equal ports.hooks")
 
     posture = posture_rules(manifest)
-    hits = structural_collisions(slug, ports)
-    if isolation == "two_user":
-        hits += identity_collisions(slug)
-    if hits:
-        die("structural collision:\n  " + "\n  ".join(hits))
-    for label, port in (("app", ports["app"]), ("gateway", ports["gateway"]), ("hooks", ports["hooks"])):
-        if ss_listen(int(port)):
-            die(f"ss supplementary: port {port} ({label}) already listening")
-    log("structural collision checks passed; ss supplementary clean")
-
-    sha_skills = str(manifest["skills_origin_sha"]).strip()
-    sha_app = str(manifest.get("app_origin_sha") or "").strip()
-    if not sha_app:
-        sha_app = subprocess.check_output(
-            ["git", "-C", str(REPO), "rev-parse", "HEAD"], text=True
-        ).strip()
-        log(f"app_origin_sha omitted; using invoking repo HEAD {sha_app}")
-
-    client_src = PLATFORM_OAUTH_CLIENT if isolation == "two_user" else OAUTH_CLIENT
-    if not client_src.is_file():
-        die(f"OAuth client missing (not reading contents): {client_src}")
-
-    opt = Path(f"/opt/{slug}")
-    opt.mkdir(mode=0o700, parents=False)
-    log(f"mkdir {opt}")
-    jarvis = opt / "jarvis-app"
-    skills_root = opt / "skills"
-    skills_clone = skills_root / "openclaw-imports"
-    hermes = opt / "hermes"
-    skills_root.mkdir()
-    clone_app(jarvis, sha_app)
-    clone_skills(skills_clone, sha_skills)
-    loadout = load_loadout(skills_clone, manifest.get("skill_loadout") or "base")
-    log(f"loadout from {loadout['source']}")
-    shipped = prune_to_loadout(
-        skills_clone, loadout, manifest.get("skill_loadout_optional") or []
-    )
-    log(f"shipped skills: {shipped}")
-
-    hermes.mkdir()
-    for d in ("state", "credentials", "workspace", "outbox"):
-        (hermes / d).mkdir()
-    (jarvis / "data" / "attachments").mkdir(parents=True, exist_ok=True)
-    (hermes / "skills").symlink_to(skills_root)
-    log(f"symlink {hermes / 'skills'} → {skills_root}")
-    if packs == "omit":
-        (hermes / ".no-bundled-skills").write_text(
-            "omit: hermes must not seed bundled curator packs\n"
-        )
-        log("curator_packs=omit: wrote hermes/.no-bundled-skills")
-    else:
-        log("curator_packs=defaults: leaving bundled sync enabled (no cp from testco/live)")
-
-    mapping_pre = common_map(manifest, posture, "PENDING", "")
-    write_file(opt / f"{slug}_preflight.sh", fill(read_template("preflight.sh"), mapping_pre), 0o755)
-    write_file(hermes / "config.yaml", fill(read_template("hermes-config.yaml"), mapping_pre))
-    write_file(
-        hermes / "SOUL.md",
-        f"You are {manifest['agent_display_name']}, the assistant for "
-        f"{manifest['display_name']}.\n",
-    )
-
-    passphrase = mint_isolated_secrets(slug, hermes) if isolation == "two_user" else mint_env(hermes)
-    print_passphrase_once(passphrase)
-
-    paths = {
-        "app_root": str(jarvis),
-        "workspace": str(hermes / "workspace"),
-        "skills_root": str(skills_clone),
-        "tasks_db": str(hermes / "state" / "jarvis_tasks.db"),
-        "media_inbound": str(hermes / "media" / "inbound"),
-        "render_output": str(hermes / "workspace" / "renders"),
-        "cloudflared_dir": "/etc/cloudflared",
-    }
-    cfg = build_client_config(manifest, paths, shipped, loadout)
-    minted = run_provision_client(skills_clone, cfg, hermes, venv_python(manifest))
-    if isolation == "two_user":
-        if minted:
-            die("provision_client minted a second passphrase on a two-user tenant; the app env file is the only source")
-        trim_agent_env(hermes)
-    stamp_identity_mailbox(skills_clone, manifest)
-    runtime = json.loads((skills_clone / "_shared" / "runtime.json").read_text())
-    # Dual source: runtime.safety.allow_writes matches JARVIS_ALLOW_WRITES.
-    # provision_client refused true in its *input*; the provisioner patches the
-    # stamped output so captured/blocked/live stay in sync with the unit env.
-    runtime.setdefault("safety", {})["allow_writes"] = bool(posture["writes_armed"])
-    runtime["models"] = model_settings(manifest)
-    (skills_clone / "_shared" / "runtime.json").write_text(json.dumps(runtime, indent=2) + "\n")
-    log(f"runtime.safety.allow_writes={runtime['safety']['allow_writes']} (synced to env)")
-    if (runtime.get("gateway") or {}).get("base_url") != f"http://127.0.0.1:{int(ports['gateway'])}":
-        die("runtime gateway.base_url does not equal HERMES_API_URL target")
-    if (runtime.get("paths") or {}).get("app_root") != str(jarvis):
-        die("runtime paths.app_root missing after provision_client")
-    gpt_port = ((runtime.get("skills") or {}).get("gmail-push-trigger") or {}).get("webhook_port")
-    if int(gpt_port) != int(ports["hooks"]):
-        die("runtime webhook_port != ports.hooks")
-    for name in shipped:
-        block = (runtime.get("skills") or {}).get(name)
-        if not isinstance(block, dict) or "enabled" not in block:
-            die(f"runtime.json missing enabled key for shipped skill {name}")
-
-    # Two-user tenants keep the token key in the EnvironmentFile, not a drop-in.
-    fernet = "IN-ENV-FILE" if isolation == "two_user" else Fernet.generate_key().decode("ascii")
-    force = " --force" if another_gateway_running() else ""
-    if force:
-        log("another gateway run is on this host; gateway unit will use --force")
-    mapping = common_map(manifest, posture, fernet, force, shipped)
-    install_units(manifest, mapping)
-    write_file(opt / "ONBOARDING-MAILBOX.md", (TEMPLATES / "ONBOARDING-MAILBOX.md").read_text())
-    if isolation == "two_user":
-        names = create_identities(slug)
-        apply_isolation(opt, names, skill_data_dirs(opt, shipped))
-        create_platform_db(jarvis, slug, names["app_user"])
-    print_ingress(slug, manifest["public_origin"])
-
-    run(["systemctl", "daemon-reload"])
-    run(["systemctl", "enable", "--now", f"{slug}-app.service", f"{slug}-gateway.service"])
-    for unit in (f"{slug}-app.service", f"{slug}-gateway.service"):
-        r = subprocess.run(["systemctl", "is-active", unit], capture_output=True, text=True)
-        st = (r.stdout or "").strip() or "unknown"
-        if st != "active":
-            die(f"{unit} is {st} after enable --now — preflight/start failed (see journalctl -u {unit})")
-    run(["systemctl", "enable", "--now", f"{slug}-backup.timer"])
-    log(f"enabled {slug}-app, {slug}-gateway, and {slug}-backup.timer")
+    return slug, isolation, posture, ports, packs
 
 
 def create_platform_db(jarvis: Path, slug: str, app_user: str) -> None:
@@ -1359,6 +1386,270 @@ def reconfigure(manifest_path: Path, restart_approved: bool) -> None:
     die(f"{slug} not healthy within 120s after reconfigure: {states} (journalctl -u {units[0]})")
 
 
+LEGACY_FILES = ("hermes/state/approvals.jsonl", "app-private/approvals_decisions.jsonl",
+                "app-private/sentinel_ledger.jsonl")
+UPGRADE_TIMEOUT = 120
+
+
+def tenant_unit_paths(slug: str) -> List[Path]:
+    """Every unit file, drop-in dir and logrotate file the provisioner owns for slug."""
+    stems = ["app", "gateway", "backup", "task-digest", "metrics-monthly"] + \
+            [f"sweep-{s.replace('_', '-')}" for s in SWEEPS]
+    out = []
+    for stem in stems:
+        for suffix in (".service", ".timer", ".service.d"):
+            p = UNIT_DIR / f"{slug}-{stem}{suffix}"
+            if p.exists():
+                out.append(p)
+    lr = Path("/etc/logrotate.d") / f"jarvis-{slug}"
+    return out + ([lr] if lr.exists() else [])
+
+
+def unit_env_has(unit: str, name: str) -> bool:
+    env = subprocess.run(["systemctl", "show", unit, "-p", "Environment", "--value"],
+                         capture_output=True, text=True).stdout
+    return any(tok.startswith(f"{name}=") for tok in env.split())
+
+
+def tenant_healthy(slug: str, ports: dict) -> List[str]:
+    """Empty when app and gateway are active and answering; else what is wrong."""
+    import urllib.request  # noqa: PLC0415
+    bad = []
+    for u in (f"{slug}-app.service", f"{slug}-gateway.service"):
+        st = subprocess.run(["systemctl", "is-active", u], capture_output=True, text=True).stdout.strip()
+        if st != "active":
+            bad.append(f"{u} {st}")
+    if not _ping(int(ports["app"])):
+        bad.append("app /api/ping not answering")
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{int(ports['gateway'])}/health", timeout=3) as r:
+            if json.loads(r.read()).get("status") != "ok":
+                bad.append("gateway /health not ok")
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"gateway /health: {type(exc).__name__}")
+    return bad
+
+
+def wait_healthy(slug: str, ports: dict, timeout: int = UPGRADE_TIMEOUT) -> List[str]:
+    deadline = time.time() + timeout
+    bad = ["not checked"]
+    while time.time() < deadline:
+        bad = tenant_healthy(slug, ports)
+        if not bad:
+            return []
+        time.sleep(2)
+    return bad
+
+
+def copy_sqlite(src: Path, dest: Path, owner: str) -> Dict[str, int]:
+    """Consistent copy (WAL included) with the SQLite backup API; row counts
+    must match table for table."""
+    import sqlite3  # noqa: PLC0415
+    tmp = dest.with_name(dest.name + ".upgrade-tmp")
+    s = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
+    d = sqlite3.connect(tmp)
+    s.backup(d)
+    tables = [r[0] for r in s.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+    counts = {}
+    for t in tables:
+        a = s.execute(f'SELECT count(*) FROM "{t}"').fetchone()[0]
+        b = d.execute(f'SELECT count(*) FROM "{t}"').fetchone()[0]
+        if a != b:
+            die(f"copy of {src} lost rows in {t}: {a} -> {b}")
+        counts[t] = a
+    s.close()
+    d.close()
+    run(["install", "-m", "600", "-o", owner, "-g", owner, str(tmp), str(dest)])
+    tmp.unlink()
+    return counts
+
+
+def upgrade(manifest_path: Path, restart_approved: bool) -> None:
+    """Bring an existing two-user tenant to the manifest's commits and the
+    current layout without touching its data or secrets: fresh code and skill
+    config, units re-rendered (old drop-ins archived), threads moved behind the
+    app, its Postgres database created. Everything replaced is snapshotted
+    first; if app or gateway is not healthy within UPGRADE_TIMEOUT seconds the
+    snapshot is restored and the old version restarted."""
+    manifest = load_yaml(manifest_path)
+    slug, isolation, posture, ports, _packs = validate_manifest(manifest)
+    if isolation != "two_user":
+        die("--upgrade is for two-user tenants")
+    if posture["writes_armed"]:
+        die("--upgrade refuses a manifest that arms writes")
+    opt = Path(f"/opt/{slug}")
+    names = isolation_names(slug)
+    env_file = ETC_JARVIS / f"{slug}-app.env"
+    missing = [str(p) for p in (opt / "app-private", opt / "hermes" / ".env", env_file) if not p.exists()]
+    missing += [n for n in (names["app_user"], names["agent_user"]) if not _getent("passwd", n)]
+    if missing:
+        die(f"--upgrade needs an existing two-user tenant; missing: {missing}")
+    cfg_text = (opt / "hermes" / "config.yaml").read_text()
+    if f"port: {int(ports['gateway'])}" not in cfg_text:
+        die("manifest gateway port differs from the running tenant; ports change only by re-provisioning")
+    if any(ln.startswith("JARVIS_ALLOW_WRITES") for ln in env_file.read_text().splitlines()):
+        die(f"{env_file} sets JARVIS_ALLOW_WRITES")
+    for u in (f"{slug}-app.service", f"{slug}-gateway.service"):
+        if unit_env_has(u, "JARVIS_ALLOW_WRITES"):
+            die(f"{u} has JARVIS_ALLOW_WRITES in its environment")
+    log(f"posture before upgrade: {posture['posture']}; JARVIS_ALLOW_WRITES unset on app, gateway and env file")
+    if mailbox_connected(opt) and not restart_approved:
+        die(f"STOP gate: {slug} has a Google mailbox connected. Restarting it needs a human yes; "
+            "re-run with --restart-approved once you have it.")
+    for rel in LEGACY_FILES:
+        p = opt / rel
+        if p.exists() and p.stat().st_size:
+            die(f"{p} holds records; importing them is not part of --upgrade")
+    if (opt / "app-private" / "jarvis_threads.db").exists() and (opt / "hermes" / "state" / "jarvis_threads.db").exists():
+        die("threads database exists both shared and app-private; refusing to pick one")
+    db_existed = subprocess.run(["runuser", "-u", "postgres", "--", "psql", "-XqAt", "-c",
+                                 f"SELECT 1 FROM pg_database WHERE datname = 'jarvis_{slug}'"],
+                                capture_output=True, text=True, cwd="/").stdout.strip() == "1"
+    if db_existed:
+        die(f"jarvis_{slug} already exists; --upgrade creates it")
+    if not PLATFORM_OAUTH_CLIENT.is_file() and not (opt / "app-private" / "oauth_client.json").exists():
+        die("no OAuth client for the tenant")
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    snap = Path("/root/backups") / slug / f"upgrade-{stamp}"
+    snap.mkdir(parents=True, mode=0o700)
+    os.chmod(snap, 0o700)
+    log(f"upgrade workspace {snap}")
+
+    # Staged while the old version still runs: nothing under /opt changes yet.
+    sha_skills, sha_app = origin_shas(manifest)
+    new = snap / "new"
+    new.mkdir()
+    clone_app(new / "jarvis-app", sha_app)
+    clone_skills(new / "openclaw-imports", sha_skills)
+    loadout = load_loadout(new / "openclaw-imports", manifest.get("skill_loadout") or "base")
+    shipped = prune_to_loadout(new / "openclaw-imports", loadout, manifest.get("skill_loadout_optional") or [])
+    render_home = snap / "render-home"
+    render_home.mkdir(mode=0o700)
+    (render_home / ".env").write_text("APP_PASSPHRASE=unused-render-only\nAPP_SESSION_SECRET=unused-render-only\n")
+    if render_skill_config(manifest, posture, opt, new / "openclaw-imports", shipped, loadout, render_home):
+        die("provision_client minted secrets during an upgrade render")
+    shutil.rmtree(render_home)
+    log(f"staged app {sha_app} and skills {sha_skills} in {new}")
+
+    units = [f"{slug}-app.service", f"{slug}-gateway.service"]
+    timers = [p.name for p in tenant_unit_paths(slug) if p.suffix == ".timer"]
+    enabled_timers = [t for t in timers if subprocess.run(["systemctl", "is-enabled", t], capture_output=True,
+                                                          text=True).stdout.strip() == "enabled"]
+    run(["systemctl", "stop", *timers, *units])
+    run(["tar", "--xattrs", "--acls", "-cpf", str(snap / "opt.tar"), "-C", "/opt", slug])
+    run(["tar", "--xattrs", "--acls", "-cpf", str(snap / "units.tar"), "-C", "/",
+         *[str(p.relative_to("/")) for p in tenant_unit_paths(slug)]])
+    for f in ("opt.tar", "units.tar"):
+        os.chmod(snap / f, 0o600)
+    log(f"snapshot: {snap}/opt.tar and units.tar; enabled timers {enabled_timers}")
+
+    created_db = False
+    try:
+        old = snap / "old"
+        old.mkdir()
+        jarvis = opt / "jarvis-app"
+        clone = opt / "skills" / "openclaw-imports"
+        os.rename(jarvis, old / "jarvis-app")
+        os.rename(new / "jarvis-app", jarvis)
+        if (jarvis / "data").exists():
+            shutil.rmtree(jarvis / "data")
+        os.rename(old / "jarvis-app" / "data", jarvis / "data")
+        os.rename(clone, old / "openclaw-imports")
+        os.rename(new / "openclaw-imports", clone)
+        for data in sorted((old / "openclaw-imports").glob("*/data")):
+            target = clone / data.parent.name / "data"
+            if not target.parent.is_dir():
+                log(f"skill {data.parent.name} is no longer shipped; its data stays in {data}")
+                continue
+            if target.exists():
+                shutil.rmtree(target)
+            os.rename(data, target)
+            log(f"kept skill data {target}")
+
+        legacy = snap / "legacy"
+        legacy.mkdir()
+        shared_threads = opt / "hermes" / "state" / "jarvis_threads.db"
+        if shared_threads.exists():
+            counts = copy_sqlite(shared_threads, opt / "app-private" / "jarvis_threads.db", names["app_user"])
+            for suffix in ("", "-wal", "-shm"):
+                p = Path(f"{shared_threads}{suffix}")
+                if p.exists():
+                    os.rename(p, legacy / p.name)
+            log(f"threads database moved behind the app (rows per table {counts}); shared copy in {legacy}")
+        for rel in LEGACY_FILES:
+            p = opt / rel
+            if p.exists():
+                os.rename(p, legacy / p.name)
+                log(f"moved empty legacy file {rel} to {legacy}")
+
+        old_units = snap / "old-dropins"
+        old_units.mkdir()
+        for d in UNIT_DIR.glob(f"{slug}-*.service.d"):
+            for conf in d.glob("*.conf"):
+                os.rename(conf, old_units / f"{d.name}__{conf.name}")
+        log(f"archived old drop-ins to {old_units}")
+
+        mapping = common_map(manifest, posture, "IN-ENV-FILE",
+                             " --force" if another_gateway_running() else "", shipped)
+        install_units(manifest, mapping)
+        hermes = opt / "hermes"
+        write_file(opt / f"{slug}_preflight.sh", fill(read_template("preflight.sh"), mapping), 0o755)
+        write_file(hermes / "config.yaml", fill(read_template("hermes-config.yaml"), mapping))
+        write_file(hermes / "SOUL.md", f"You are {manifest['agent_display_name']}, the assistant for "
+                                       f"{manifest['display_name']}.\n")
+        trim_agent_env(hermes)
+        apply_isolation(opt, names, skill_data_dirs(opt, shipped), keep_private=True)
+        create_platform_db(jarvis, slug, names["app_user"])
+        created_db = True
+
+        run(["systemctl", "daemon-reload"])
+        run(["systemctl", "start", *units])
+        bad = wait_healthy(slug, ports)
+        for u in units:
+            if unit_env_has(u, "JARVIS_ALLOW_WRITES"):
+                bad.append(f"{u} has JARVIS_ALLOW_WRITES after upgrade")
+        if bad:
+            die(f"{slug} not healthy within {UPGRADE_TIMEOUT}s after upgrade: {bad}")
+        if enabled_timers:
+            run(["systemctl", "start", *enabled_timers])
+    except BaseException as exc:
+        log(f"UPGRADE FAILED ({exc!r}); rolling back from {snap}")
+        rollback_upgrade(slug, ports, snap, created_db, units, timers, enabled_timers)
+        raise
+    log(f"upgraded {slug} to app {sha_app}, skills {sha_skills}; app and gateway healthy; "
+        f"snapshot kept in {snap}")
+
+
+def rollback_upgrade(slug: str, ports: dict, snap: Path, created_db: bool, units: List[str],
+                     timers: List[str], enabled_timers: List[str]) -> None:
+    failed = snap / "failed"
+    failed.mkdir(exist_ok=True)
+    subprocess.run(["systemctl", "stop", *timers, *units], check=False)
+    if created_db:
+        tool = REPO / "scripts" / "pg_tenant.py"
+        r = subprocess.run([str(PLATFORM_VENV), str(tool), "dump", slug, str(failed / "platform.dump")], check=False)
+        log(f"rollback: dumped jarvis_{slug} to {failed / 'platform.dump'} (rc={r.returncode})")
+        run([str(PLATFORM_VENV), str(tool), "drop", slug, "--yes"])
+    opt = Path(f"/opt/{slug}")
+    if opt.exists():
+        os.rename(opt, failed / "opt")
+    run(["tar", "--xattrs", "--acls", "-xpf", str(snap / "opt.tar"), "-C", "/opt"])
+    (failed / "units").mkdir(exist_ok=True)
+    for p in tenant_unit_paths(slug):
+        os.rename(p, failed / "units" / p.name)
+    run(["tar", "--xattrs", "--acls", "-xpf", str(snap / "units.tar"), "-C", "/"])
+    run(["systemctl", "daemon-reload"])
+    run(["systemctl", "start", *units])
+    bad = wait_healthy(slug, ports)
+    if enabled_timers:
+        subprocess.run(["systemctl", "start", *enabled_timers], check=False)
+    if bad:
+        log(f"ROLLBACK DONE BUT OLD VERSION NOT HEALTHY: {bad}. Failed tree in {failed}.")
+    else:
+        log(f"rolled back: old version healthy again; failed tree in {failed}")
+
+
 def _ping(port: int) -> bool:
     import urllib.request  # noqa: PLC0415
     try:
@@ -1486,8 +1777,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--yes", action="store_true", help="confirm teardown")
     ap.add_argument("--reconfigure", action="store_true",
                     help="with --manifest: re-apply names, timezone, models and switches, then restart")
+    ap.add_argument("--upgrade", action="store_true",
+                    help="with --manifest: bring an existing two-user tenant to the manifest's commits and "
+                         "the current layout, keeping data and secrets; rolls back if unhealthy")
     ap.add_argument("--restart-approved", action="store_true",
-                    help="with --reconfigure: a human said yes to restarting a tenant with a mailbox connected")
+                    help="with --reconfigure or --upgrade: a human said yes to restarting a tenant with a "
+                         "mailbox connected")
     ap.add_argument("--check-collisions", action="store_true")
     ap.add_argument("--check-loadout", action="store_true",
                     help="completeness + prune dry-run; no /opt stamp")
@@ -1528,6 +1823,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
     if args.reconfigure:
         reconfigure(args.manifest, args.restart_approved)
+        return 0
+    if args.upgrade:
+        upgrade(args.manifest, args.restart_approved)
         return 0
     provision(args.manifest)
     return 0
