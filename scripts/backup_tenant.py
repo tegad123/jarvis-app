@@ -20,15 +20,13 @@ from pathlib import Path
 
 SHARED_VENV_NOTE = "/root/jarvis-app/.venv/bin/python"
 
-DB_NAMES = (
-    "jarvis_accounts.db",
+STATE_DBS = (
     "jarvis_leads.db",
     "jarvis_tasks.db",
     "jarvis_threads.db",
     "sweeps.db",
-    "state.db",
-    "kanban.db",
 )
+HERMES_DBS = ("state.db", "kanban.db")
 JSONL_NAMES = (
     "activity_feed.jsonl",
     "approvals.jsonl",
@@ -69,6 +67,17 @@ def snapshot_db(src: Path, dest_dir: Path) -> Path | None:
     return consistent
 
 
+def db_sources(opt: Path) -> list[tuple[str, Path]]:
+    """Where each database lives. The accounts DB can sit outside hermes/state
+    (an app-only directory) and is then named by JARVIS_ACCOUNTS_DB."""
+    hermes = opt / "hermes"
+    state = hermes / "state"
+    accounts = Path(os.environ.get("JARVIS_ACCOUNTS_DB") or state / "jarvis_accounts.db")
+    return ([("jarvis_accounts.db", accounts)]
+            + [(n, state / n) for n in STATE_DBS]
+            + [(n, hermes / n) for n in HERMES_DBS])
+
+
 def rotate(dest_root: Path, keep: int) -> None:
     dirs = sorted([p for p in dest_root.iterdir() if p.is_dir() and p.name[:1].isdigit()],
                   reverse=True)
@@ -90,12 +99,14 @@ def backup_slug(slug: str, dest_root: Path, keep: int) -> Path:
     dest = dest_root / stamp
     dest.mkdir(parents=True, exist_ok=False)
     written = []
-    for name in DB_NAMES:
-        src = state / name
-        # sweeps.db may live beside skills; also check hermes/state only (plan).
+    missing = []
+    for name, src in db_sources(opt):
         got = snapshot_db(src, dest)
         if got:
             written.append(got.name)
+        else:
+            missing.append(str(src))
+            print(f"backup: MISSING {name} (not found at {src})")
     # JSONL as files (copytruncate-safe: copy, do not truncate the live file)
     for name in JSONL_NAMES:
         src = state / name
@@ -111,6 +122,7 @@ def backup_slug(slug: str, dest_root: Path, keep: int) -> Path:
         "slug": slug,
         "created_utc": stamp,
         "files": written,
+        "missing": missing,
         "keep_daily": keep,
         "note": "DBs are consistent sqlite copies (WAL merged via backup()). "
                 "staging/ holds the raw db+wal+shm copies.",
@@ -119,7 +131,7 @@ def backup_slug(slug: str, dest_root: Path, keep: int) -> Path:
     rotate(dest_root, keep)
     print(f"backup: wrote {dest}")
     print(f"backup: db_files={sum(1 for n in written if n.endswith('.db'))} "
-          f"all_files={len(written)}")
+          f"all_files={len(written)} missing={len(missing)}")
     for n in written:
         print(f"  {n}")
     return dest
