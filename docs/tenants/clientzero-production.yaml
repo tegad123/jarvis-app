@@ -33,6 +33,7 @@ curator_packs: omit
 writes_posture: blocked
 venv: platform
 isolation: two_user
+sentinel_mode: shadow
 
 backup:
   destination: /root/backups/clientzero

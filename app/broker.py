@@ -13,21 +13,34 @@ never through the tunnel (a request carrying Cloudflare or forwarding headers
 is refused even with the key). Google methods are an allowlist; a write-class
 method runs only when writes are enabled, and a send must clear the outbound
 recipient boundary here too, whatever the caller checked.
+
+SENTINEL (docs/SPEC.md 9.1-9.5, app/sentinel.py). Every write is classified
+and decided before it can run, and every decision is appended to the
+app-only ledger (JARVIS_SENTINEL_LEDGER). JARVIS_SENTINEL_MODE=shadow logs
+each write with its verdict and executes none. Reads that bring in
+untrusted content taint the caller's run (X-Jarvis-Run, falling back to the
+Hermes session); a write with no run identity is treated as tainted. An
+`ask` verdict is refused until the approvals and grants store exists.
 """
 import base64
+import fcntl
 import hmac
+import json
 import logging
 import os
 import re
 import sys
+import threading
+from datetime import timedelta
+from pathlib import Path
 from email import message_from_bytes
-from email.utils import getaddresses
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from . import config
+from . import sentinel
 from . import threads as threads_mod
 
 log = logging.getLogger("app.broker")
@@ -61,6 +74,16 @@ METHODS: Dict[tuple, Dict[str, str]] = {
 SEND_METHODS = {("gmail", "v1", "users.messages.send")}
 FORWARD_HEADERS = ("cf-connecting-ip", "cf-ray", "x-forwarded-for", "forwarded", "x-real-ip")
 COUNTER_NAME = re.compile(r"^[a-z0-9_.:-]{1,120}$")
+CONTEXT_VALUE = re.compile(r"^[A-Za-z0-9_.:@-]{1,120}$")
+SHADOW = "shadow"
+LEDGER = Path(os.environ.get("JARVIS_SENTINEL_LEDGER")
+              or str(config.HERMES_HOME / "state" / "sentinel_ledger.jsonl")).expanduser()
+_TAINTED: Dict[str, str] = {}
+_TAINT_LOCK = threading.Lock()
+
+
+def sentinel_mode() -> str:
+    return os.environ.get("JARVIS_SENTINEL_MODE", "enforce").strip().lower() or "enforce"
 
 
 def _bump(name: str) -> None:
@@ -98,23 +121,129 @@ def _writes_allowed() -> bool:
     return write_guard.writes_allowed()
 
 
-def _check_recipients(params: Dict[str, Any]) -> None:
+def _recipients(params: Dict[str, Any]) -> Tuple[list, Optional[str]]:
+    """The send's recipients and the outbound boundary's refusal, if any."""
     raw = ((params.get("body") or {}).get("raw") or "")
     try:
         msg = message_from_bytes(base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)))
     except Exception:
         raise HTTPException(status_code=400, detail="users.messages.send needs body.raw (base64url MIME).")
-    addrs = [a for _, a in getaddresses(msg.get_all("To", []) + msg.get_all("Cc", []) + msg.get_all("Bcc", [])) if a]
+    try:
+        addrs = list(sentinel.parse_recipients(
+            msg.get_all("To", []) + msg.get_all("Cc", []) + msg.get_all("Bcc", [])))
+    except sentinel.UnparseableRecipients:
+        _bump("broker_google_recipient_refused")
+        raise HTTPException(status_code=403, detail="A recipient header could not be parsed.")
     if not addrs:
         raise HTTPException(status_code=400, detail="The message has no recipients.")
     _shared()
     import outbound_boundary  # noqa: PLC0415
     try:
         outbound_boundary.check(addrs)
-    except outbound_boundary.RecipientRefused:
-        _bump("broker_google_recipient_refused")
-        log.error("broker: send refused by the outbound boundary")
-        raise HTTPException(status_code=403, detail="A recipient is outside the outbound boundary.")
+    except outbound_boundary.RecipientRefused as exc:
+        return addrs, str(exc) or "outside the outbound boundary"
+    return addrs, None
+
+
+def _context(request: Request) -> Dict[str, str]:
+    out = {}
+    for key in ("run", "session", "task", "skill"):
+        v = request.headers.get(f"x-jarvis-{key}", "").strip()
+        out[key] = v if CONTEXT_VALUE.match(v or "-") and v else ""
+    return out
+
+
+def _org_domains() -> list:
+    _shared()
+    import identity  # noqa: PLC0415
+    return list(identity.internal_domains())
+
+
+def _ledger(entry: Dict[str, Any]) -> None:
+    """Append one decision. Raises: a write whose decision cannot be recorded
+    does not run, or shadow mode would be a silent no-op."""
+    entry = {"ts": sentinel.utcnow().isoformat(), **entry}
+    LEDGER.parent.mkdir(parents=True, exist_ok=True)
+    with open(LEDGER, "a", encoding="utf-8") as fh:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+def _rates(now) -> sentinel.Rates:
+    """Executed sends in the last day, from the ledger."""
+    rates = sentinel.Rates()
+    hour, day = (now - timedelta(hours=1)).isoformat(), (now - timedelta(days=1)).isoformat()
+    try:
+        with open(LEDGER, encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                if e.get("outcome") != "executed" or str(e.get("ts", "")) < day:
+                    continue
+                if e.get("class") == sentinel.EXTERNAL_SEND and str(e["ts"]) >= hour:
+                    rates.external_sends_last_hour += 1
+                if e.get("class") in (sentinel.INTERNAL_SEND, sentinel.EXTERNAL_SEND):
+                    for d in e.get("destinations") or []:
+                        rates.per_recipient_today[d] = rates.per_recipient_today.get(d, 0) + 1
+    except FileNotFoundError:
+        pass
+    return rates
+
+
+def _taint(ctx: Dict[str, str], reason: str) -> None:
+    run = ctx.get("run") or ctx.get("session")
+    if not run:
+        return
+    with _TAINT_LOCK:
+        if run in _TAINTED:
+            return
+        _TAINTED[run] = reason
+    _bump("broker_sentinel_run_tainted")
+    try:
+        _ledger({"event": "taint", "run_id": run, "reason": reason, "skill": ctx.get("skill", "")})
+    except Exception:
+        log.error("broker: could not record taint for a run (%s)", reason)
+
+
+def _is_tainted(ctx: Dict[str, str]) -> bool:
+    run = ctx.get("run") or ctx.get("session")
+    if not run:
+        return True
+    with _TAINT_LOCK:
+        return run in _TAINTED
+
+
+def _note_untrusted(ctx: Dict[str, str], api: str, method: str, result: Any) -> None:
+    """9.5: reading untrusted inbound content taints the run."""
+    org = _org_domains()
+    if not isinstance(result, dict):
+        return
+    if (api, method) == ("gmail", "users.messages.get"):
+        if sentinel.untrusted_sender((result.get("payload") or {}).get("headers") or [], org):
+            _taint(ctx, "read an email from outside the org")
+    elif (api, method) == ("gmail", "users.threads.get"):
+        if any(sentinel.untrusted_sender((m.get("payload") or {}).get("headers") or [], org)
+               for m in result.get("messages") or []):
+            _taint(ctx, "read a thread with mail from outside the org")
+    elif (api, method) == ("gmail", "users.threads.list"):
+        if any(t.get("snippet") for t in result.get("threads") or []):
+            _taint(ctx, "read thread snippets of unknown senders")
+    elif (api, method) == ("gmail", "users.messages.attachments.get"):
+        _taint(ctx, "downloaded an attachment")
+    elif api == "calendar" and method in ("events.get", "events.list"):
+        events = result.get("items") if method == "events.list" else [result]
+        for ev in events or []:
+            who = str(((ev or {}).get("organizer") or {}).get("email") or "")
+            if who and not sentinel.is_internal(who, org) and not who.endswith("calendar.google.com"):
+                _taint(ctx, "read an event organized outside the org")
+                break
 
 
 def _service(api: str, version: str):
@@ -149,16 +278,54 @@ async def post_google(request: Request):
         _bump("broker_google_refused_method")
         log.error("broker: refused method %s %s %s (not allowlisted)", api, version, method)
         raise HTTPException(status_code=403, detail=f"{api} {version} {method} is not allowed through the broker.")
-    if klass == WRITE:
-        if not _writes_allowed():
-            _bump("broker_google_write_refused")
-            log.error("broker: write %s.%s refused, writes are disabled", api, method)
-            return JSONResponse(status_code=403, content={"error": "writes_disabled",
-                                                          "detail": "Writes are disabled for this tenant."})
-        if (api, version, method) in SEND_METHODS:
-            _check_recipients(params)
+    ctx = _context(request)
     from starlette.concurrency import run_in_threadpool  # noqa: PLC0415
-    return await run_in_threadpool(_execute, api, version, method, params, klass)
+    if klass == READ:
+        out = await run_in_threadpool(_execute, api, version, method, params, klass)
+        if isinstance(out, dict):
+            _note_untrusted(ctx, api, method, out.get("result"))
+        return out
+    return await run_in_threadpool(_write, api, version, method, params, ctx)
+
+
+def _write(api, version, method, params, ctx):
+    addrs, refusal = (_recipients(params) if (api, version, method) in SEND_METHODS else ([], None))
+    cls, dests = sentinel.classify_google(api, method, params, _org_domains(), addrs)
+    now = sentinel.utcnow()
+    action = sentinel.Action(connector=api, method=method, cls=cls, destinations=dests,
+                             skill=ctx["skill"], user="owner", run_id=ctx["run"] or ctx["session"],
+                             session_id=ctx["session"], task_id=ctx["task"], tainted=_is_tainted(ctx))
+    decision = sentinel.decide(action, mode=sentinel.effective_mode(cls), now=now,
+                               rates=_rates(now), boundary_refusal=refusal)
+    record = sentinel.summarize(action, decision)
+
+    def held(status, error, outcome, counter, detail):
+        _ledger({**record, "outcome": outcome})
+        _bump(counter)
+        log.error("broker: %s.%s %s (%s, %s)", api, method, outcome, cls, decision.reason)
+        return JSONResponse(status_code=status, content={"error": error, "verdict": decision.verdict,
+                                                         "class": cls, "detail": detail})
+
+    if sentinel_mode() == SHADOW:
+        return held(409, "shadowed", "shadowed", "broker_sentinel_shadowed",
+                    f"Practice mode: logged, not executed. Sentinel would {decision.verdict}: {decision.reason}.")
+    if not _writes_allowed():
+        return held(403, "writes_disabled", "writes_disabled", "broker_google_write_refused",
+                    "Writes are disabled for this tenant.")
+    if refusal:
+        return held(403, "recipient_refused", "recipient_refused", "broker_google_recipient_refused",
+                    "A recipient is outside the outbound boundary.")
+    if decision.verdict == sentinel.DENY:
+        return held(403, "sentinel_denied", "denied", "broker_sentinel_denied", decision.reason)
+    if decision.verdict == sentinel.ASK:
+        return held(403, "approval_required", "approval_required", "broker_sentinel_ask",
+                    f"{decision.reason}. Approvals are not wired yet, so this was not sent.")
+    _ledger({**record, "outcome": "allowed"})
+    out = _execute(api, version, method, params, WRITE)
+    ok = isinstance(out, dict)
+    _ledger({**record, "outcome": "executed" if ok else "failed",
+             **({} if ok else {"status": getattr(out, "status_code", None)})})
+    return out
 
 
 def _execute(api, version, method, params, klass):

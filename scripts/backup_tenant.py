@@ -31,7 +31,11 @@ JSONL_NAMES = (
     "activity_feed.jsonl",
     "approvals.jsonl",
     "approvals_decisions.jsonl",
+    "sentinel_ledger.jsonl",
 )
+# JSONL that can live outside hermes/state (app-only), named by env.
+JSONL_ENV = {"approvals_decisions.jsonl": "JARVIS_APPROVAL_DECISIONS",
+             "sentinel_ledger.jsonl": "JARVIS_SENTINEL_LEDGER"}
 DEFAULT_KEEP = 14
 DEFAULT_ROOT = Path("/root/backups")
 
@@ -111,7 +115,7 @@ def backup_slug(slug: str, dest_root: Path, keep: int) -> Path:
             print(f"backup: MISSING {name} (not found at {src})")
     # JSONL as files (copytruncate-safe: copy, do not truncate the live file)
     for name in JSONL_NAMES:
-        src = state / name
+        src = Path(os.environ.get(JSONL_ENV.get(name, ""), "") or state / name)
         if src.is_file():
             shutil.copy2(src, dest / name)
             written.append(name)

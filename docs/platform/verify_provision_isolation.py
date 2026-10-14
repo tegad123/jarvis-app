@@ -78,6 +78,19 @@ def main() -> int:
        [u for u, body in units.items() if "JARVIS_APP_BROKER_URL" in body] == ["gateway.isolation.conf"])
     for u in ("app.isolation.conf", "gateway.isolation.conf", "job.isolation.conf", "backup.isolation.conf"):
         ck(f"{u} names the app-private threads DB", threads in units.get(u, ""))
+    app_iso = units.get("app.isolation.conf", "")
+    ck("app drop-in carries the manifest's sentinel mode (shadow)", "Environment=JARVIS_SENTINEL_MODE=shadow\n" in app_iso)
+    ck("app drop-in puts the Sentinel ledger in app-private",
+       "Environment=JARVIS_SENTINEL_LEDGER=/opt/isoprint/app-private/sentinel_ledger.jsonl\n" in app_iso)
+    ck("only the app and backup name the Sentinel ledger; only the app sets the mode",
+       sorted(u for u, body in units.items() if "JARVIS_SENTINEL_LEDGER" in body)
+       == ["app.isolation.conf", "backup.isolation.conf"]
+       and [u for u, body in units.items() if "JARVIS_SENTINEL_MODE" in body] == ["app.isolation.conf"])
+    decisions = "Environment=JARVIS_APPROVAL_DECISIONS=/opt/isoprint/app-private/approvals_decisions.jsonl\n"
+    for u in ("app.isolation.conf", "job.isolation.conf", "backup.isolation.conf"):
+        ck(f"{u} keeps approval decisions app-only", decisions in units.get(u, ""))
+    ck("the gateway is not told where approval decisions live",
+       "JARVIS_APPROVAL_DECISIONS" not in units.get("gateway.isolation.conf", "x"))
 
     print("── 1b. twin: isolation: none renders no users and keeps the drop-in key")
     n = copy.deepcopy(m)
@@ -94,6 +107,8 @@ def main() -> int:
         ("isolation none on a blocked tenant", {"isolation": "none", "venv": "shared"},
          "isolation: none is for captured loopback scratch only"),
         ("two_user on the shared venv", {"venv": "shared"}, "requires venv: platform"),
+        ("two_user with no sentinel_mode", {"sentinel_mode": None}, "requires sentinel_mode"),
+        ("two_user with a misspelt sentinel_mode", {"sentinel_mode": "shdow"}, "requires sentinel_mode"),
         ("slug too long for user names", {"slug": "a" * 20}, "too long for the two-user layout"),
     ]
     for label, patch, msg in cases:

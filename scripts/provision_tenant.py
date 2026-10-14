@@ -40,8 +40,9 @@ ETC_JARVIS = Path("/etc/jarvis")
 # app-only copy of it; nothing reads /root/.hermes.
 PLATFORM_OAUTH_CLIENT = ETC_JARVIS / "oauth_client.json"
 ISOLATIONS = ("two_user", "none")
+SENTINEL_MODES = ("shadow", "enforce")
 SHARED_STATE = ("jarvis_tasks.db", "jarvis_leads.db", "activity_feed.jsonl",
-                "approvals.jsonl", "approvals_decisions.jsonl")
+                "approvals.jsonl")
 
 RESERVED_SLUGS = frozenset({"testco", "root", "live", "34dev"})
 RFC2606 = (".example", ".test", ".invalid", ".localhost",
@@ -317,7 +318,7 @@ def apply_isolation(opt: Path, n: Dict[str, str], data_dirs: List[Path]) -> None
     run(["install", "-m", "600", "-o", app, "-g", app, str(PLATFORM_OAUTH_CLIENT),
          str(private / "oauth_client.json")])
     # Created empty (a valid SQLite database) so it is app-only before first use.
-    for name in ("jarvis_accounts.db", "jarvis_threads.db"):
+    for name in ("jarvis_accounts.db", "jarvis_threads.db", "sentinel_ledger.jsonl", "approvals_decisions.jsonl"):
         run(["install", "-m", "600", "-o", app, "-g", app, "/dev/null", str(private / name)])
     run(["chown", f"{app}:{app}", str(private)])
     os.chmod(private, 0o700)
@@ -787,6 +788,7 @@ def common_map(manifest: dict, posture: dict, fernet: str, force: str,
         n = isolation_names(slug)
         iso = {"APP_USER": n["app_user"], "AGENT_USER": n["agent_user"], "GROUP": n["group"],
                "APP_PRIVATE": f"{opt}/app-private", "ENV_FILE": str(ETC_JARVIS / f"{slug}-app.env"),
+               "SENTINEL_MODE": str(manifest.get("sentinel_mode") or ""),
                "DATA_DIRS": " ".join(str(d) for d in skill_data_dirs(Path(opt), shipped))}
     return {
         **iso,
@@ -940,6 +942,8 @@ def provision(manifest_path: Path) -> None:
             die("isolation: two_user requires venv: platform (tenant users cannot reach /root)")
         if not PLATFORM_VENV.is_file():
             die(f"platform venv missing: {PLATFORM_VENV}")
+        if manifest.get("sentinel_mode") not in SENTINEL_MODES:
+            die(f"isolation: two_user requires sentinel_mode: {' | '.join(SENTINEL_MODES)}")
         isolation_names(slug)
     if manifest["venv"] == "shared":
         log("venv=shared: a pip install on /root/jarvis-app/.venv also affects live :8700")

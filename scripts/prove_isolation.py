@@ -108,6 +108,8 @@ def main() -> int:
     check("no accounts db in hermes/state", not (H / "state/jarvis_accounts.db").exists())
     check("threads db lives in app-private", (PRIV / "jarvis_threads.db").is_file())
     check("no threads db in hermes/state", not (H / "state/jarvis_threads.db").exists())
+    check("approval decisions live in app-private, none in hermes/state (the agent cannot forge consent)",
+          (PRIV / "approvals_decisions.jsonl").is_file() and not (H / "state/approvals_decisions.jsonl").exists())
 
     print("── posture: blocked, writes off everywhere")
     app_env, gw_env = proc_env(app_pid), proc_env(gw_pid)
@@ -118,7 +120,8 @@ def main() -> int:
     check("preflight says POSTURE=\"blocked\"", 'POSTURE="blocked"' in (OPT / f"{slug}_preflight.sh").read_text())
 
     print("── the agent cannot read app secrets (runuser, then the unit's sandbox)")
-    for f in (PRIV / "oauth_client.json", PRIV / "jarvis_accounts.db", PRIV / "jarvis_threads.db", ENVF,
+    for f in (PRIV / "oauth_client.json", PRIV / "jarvis_accounts.db", PRIV / "jarvis_threads.db",
+              PRIV / "sentinel_ledger.jsonl", PRIV / "approvals_decisions.jsonl", ENVF,
               Path(f"/proc/{app_pid}/environ")):
         check(f"root canary can read {f}", sh("root", read(f)) == 0)
         check(f"agent denied {f}", sh(AGENT, read(f)) != 0)
@@ -177,6 +180,14 @@ def main() -> int:
     check("gateway process is in broker mode (JARVIS_APP_BROKER_URL = the app)",
           gw_env.get("JARVIS_APP_BROKER_URL") == broker_url)
     check("app process has no JARVIS_APP_BROKER_URL", "JARVIS_APP_BROKER_URL" not in app_env)
+    smtp = H / "credentials/jarvis_email_app_password.txt"
+    check("no SMTP app password for the agent (send_gate's SMTP path cannot bypass the broker)",
+          not smtp.exists() and "JARVIS_EMAIL_APP_PASSWORD" not in gw_env
+          and not (Path(gw_env.get("HOME", str(H))) / ".openclaw/workspace/credentials").exists())
+    mode = app_env.get("JARVIS_SENTINEL_MODE", "")
+    check(f"app Sentinel mode is shadow or enforce (got {mode!r})", mode in ("shadow", "enforce"))
+    check("app Sentinel ledger is in app-private",
+          app_env.get("JARVIS_SENTINEL_LEDGER") == str(PRIV / "sentinel_ledger.jsonl"))
     check("hermes/.env holds API_SERVER_KEY only", sorted(env_file(H / ".env")) == ["API_SERVER_KEY"])
     units = [p for p in Path("/etc/systemd/system").glob(f"{slug}-*") if p.is_file()] + \
             list(Path("/etc/systemd/system").glob(f"{slug}-*.d/*.conf"))
@@ -224,8 +235,13 @@ def main() -> int:
         except Exception:
             return {"error": p.stderr[-400:]}, p.stderr
 
-    a0, w0, b0 = (counter("google_creds_tokens_app_side"), counter("broker_google_write_refused"),
+    def ledger_lines():
+        p = PRIV / "sentinel_ledger.jsonl"
+        return [json.loads(x) for x in p.read_text().splitlines() if x.strip()] if p.exists() else []
+    refusal_counter = "broker_sentinel_shadowed" if mode == "shadow" else "broker_google_write_refused"
+    a0, w0, b0 = (counter("google_creds_tokens_app_side"), counter(refusal_counter),
                   counter("prove_isolation_broker_bump"))
+    l0 = len(ledger_lines())
     agent_out, _ = as_user(AGENT, str(H), broker=True, send=True)
     check(f"agent source() via broker = {args.expect_app_source} (got {agent_out.get('source')})",
           agent_out.get("source") == args.expect_app_source)
@@ -233,9 +249,15 @@ def main() -> int:
           agent_out.get("raised") == "TokensAreAppSide")
     check("…counted through the broker (google_creds_tokens_app_side +1)",
           counter("google_creds_tokens_app_side") - a0 == 1)
-    check(f"agent send through the broker is refused, writes blocked (got {agent_out.get('send')})",
-          agent_out.get("send") == "WritesDisabled")
-    check("…counted app-side (broker_google_write_refused +1)", counter("broker_google_write_refused") - w0 == 1)
+    want_exc = "ActionHeld" if mode == "shadow" else "WritesDisabled"
+    check(f"agent send through the broker is not executed: {want_exc} (got {agent_out.get('send')})",
+          agent_out.get("send") == want_exc)
+    check(f"…counted app-side ({refusal_counter} +1)", counter(refusal_counter) - w0 == 1)
+    new = ledger_lines()[l0:]
+    want_outcome = "shadowed" if mode == "shadow" else "writes_disabled"
+    check(f"…one ledger entry, outcome {want_outcome}, class external_send (.invalid is outside the org)",
+          [(e.get("outcome"), e.get("class")) for e in new] == [(want_outcome, "external_send")])
+    check("…the ledger holds no message body", all("raw" not in e and "body" not in e for e in new))
     check("agent counter bump lands in the app-private threads db (+1)",
           counter("prove_isolation_broker_bump") - b0 == 1)
     check("no stray threads db in hermes/state", not (H / "state/jarvis_threads.db").exists())

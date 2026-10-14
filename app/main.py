@@ -72,6 +72,9 @@ if os.environ.get("JARVIS_APP_BROKER_URL"):
     # Broker mode makes app.threads send counters to the broker, which is this
     # process: every bump would call itself.
     raise SystemExit("REFUSED: JARVIS_APP_BROKER_URL is set on the app itself; it belongs on the gateway only")
+if broker_mod.sentinel_mode() not in ("enforce", broker_mod.SHADOW):
+    # A misspelt "shadow" must not quietly run as enforce.
+    raise SystemExit("REFUSED: JARVIS_SENTINEL_MODE must be enforce or shadow")
 app.include_router(broker_mod.router)
 
 
