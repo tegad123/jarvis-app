@@ -221,7 +221,7 @@ def main() -> int:
     model_name = re.search(r"(?m)^\s*default:\s*(\S+)", hcfg)
     def model_probe(key, model):
         return subprocess.run(["runuser", "-p", "-u", AGENT, "--", PY, "-c", probe_model, model],
-                              env={"PATH": "/usr/bin:/bin", "PROBE_KEY": key}, cwd="/",
+                              env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "PROBE_KEY": key}, cwd="/",
                               capture_output=True, text=True, timeout=90).stdout.strip()
     got = model_probe(agent_env.get("API_SERVER_KEY", ""), model_name.group(1) if model_name else "")
     if real:

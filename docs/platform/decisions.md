@@ -215,6 +215,27 @@ Order on rehearsal (each step needs its own restart yes):
   - Rate limits rescan the ledger, which has no rotation.
 - **Interpretation to confirm (human):** shadow mode covers writes to the outside world, meaning everything that goes through the broker to Google. Jarvis's own stores (tasks, leads, channels, counters, the feed) still write in shadow, and the agent still replies in its chat channel. Without that, practice mode could not show what Jarvis would have done.
 
+## Decided 2026-10-14: tenant agents reach Claude through the app's model proxy (platform build item 6)
+
+**Approval (human):** item 6 of the platform build goal: "Model provider for tenant agents (Claude via API key from /etc/jarvis env, app-side) so agents can chat; chat tests pass."
+
+- **The proxy:** `app/model_proxy.py`, `POST /api/model/anthropic/v1/messages` and `/v1/messages/count_tokens`. It accepts the agent's `API_SERVER_KEY` (as `x-api-key` or a bearer token), from loopback only and never through the tunnel. It forwards with the platform's `ANTHROPIC_API_KEY` and streams the answer back unchanged. Only the Anthropic version and beta headers, content type and accept are passed upstream; the agent's key and any `Authorization` header are not. No key configured is a 503 `model_not_configured`, counted and logged, never a fallback.
+- **Where the key lives:** `/etc/jarvis/anthropic.env` (`ANTHROPIC_API_KEY=...`, root 600), read by the app unit as an optional `EnvironmentFile`. One platform key for every tenant. The agent cannot list `/etc/jarvis`.
+- **Hermes:** `config.yaml` gets `model: {provider: anthropic, default: <agent_model>, base_url: http://127.0.0.1:<app port>/api/model/anthropic}`. Hermes honours a custom `base_url` for provider `anthropic` only when its path ends in `/anthropic`; any other path silently becomes `https://api.anthropic.com` (`hermes_cli/runtime_provider.py`, `_anthropic_base_url_override_ok`). `hermes/.env` holds `API_SERVER_KEY` and `ANTHROPIC_API_KEY` set to the same value, the stand-in Hermes sends. `agent_model` is a required manifest field (`claude-*`). The checked-in manifests carry `claude-sonnet-4-6` as a placeholder until spec open question 2 (model choice) is decided.
+- **Proof:**
+  - `docs/model/verify_model_proxy.py` 21/21. It drives Hermes's own `build_anthropic_client` through the proxy against a fake Anthropic: create, stream, count_tokens, and an upstream 429 passed through. The upstream saw the platform key on every request and never the agent's key. A sandbox with no key gets the 503.
+  - The same verify checks Hermes's base-URL rule: it accepts `/api/model/anthropic` and drops `/api/model` (canary).
+  - Canaries: forwarding the agent's key fails 2; removing the key check fails 5.
+  - `verify_provision_isolation.py` 56/56.
+  - `prove_isolation.py --slug isocheck` 110/110 at app `4bc1181`: hermes config, agent `.env`, `/etc/jarvis` denied, and the agent's stand-in getting `503 model_not_configured` (wrong key 401, canary).
+  - End to end on isocheck: a chat sent to the real Hermes gateway went to the proxy. `model_proxy_not_configured` rose by 3, one per Hermes retry, and the agent answered "HTTP 503: No model key is configured for this tenant's app." Full sandbox gate green.
+- **Blocked (needs a human):**
+  - **No model key is installed.** `/etc/jarvis/anthropic.env` does not exist, and the agent does not read `/root/.hermes` for one. The live chat tests (`verify_tasks_chat.py` section (a), the real round trip) cannot run until a human installs the key with `install -m 600 -o root -g root`.
+  - **The model** (open question 2) for the three per-person tenants.
+- **Known gaps:**
+  - Hermes's auxiliary model paths (compression, vision), if enabled, may call `api.anthropic.com` directly with the stand-in. They would fail with 401 and leak no real key.
+  - The proxy does not cap tokens or cost per tenant.
+
 ## Decided (from the spec, recorded 2026-10-10)
 
 - Customer #1: 34 Dev team.

@@ -31,6 +31,10 @@ emails and texts to real clients. Act accordingly.
   in app-private/sentinel_ledger.jsonl. Two-user manifests set
   sentinel_mode; shadow (ISOCHECK, and every checked-in manifest) logs each
   write and runs none. The ledger is the evidence for what a tenant tried.
+- Tenant agents reach Claude only through their app's model proxy
+  (/api/model/anthropic). The platform key belongs in
+  /etc/jarvis/anthropic.env (root 600, installed by a human); the agent
+  holds a stand-in. Never copy a model key from /root/.hermes.
 - Two-user tenants get their OAuth client from /etc/jarvis/oauth_client.json
   (root 600). Never read /root/.hermes for provisioning.
 - TESTCO (8710/8652, /opt/testco) was RETIRED 2026-10-13. Archive and rollback:
