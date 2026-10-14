@@ -7,7 +7,7 @@ slug: blake
 display_name: 34 Dev
 business_description: Blake's practice-mode Jarvis on the 34 Dev team
 timezone: America/Chicago
-assistant_address: blake-assistant@34dev.invalid
+assistant_address: blake-assistant@assistant.invalid
 agent_display_name: Blake's Assistant
 mailbox_strategy: dedicated_account
 ports:
@@ -17,7 +17,7 @@ ports:
 public_origin: http://127.0.0.1:8760
 sheet_id: ''
 boundary_domains:
-- 34dev.invalid
+- assistant.invalid
 outbound_suffix_policy: production
 skill_loadout: base
 skill_loadout_optional: []
@@ -117,7 +117,7 @@ people:
     roles:
     - owner
     email:
-    - blake@34dev.invalid
+    - blake@assistant.invalid
     platform_ids:
       discord:
       - '888111222333444999'
@@ -128,7 +128,7 @@ people:
     roles:
     - assistant
     email:
-    - blake-assistant@34dev.invalid
+    - blake-assistant@assistant.invalid
     platform_ids:
       discord: []
 destinations:
