@@ -74,13 +74,16 @@ Order on rehearsal (each step needs its own restart yes):
 **Rehearsal was running live, not blocked (found 2026-10-13).** The manifest (`docs/tenants/rehearsal.yaml`) says `writes_posture: blocked`. The running units had `JARVIS_ALLOW_WRITES=1`, the preflight had `POSTURE="live"`, `runtime.safety.allow_writes` was `true`, and the only boundary was `identity.internal_domains` = `gmail.com`. It was switched to blocked in window 1 (human yes): the preflight is blocked, `JARVIS_ALLOW_WRITES` is unset, and runtime safety is `false`. Arming it again needs a human yes.
 
 **Window 1 done 2026-10-13** (backups and `rollback.sh` in `/root/archives/rehearsal-window1/`, root-only):
-- **What changed:** skills `f026b75` → `8436f6e`, app `c717614` → `10ffbce`, posture blocked. Downtime was about 4.6 s.
-- **Startup:** both services passed `posture=blocked`, `writes=0`; no tracebacks; `JARVIS_ALLOW_WRITES` absent from both process environments.
-- **Guard:** under the app's exact environment, `write_guard.block_if_readonly` and the real `send_gate.gated_send` both raised `WritesDisabled`. The transports and the ops alert were stubbed to raise, so nothing could send. Canary: with the flag added, the guard allows.
+- **What changed:** skills `f026b75` → `8436f6e`, app `c717614` → `10ffbce`, posture blocked.
+- **Two restarts, not one.** A second agent run restarted rehearsal at 00:13:12 UTC on the applied files and wrote the first version of this entry. The verified restart was at 00:15:29 UTC: both ports were listening again 5.8 s after the restart began, with `NRestarts=0`. The human stopped the second run; one runner from window 2 on.
+- **Startup:** both services passed `posture=blocked`, `writes=0`; no tracebacks or `ERROR` lines in the journal since; `JARVIS_ALLOW_WRITES` absent from both process environments.
+- **Guard:** under a copy of the app process's exact environment, `write_guard.block_if_readonly` raised `WritesDisabled`. Canary: the same environment plus `JARVIS_ALLOW_WRITES=1` allows. `send_gate.gated_send` calls the guard first, before any transport (read, not executed). The app's approvals executor sends only through `gated_send`. `app/oauth_demo.py` sends without the guard, but it is a separate demo app that `app.main` never imports.
 - **Google:** `google_creds.source()` under the app's environment = `tenant_connection`; the service-account functions are gone; `google_creds_sa_fallback` stayed at 1.
 - **Tests:** the unit test passed 2/2 on rehearsal's tree.
-- **HTTP:** `/` 200, `/api/session` 401, public origin 200.
-- **Live:** pid unchanged.
+- **HTTP:** `/` 200, `/api/session` 401, gateway `/health` 200, public origin 200.
+- **Checkouts:** skills status identical to before (same tenant edits and loadout pruning); `channels.json` and `identity.json` byte-identical; `runtime.json` differs only in `safety.allow_writes`; app tree clean at `10ffbce`.
+- **Preflight canary:** with `JARVIS_ALLOW_WRITES=1`, the blocked preflight refuses to start.
+- **Live:** pid `2185197` unchanged; `/root/jarvis-app` status unchanged.
 
 ## Decided (from the spec, recorded 2026-10-10)
 
