@@ -85,6 +85,36 @@ Order on rehearsal (each step needs its own restart yes):
 - **Preflight canary:** with `JARVIS_ALLOW_WRITES=1`, the blocked preflight refuses to start.
 - **Live:** pid `2185197` unchanged; `/root/jarvis-app` status unchanged.
 
+**Window 2 done 2026-10-13: two-user isolation** (scripts, backups, the ownership manifest and `rollback.sh` in `/root/archives/rehearsal-window2/`, root-only):
+- **Users:** the app runs as `jarvis-rehearsal`, the gateway as `jarvis-rehearsal-agent`; both are in the group `rehearsal`. The app runs from `/opt/jarvis/venv`, a `cp -a` of live's venv.
+- **App-only:**
+  - `/opt/rehearsal/app-private` (700) holds `oauth_client.json`, installed with the human's `install -m 600` command (sha256 matched), and `jarvis_accounts.db`.
+  - `/etc/jarvis/rehearsal-app.env` (root, 600) holds `APP_GOOGLE_TOKEN_KEY`, `APP_PASSPHRASE`, `APP_SESSION_SECRET` and `API_SERVER_KEY`, copied by key name. Each value's sha256 matches its source and the running app's environment. `oauth.conf` no longer carries the key.
+- **Agent-only:** the hermes home (mode 0710, so the app can pass through it without listing it), `.env` trimmed to `API_SERVER_KEY`, and `state.db`, `kanban.db`, `response_store.db`, `sessions` and `logs`.
+- **Shared, group `rehearsal`, setgid 2770, `UMask=0007`:** `hermes/state` (threads, tasks, leads, activity feed, approvals), `hermes/outbox`, and the skills' `data/` directories (`owner-email` holds `send_gate`'s `approvals.json` and `external_sends.log`; `task-manager` holds the authz audit log).
+- **Read-only code:** `jarvis-app` and `skills` are `root:rehearsal` and not writable by either user. That includes `scripts/backup_tenant.py`, which root runs.
+- **Sandboxing:** both units set `ProtectSystem=strict` with explicit `ReadWritePaths`, plus `ProtectHome=yes`, `PrivateTmp=yes` and `NoNewPrivileges=yes`.
+- **Backup:** the unit stays root, because it must read the agent-only databases. It runs the rehearsal tree's script and gets the accounts path from `JARVIS_ACCOUNTS_DB`. A run after the cutover wrote 6 databases, including accounts; it reported only `sweeps.db` missing, which was always absent.
+- **Rehearsal's app** is at `2b20c5d`: `app/` is identical to `10ffbce`, and the commit brings the fixed backup script.
+- **Proof** (`prove.py`): 63/63 checks.
+  - Under both `runuser` and the unit's sandbox, the agent is denied the OAuth client, the accounts database, the env file, the app's `/proc/<pid>/environ` and `sa_jarvis_prod.json`. Each denial has a root canary.
+  - The app is denied the agent's `.env`, `state.db`, `response_store.db` and environment, and cannot list the agent's home.
+  - Both users write the shared paths, and neither can write code.
+  - As the agent, `systemctl show rehearsal-app` has no token key; a canary unit proves `systemctl show` would expose it.
+  - As the agent, `google_creds` reports `connection_unreadable`, the counter moves by +2, and no stray accounts database appears. As the app, `source()` is `tenant_connection`.
+  - Operator login returns 200.
+- **Found and fixed during the window:**
+  - Hermes chmods its home to 0700 on every start (`hermes_cli/config.py` `_secure_dir`). That locked the app out of `hermes/state`, and the app crash-looped (8 failed starts) until the mode was set back. The gateway unit now sets `HERMES_HOME_MODE=0710`, and a gateway restart proved the mode holds.
+  - Fifty files in the hermes home were world-readable (`state.db` was 644), so the app could read them. The proof caught this, and `chmod -R o-rwx` fixed it.
+  - The rehearsal app's transcription spool defaulted to `/root/jarvis-app/data/tmp-transcribe`, which is live's tree. It is now `jarvis-app/data/tmp-transcribe`.
+- **Downtime:** the app was down 52 s (stopped 00:24:52 UTC, serving again 00:25:44), almost all of it the crash loop. The gateway was down a few seconds at the cutover, then 3.6 s for the `HERMES_HOME_MODE` restart.
+- **Pre-existing, not caused by isolation: production token refresh cannot work.** `app/google_connection.build_credentials` passes `client_id=None` and `client_secret=None` outside mock mode, in `c717614`, `10ffbce`, `2b20c5d` and live's checkout. Once the stored access token expires, every refresh fails with `RefreshError`. The window 1 check read only `source()`, which does not refresh. The window 2 health probe ran the refresh, and the connection row moved from `connected` to `needs_reauth` with `last_error=RefreshError`. That is true, so it was left as is; no alert fired, because alerts are for `invalid_grant` only. Reconnecting would work for about an hour. The fix is to read the client from `YAMIN_OAUTH_CLIENT`; it changes the credential path and needs a human yes.
+- **Known gaps:**
+  - `scripts/provision_tenant.py` knows neither the two users nor the venv copy (it accepts only `venv: shared`). Re-provisioning rehearsal would undo this window.
+  - `inbound_queue.db` and `inbound_cursor.db` would be created in the read-only skills `_shared` directory; they must move to `hermes/state` before inbound runs on an isolated tenant.
+  - `app/inject.py` still defaults its fixtures to the retired `/opt/testco/fixtures`.
+  - Rehearsal's gateway has no model provider configured and has never held a conversation (0 sessions), so chat was not testable before or after.
+
 ## Decided (from the spec, recorded 2026-10-10)
 
 - Customer #1: 34 Dev team.

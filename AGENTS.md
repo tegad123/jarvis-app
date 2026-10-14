@@ -13,14 +13,17 @@ emails and texts to real clients. Act accordingly.
   verify fixture at /opt/jarvis-verify-fixture (testco's .example config and
   stores, throwaway secrets, mock Google OAuth, dead gateway port). All
   runtime verification happens here.
-- REHEARSAL: app 8730, gateway 8672, /opt/rehearsal. Live posture with a real
-  mailbox and writes on. It is a tenant, NOT a test target: never point verify
-  scripts or sandboxes at its config or stores.
+- REHEARSAL: app 8730, gateway 8672, /opt/rehearsal. A real mailbox, writes
+  BLOCKED since 2026-10-13. The app runs as jarvis-rehearsal, the gateway as
+  jarvis-rehearsal-agent; app secrets are in /etc/jarvis/rehearsal-app.env and
+  /opt/rehearsal/app-private (docs/platform/decisions.md). It is a tenant, NOT
+  a test target: never point verify scripts or sandboxes at its config or stores.
 - TESTCO (8710/8652, /opt/testco) was RETIRED 2026-10-13. Archive and rollback:
   docs/platform/decisions.md. Scripts that needed it refuse with RETIRED.
 - Hermes gateways: /usr/local/lib/hermes-agent, branch scale-vault-local.
-- Live and rehearsal share the venv at /root/jarvis-app/.venv. A pip install
-  affects BOTH. Do not install packages without flagging it first.
+- Live runs from the venv at /root/jarvis-app/.venv; rehearsal from its copy at
+  /opt/jarvis/venv (2026-10-13). A pip install into either changes a running
+  tenant. Do not install packages without flagging it first.
 
 ## Hard rules
 1. Work on a branch off main. Never commit directly to main.
