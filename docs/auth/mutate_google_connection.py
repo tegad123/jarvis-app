@@ -172,7 +172,7 @@ for _line in _dropin.read_text().splitlines():
         break
 if not _loaded:
     sys.exit("REFUSING: APP_GOOGLE_TOKEN_KEY missing from drop-in (presence only)")
-sys.path.insert(0, "/root/jarvis-app")
+sys.path.insert(0, os.environ.get("VERIFY_APP_ROOT") or str(pathlib.Path(__file__).resolve().parents[2]))
 from app import google_connection  # noqa: E402
 
 raised = None

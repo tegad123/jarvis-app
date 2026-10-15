@@ -1,4 +1,6 @@
 """Both readers must answer with the SAME shape, or swapping source breaks the screen."""
+import sys
+sys.exit("REFUSING: this script works on live (/root/jarvis-app or /root/.hermes); port it to the platform tree (VERIFY_APP_ROOT, VERIFY_SKILLS_ROOT) before running it")
 import os, sys, tempfile, shutil, json
 from pathlib import Path
 sys.path.insert(0, '/root/jarvis-app')

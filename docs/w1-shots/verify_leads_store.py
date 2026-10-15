@@ -1,4 +1,6 @@
 """W1 step 2: the leads store's contract, against a scratch DB."""
+import sys
+sys.exit("REFUSING: this script works on live (/root/jarvis-app or /root/.hermes); port it to the platform tree (VERIFY_APP_ROOT, VERIFY_SKILLS_ROOT) before running it")
 import os, sys, tempfile, shutil
 from pathlib import Path
 tmp = Path(tempfile.mkdtemp())

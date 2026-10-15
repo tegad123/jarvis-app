@@ -10,6 +10,8 @@ run is the real one and prints which mode it used.
 Everything writes to a disposable box (env.py). The live store, the live feed
 and the live threads DB are unreachable from this process by construction.
 """
+import sys
+sys.exit("REFUSING: this script works on live (/root/jarvis-app or /root/.hermes); port it to the platform tree (VERIFY_APP_ROOT, VERIFY_SKILLS_ROOT) before running it")
 import argparse, json, os, subprocess, sys
 from pathlib import Path
 

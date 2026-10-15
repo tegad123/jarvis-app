@@ -1,4 +1,5 @@
 #!/bin/bash
+echo "REFUSING: this script works on live (/root/jarvis-app or /root/.hermes); port it to the platform tree (VERIFY_APP_ROOT, VERIFY_SKILLS_ROOT) before running it" >&2; exit 2
 echo "RETIRED 2026-10-13: testco is retired (docs/platform/decisions.md); this script needs its running services or tree." >&2; exit 2
 # Boot the TESTCO CLONE's app on its own port. Never touches the live service.
 set -euo pipefail

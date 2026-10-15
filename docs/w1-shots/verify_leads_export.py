@@ -7,6 +7,8 @@ THE HARNESS REFUSES TO TOUCH THE LIVE SHEET, by construction.
     writes a customer's live lead sheet is not a test failure — it is an
     incident — so the guard is here, in the harness, not in the instructions.
 """
+import sys
+sys.exit("REFUSING: this script works on live (/root/jarvis-app or /root/.hermes); port it to the platform tree (VERIFY_APP_ROOT, VERIFY_SKILLS_ROOT) before running it")
 import os, sys, tempfile, shutil
 from pathlib import Path
 

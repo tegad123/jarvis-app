@@ -24,7 +24,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-APP = Path("/root/jarvis-app")
+APP = Path(os.environ.get("VERIFY_APP_ROOT") or str(Path(__file__).resolve().parents[2]))
 SKILLS = Path("/opt/jarvis-verify-fixture/skills/openclaw-imports")
 DOCS = APP / "docs" / "sweeps"
 PYBIN = str(APP / ".venv" / "bin" / "python")

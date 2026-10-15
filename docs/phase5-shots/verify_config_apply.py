@@ -4,6 +4,8 @@ The allowlist is load-bearing: this is the path a PERSUASIVE CHAT REQUEST
 reaches. `safety.allow_writes` is the switch between this box and a customer's
 live mailbox, so "the owner approved it" must not be the bar for arming it.
 """
+import sys
+sys.exit("REFUSING: this script works on live (/root/jarvis-app or /root/.hermes); port it to the platform tree (VERIFY_APP_ROOT, VERIFY_SKILLS_ROOT) before running it")
 import copy, json, os, shutil, sys, tempfile
 from pathlib import Path
 

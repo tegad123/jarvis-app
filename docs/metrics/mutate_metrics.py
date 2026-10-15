@@ -11,7 +11,7 @@ mutant must COMPILE or it is INVALID; a missing anchor is a loud SKIP that
 counts as failure; fresh box per mutant; identical first failures across every
 kill mean the harness is broken, not that it caught bugs.
 
-Run:  /root/jarvis-app/.venv/bin/python docs/metrics/mutate_metrics.py
+Run:  /opt/jarvis/venv/bin/python docs/metrics/mutate_metrics.py
 """
 
 import os
@@ -22,7 +22,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-APP = Path("/root/jarvis-app")
+APP = Path(os.environ.get("VERIFY_APP_ROOT") or str(Path(__file__).resolve().parents[2]))
 SK = Path("/opt/jarvis-verify-fixture/skills/openclaw-imports")
 PYBIN = str(APP / ".venv" / "bin" / "python")
 SUITE = APP / "docs" / "metrics" / "verify_metrics.py"

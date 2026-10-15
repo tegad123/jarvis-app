@@ -1,3 +1,4 @@
+console.error("REFUSING: this script works on live (/root/jarvis-app or /root/.hermes); port it to the platform tree (VERIFY_APP_ROOT, VERIFY_SKILLS_ROOT) before running it"); process.exit(2)
 /**
  * Phase A verification — the channel layer, through the tunnel.
  */

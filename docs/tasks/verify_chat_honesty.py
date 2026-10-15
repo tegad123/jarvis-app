@@ -160,6 +160,38 @@ started = tasks_store._now()
 v = verify("What is on my list?", "You have three open tasks.", started)
 ck("an ordinary question produces no receipt and no correction", v is None, str(v))
 
+# ── 5. a store the app cannot read is "unchecked", never "nothing written" ───
+# Seen on a two-user tenant: the shared state dir lost its group bit, created_since
+# raised PermissionError, and the person was told a real task did not exist.
+print("\n── 5. AN UNREADABLE STORE — unchecked, not accused ────────────")
+before = counters()
+started = tasks_store._now()
+r3 = tasks_store.create("Book the Elmwood appraisal", created_by="dana",
+                        source="chat", source_ref="chat:app:test3")
+real_created_since = tasks_store.created_since
+
+
+def unreadable(*_a, **_k):
+    raise PermissionError(13, "Permission denied", "hermes/state")
+
+
+tasks_store.created_since = unreadable
+try:
+    v = verify("Track this: book the Elmwood appraisal", "I've added that to your list.", started)
+finally:
+    tasks_store.created_since = real_created_since
+ck("the turn is not reported as a success it could not check", v is not None and v["ok"] is None, str(v))
+ck("   and is NOT the 'no task was created' correction",
+   v is not None and "No task was created" not in v["message"], str(v))
+ck("   it tells the person to look on the Tasks tab", v is not None and "Tasks tab" in v["message"])
+ck("   and the real row is still there (presence twin)",
+   any(r["task_id"] == r3["task_id"] for r in tasks_store.created_since(started)))
+after = counters()
+ck("the unreadable store was counted",
+   after.get("chat_verify_store_unreadable", 0) == before.get("chat_verify_store_unreadable", 0) + 1, str(after))
+ck("   and not counted as an unbacked claim",
+   after.get("intent_claim_unbacked", 0) == before.get("intent_claim_unbacked", 0))
+
 print(f"\n{sum(ok)}/{len(ok)} passed")
 print("counters now: " + ", ".join(
     f"{k}={v}" for k, v in sorted(counters().items())

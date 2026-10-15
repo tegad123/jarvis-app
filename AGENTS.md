@@ -34,6 +34,11 @@ emails and texts to real clients. Act accordingly.
   Connecting a real mailbox is a human STOP gate; after that, restarting
   the tenant is too (`--reconfigure` refuses without `--restart-approved`).
   The lead may restart them under the agent lock while no mailbox is connected.
+  Their agents answer through the model proxy (key installed 2026-10-15), but
+  none has an owner account yet: the env-file passphrase is the operator's
+  and cannot chat. Owner PINs are minted with `app.accounts_cli set-pin`
+  (as the app user) only with a human yes, written straight to a root-only
+  file under /root/onboarding/, never printed.
 - Two-user tenants run the agent in broker mode: Google calls, counters and
   channel creation go through the app's loopback /api/broker; the threads and
   accounts databases are in app-private and the agent cannot open them.
@@ -81,7 +86,8 @@ emails and texts to real clients. Act accordingly.
   (a copied venv's scripts can still point at live's interpreter; one did,
   decisions.md 2026-10-14). The provisioner and prove_isolation refuse any
   platform venv script whose interpreter is under /root. Live's venv must
-  never get psycopg.
+  never get psycopg. Manifests say `venv: platform`; `venv: shared` (live's
+  interpreter) is retired and refused.
 
 ## Hard rules
 1. Work on a branch off main. Never commit directly to main.
@@ -149,7 +155,14 @@ A change is done when, in the verify sandbox (8711, fixture-backed):
 3. You have shown the before/after ledger delta for anything that writes
    (the sandbox's box files, never the fixture).
 Not done: "the code looks right", "tests should pass", a passing build alone.
-The exact commands are in .cursor/skills/verify-jarvis/SKILL.md.
+The exact commands are in .cursor/skills/verify-jarvis/SKILL.md. The full gate
+is `bash docs/platform/gate.sh`: one line per suite, then the fixture hash,
+live's PID and the number of files written into live's tree (must be 0).
+- No script may work on live: import /root/jarvis-app, bind a working path to
+  it or /root/.hermes, or run live's venv. Use VERIFY_APP_ROOT /
+  VERIFY_SKILLS_ROOT (the platform trees) and /opt/jarvis/venv.
+  docs/platform/verify_no_live_targets.py enforces this; an unported legacy
+  script must refuse to start (`sys.exit("REFUSING: ...")`).
 
 ## Current known state (2026-10-13)
 - testco is retired: units, tunnel hostnames (app/gateway/hooks.yamin.io) and

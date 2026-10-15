@@ -6,6 +6,8 @@ Two questions this answers that the unit tests cannot:
   2. Is the refusal STRUCTURAL? If the allowlist can be neutered by flipping a
      value, it is a config setting wearing a constant's clothes.
 """
+import sys
+sys.exit("REFUSING: this script works on live (/root/jarvis-app or /root/.hermes); port it to the platform tree (VERIFY_APP_ROOT, VERIFY_SKILLS_ROOT) before running it")
 import copy, json, os, shutil, subprocess, sys, tempfile, pathlib
 
 APP = '/root/jarvis-app'

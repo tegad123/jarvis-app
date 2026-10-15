@@ -12,7 +12,7 @@ Runs inside the docs/tasks/env.py box: every store, the feed and sweeps.db
 live under BOX; the live tenant and testco's real state are never touched.
 The role check hits the verify sandbox (docs/tasks/tasks_sandbox.sh) on :8711.
 
-Run:  /root/jarvis-app/.venv/bin/python docs/metrics/verify_metrics.py [-v] [--no-live]
+Run:  /opt/jarvis/venv/bin/python docs/metrics/verify_metrics.py [-v] [--no-live]
 """
 
 import json
@@ -40,7 +40,7 @@ shutil.rmtree(BOX / "outbox", ignore_errors=True)
 
 VERBOSE = "-v" in sys.argv
 LIVE = "--no-live" not in sys.argv
-PYBIN = "/root/jarvis-app/.venv/bin/python"
+PYBIN = "/opt/jarvis/venv/bin/python"
 SK = env.SKILLS_CODE
 FIXTURES = pathlib.Path("/opt/jarvis-verify-fixture/fixtures")
 BASE = os.environ.get("VERIFY_BASE", "http://127.0.0.1:8711").rstrip("/")

@@ -17,6 +17,8 @@ people already in this tenant's feed — a demo should not put fabricated emails
 in a real colleague's name. Subjects intentionally carry the messy patterns the
 humanisation pass exists to clean up (Re:, [bracket-ids], '@').
 """
+import sys
+sys.exit("REFUSING: this script works on live (/root/jarvis-app or /root/.hermes); port it to the platform tree (VERIFY_APP_ROOT, VERIFY_SKILLS_ROOT) before running it")
 import os
 import subprocess
 import sqlite3

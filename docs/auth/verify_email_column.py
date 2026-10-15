@@ -33,12 +33,21 @@ def snap_accounts(dst: Path) -> None:
 
 DB = BOX / "jarvis_accounts.db"
 snap_accounts(DB)
+# The fixture was migrated after this suite was written. Put the scratch copy
+# back in the pre-migration shape so the migration and backfill really run.
+_pre = sqlite3.connect(str(DB))
+if "email" in [r[1] for r in _pre.execute("PRAGMA table_info(accounts)")]:
+    _pre.execute("DROP INDEX IF EXISTS idx_accounts_email_lower")
+    _pre.execute("ALTER TABLE accounts DROP COLUMN email")
+    _pre.commit()
+    print("  scratch copy: email column dropped to the pre-migration shape")
+_pre.close()
 os.environ["JARVIS_ACCOUNTS_DB"] = str(DB)
 os.environ["HERMES_HOME"] = str(BOX / "hermes")
 (BOX / "hermes" / "state").mkdir(parents=True)
 os.environ["JARVIS_SKILLS_ROOT"] = "/opt/jarvis-verify-fixture/skills/openclaw-imports"
 os.environ["JARVIS_IDENTITY_CONFIG"] = str(IDN)
-sys.path.insert(0, "/root/jarvis-app")
+sys.path.insert(0, os.environ.get("VERIFY_APP_ROOT") or str(Path(__file__).resolve().parents[2]))
 
 ok = []
 def ck(n, c, x=""):

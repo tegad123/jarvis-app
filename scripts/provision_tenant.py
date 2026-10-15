@@ -31,7 +31,6 @@ TEMPLATES = HERE / "templates"
 LEGACY_LOADOUTS_FILE = HERE / "loadouts.yaml"
 
 SKILLS_ORIGIN = Path("/root/git/openclaw-imports.git")
-SHARED_VENV = Path("/root/jarvis-app/.venv/bin/python")
 # A copy of the live venv: a pip install here does not reach live, and tenant
 # users can run it (/root is not reachable under ProtectHome).
 PLATFORM_VENV = Path("/opt/jarvis/venv/bin/python")
@@ -895,7 +894,7 @@ def check_models(manifest: dict) -> None:
 
 
 def venv_python(manifest: dict) -> Path:
-    return PLATFORM_VENV if manifest.get("venv") == "platform" else SHARED_VENV
+    return PLATFORM_VENV
 
 
 def skill_data_dirs(opt: Path, shipped: List[str]) -> List[Path]:
@@ -1150,9 +1149,11 @@ def validate_manifest(manifest: dict) -> tuple:
     if packs not in ("omit", "defaults"):
         die("curator_packs must be omit | defaults")
     if manifest["venv"] == "per-tenant":
-        die("venv: per-tenant is human-yes; this slice uses shared or platform")
-    if manifest["venv"] not in ("shared", "platform"):
-        die("venv must be shared | platform | per-tenant")
+        die("venv: per-tenant is human-yes; this slice uses platform")
+    if manifest["venv"] == "shared":
+        die("venv: shared is retired: it ran tenants on live's venv; use venv: platform")
+    if manifest["venv"] != "platform":
+        die("venv must be platform | per-tenant")
     isolation = manifest.get("isolation")
     if isolation not in ISOLATIONS:
         die(f"isolation must be one of {ISOLATIONS}")
@@ -1169,10 +1170,7 @@ def validate_manifest(manifest: dict) -> tuple:
         if manifest.get("sentinel_mode") not in SENTINEL_MODES:
             die(f"isolation: two_user requires sentinel_mode: {' | '.join(SENTINEL_MODES)}")
         isolation_names(slug)
-    if manifest["venv"] == "shared":
-        log("venv=shared: a pip install on /root/jarvis-app/.venv also affects live :8700")
-    else:
-        log(f"venv=platform: {PLATFORM_VENV} (a copy; pip installs there do not reach live)")
+    log(f"venv=platform: {PLATFORM_VENV} (a copy; pip installs there do not reach live)")
 
     ports = manifest["ports"]
     for k in ("app", "gateway", "hooks"):

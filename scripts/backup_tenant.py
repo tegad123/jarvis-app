@@ -25,7 +25,6 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-SHARED_VENV_NOTE = "/root/jarvis-app/.venv/bin/python"
 
 STATE_DBS = (
     "jarvis_leads.db",

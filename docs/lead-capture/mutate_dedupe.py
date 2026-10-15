@@ -5,13 +5,16 @@ Six mutations. Each removes one rule the dedupe depends on, and the suite must
 go red on the assertion ABOUT THAT RULE. Uses --stub-classify: the classifier
 is not under test here and a real call per email per mutation is pure cost.
 """
-import subprocess, sys
+import os, subprocess, sys
 from pathlib import Path
 
+sys.exit("REFUSING: this canary mutates files under /root/.hermes (live) and runs a stale "
+         "scratchpad suite; port it to the platform skills tree before using it.")
+
 SHARED = Path("/root/.hermes/skills/openclaw-imports/_shared")
-APP = Path("/root/jarvis-app/app")
+APP = Path(os.environ.get("VERIFY_APP_ROOT") or str(Path(__file__).resolve().parents[2])) / "app"
 SP = "/tmp/claude-0/-root/84fc1bc9-4f40-4eb5-bd70-60f6beaacf1a/scratchpad"
-SUITE = ["/root/jarvis-app/.venv/bin/python", f"{SP}/leadcap/verify_lead_capture.py",
+SUITE = ["/opt/jarvis/venv/bin/python", f"{SP}/leadcap/verify_lead_capture.py",
          "--stub-classify"]
 
 MUT = [

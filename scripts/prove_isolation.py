@@ -168,6 +168,10 @@ def main() -> int:
         check(f"app denied {f}", sh(APP, read(f)) != 0)
     check("root canary can list the agent's home", sh("root", f"ls '{H}' >/dev/null") == 0)
     check("app cannot list the agent's home (0710)", sh(APP, f"ls '{H}' >/dev/null") != 0)
+    check(f"agent's home is mode 0710 (0700 locks the app out of shared state; got {oct(H.stat().st_mode & 0o777)})",
+          H.stat().st_mode & 0o777 == 0o710)
+    check("app can open the shared tasks database (chat verifies task claims against it)",
+          sh(APP, read(H / "state/jarvis_tasks.db")) == 0)
     check("app cannot list hermes/sessions", sh(APP, f"ls '{H}/sessions' >/dev/null") != 0)
 
     print("── own files and shared paths work (presence twins)")

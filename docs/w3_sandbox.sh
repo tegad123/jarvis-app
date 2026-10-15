@@ -1,4 +1,5 @@
 #!/bin/bash
+echo "REFUSING: this script works on live (/root/jarvis-app or /root/.hermes); port it to the platform tree (VERIFY_APP_ROOT, VERIFY_SKILLS_ROOT) before running it" >&2; exit 2
 # Stand up an ISOLATED jarvis-app for the W3 scoping suite.
 #
 # WHY THIS EXISTS. The mutation test removes guards on purpose. Every negative

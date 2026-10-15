@@ -45,6 +45,7 @@ WIRE FORMAT
 import asyncio
 import base64
 import json
+import logging
 import os
 import re
 import sys
@@ -54,6 +55,8 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 import httpx
 
 from . import attachments, config, threads
+
+log = logging.getLogger("jarvis.chat")
 
 # Re-exported so callers keep one import site for the thread vocabulary.
 DIRECT_THREAD = threads.DIRECT_THREAD
@@ -151,15 +154,19 @@ def _tasks_verifiable() -> bool:
         return False
 
 
-def _tasks_written_since(ts: str) -> List[Dict[str, Any]]:
+def _tasks_written_since(ts: str) -> Optional[List[Dict[str, Any]]]:
+    """None when the store cannot be read: that is "could not check", which
+    must never be reported to the person as "no task was created"."""
     try:
         from . import tasks_store
         rows = tasks_store.created_since(ts)
         # Both of the ways a chat turn can file work: the gateway's task skill
         # (source chat) and the meeting seam below (source meeting).
         return [r for r in rows if r["source"] in ("chat", "meeting")]
-    except Exception:
-        return []
+    except Exception as exc:
+        log.warning("chat verify: tasks store unreadable (%s: %s)", type(exc).__name__, exc)
+        _bump("chat_verify_store_unreadable")
+        return None
 
 
 def _confirmation(rows: List[Dict[str, Any]]) -> str:
@@ -177,6 +184,11 @@ def _confirmation(rows: List[Dict[str, Any]]) -> str:
     lines += [f"  \u2022 {r['title']} \u2014 {r['task_id']}" for r in rows]
     return "\n".join(lines)
 
+
+UNCHECKED = (
+    "\u26a0 Jarvis could not read your task list just now, so this reply is "
+    "unconfirmed \u2014 check the Tasks tab."
+)
 
 CORRECTION = (
     "\u26a0 No task was created. Nothing was written to your list, despite what "
@@ -200,12 +212,15 @@ async def _verify_turn(thread_id: str, message: str, reply: str,
     # LOOK TWICE BEFORE ACCUSING. The skill writes during the turn, but the
     # write and the last token are not ordered with respect to each other, and
     # calling a real creation a fabrication would be its own kind of lie.
-    if not rows and (claimed or asked):
+    if not rows and rows is not None and (claimed or asked):
         for _ in range(8):
             await asyncio.sleep(0.25)
             rows = _tasks_written_since(started_at)
-            if rows:
+            if rows or rows is None:
                 break
+    if rows is None:
+        return ({"type": "verified", "ok": None, "message": UNCHECKED}
+                if (claimed or asked) else None)
 
     if asked:
         _bump("chat_task_attempts")

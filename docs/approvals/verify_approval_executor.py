@@ -49,7 +49,7 @@ os.environ.update({
     "JARVIS_ACTIVITY_FEED": str(BOX / "state" / "feed.jsonl"),
     "JARVIS_ALLOW_WRITES": "1",
 })
-sys.path.insert(0, "/root/jarvis-app")
+sys.path.insert(0, os.environ.get("VERIFY_APP_ROOT") or str(pathlib.Path(__file__).resolve().parents[2]))
 from app import approvals  # noqa: E402
 
 ok = []

@@ -8,6 +8,8 @@ PATTERN 3 applies with force here — leads_store.create() emits a feed event, s
 JARVIS_ACTIVITY_FEED is redirected alongside the database. That exact omission
 has now cost this project three times.
 """
+import sys
+sys.exit("REFUSING: this script works on live (/root/jarvis-app or /root/.hermes); port it to the platform tree (VERIFY_APP_ROOT, VERIFY_SKILLS_ROOT) before running it")
 import os, sys
 from pathlib import Path
 
@@ -27,7 +29,7 @@ def apply(source="store"):
         "JARVIS_DEMO_SEED": "1",
         "JARVIS_ALLOW_WRITES": "0",
     })
-    sys.path.insert(0, "/root/jarvis-app")
+    sys.path.insert(0, os.environ.get("VERIFY_APP_ROOT") or str(Path(__file__).resolve().parents[2]))
     sys.path.insert(0, str(SKILLS / "_shared"))
 
 

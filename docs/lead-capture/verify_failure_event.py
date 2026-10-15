@@ -7,6 +7,8 @@ window is closed.
 
 Isolated feed; the live one is never written.
 """
+import sys
+sys.exit("REFUSING: this script works on live (/root/jarvis-app or /root/.hermes); port it to the platform tree (VERIFY_APP_ROOT, VERIFY_SKILLS_ROOT) before running it")
 import json, os, shutil, subprocess, sys
 from pathlib import Path
 

@@ -230,7 +230,7 @@ Order on rehearsal (each step needs its own restart yes):
   - `prove_isolation.py --slug isocheck` 110/110 at app `4bc1181`: hermes config, agent `.env`, `/etc/jarvis` denied, and the agent's stand-in getting `503 model_not_configured` (wrong key 401, canary).
   - End to end on isocheck: a chat sent to the real Hermes gateway went to the proxy. `model_proxy_not_configured` rose by 3, one per Hermes retry, and the agent answered "HTTP 503: No model key is configured for this tenant's app." Full sandbox gate green.
 - **Blocked (needs a human):**
-  - **No model key is installed.** `/etc/jarvis/anthropic.env` does not exist, and the agent does not read `/root/.hermes` for one. The live chat tests (`verify_tasks_chat.py` section (a), the real round trip) cannot run until a human installs the key with `install -m 600 -o root -g root`.
+  - ~~**No model key is installed.**~~ **Installed by a human 2026-10-15** (section "Tenant agents chat" below).
   - ~~**The model** (open question 2) for the three per-person tenants.~~ **Answered 2026-10-14, provisional** (section "Section 9 on Postgres" below).
 - **Known gaps:**
   - Hermes's auxiliary model paths (compression, vision), if enabled, may call `api.anthropic.com` directly with the stand-in. They would fail with 401 and leak no real key.
@@ -304,9 +304,9 @@ Order on rehearsal (each step needs its own restart yes):
   - Cross-tenant file probe: each new agent was denied all 57 reads of the other tenants' secrets, private state, Hermes config and runtime config; each can read its own runtime config (presence twin).
   - Units report posture blocked, `JARVIS_ALLOW_WRITES` absent, `JARVIS_SENTINEL_MODE=shadow`.
 - **Not yet usable by the people themselves:**
-  - No model key is installed (`/etc/jarvis/anthropic.env`, a human action), so chat answers 503 `model_not_configured`.
+  - ~~No model key is installed.~~ Installed 2026-10-15; the agents answer through the proxy.
+  - **No owner account exists.** The passphrase in each app env file is the operator's break-glass login, which may not see bodies and so cannot chat (`require_bodies`). Each person needs an owner PIN (`app.accounts_cli set-pin owner --role owner`, run as the app user), handed to them directly. Minting credentials for real people waits for a human yes.
   - There is no tunnel, so they can only be reached from the host. Ingress (cloudflared) is outside the agent's permissions.
-  - Owner passphrases are in each tenant's app env file and were never printed. A human hands them over.
 - **Memory:** each tenant uses about 200 MB (app about 74 MB, gateway about 126 MB). About 1.5 GB is available with all five tenants and live running.
 
 ## Decided 2026-10-14: rehearsal moved to the platform layout in its approved restart window
@@ -344,6 +344,40 @@ Order on rehearsal (each step needs its own restart yes):
     - `prove_isolation.py --slug rehearsal --expect-app-source tenant_connection --refresh-check` passed 121/121: the broker now reports `tenant_connection`, and a real refresh moved `refreshed_at`.
     - Condition 3 (the provisioner bug): the templates carry `JARVIS_APP_ROOT` (`c96c500`), and the post-provision proof checks the running app's value. Eddie, Blake and Martin each have it in the app process and in all six app and job drop-ins.
 - **Known gap:** `google_creds` returning `not_connected` when it cannot find the app is a silent fallback. The proof now catches the cause on every tenant, but the skills code should log and count it.
+
+## Decided 2026-10-15: tenant agents chat through the app (platform build item 6 completed)
+
+**Human action:** the platform key was installed at `/etc/jarvis/anthropic.env` (root 600) and checked with a 200 from the API, by a human. The agent checked only owner, mode and the line's shape, never its value.
+
+- **Restart:** under the lock, the apps of the mailbox-less tenants (eddie, blake, martin, isocheck) were restarted. Each came back healthy with the key in the app process, no `JARVIS_ALLOW_WRITES`, and Sentinel shadow. Rehearsal (real mailbox) was not restarted: it picks the key up at its next human-approved restart.
+- **Agents reach Claude:** `prove_isolation.py` passes 121/121 on all four. With a key installed it checks that the app's key matches the file by hash, that the gateway does not hold it, and that the agent's stand-in through the proxy gets a real model answer (`200 message`).
+- **The real Ask round trip:** `docs/model/verify_tenant_chat.py --slug isocheck` passes 11/11. Nothing is stubbed:
+  - the owner signs in and opens a fresh thread, and the message streams back with no error;
+  - the app's own claim check confirms the task;
+  - a `source: chat` task with a source reference appears in the tenant's tasks database, and the transcript holds the answer;
+  - the usage ledger grew (4 requests, 863 tokens, $0.158, priced, none unpriced);
+  - no `executed` audit row was added.
+  The isocheck owner PIN was minted with `accounts_cli` straight into `/root/onboarding/isocheck-owner-pin.txt` (root 600) and never printed.
+- **Bug found by the round trip:** on its first run the app told the person "No task was created" while the row existed. `_tasks_written_since` swallowed a `PermissionError`: isocheck's hermes home had become 0700 (it is provisioned 0710), which locks the app out of the shared state. The trigger was not found; the proof run, the chat, `accounts_cli` and the gateway (`HERMES_HOME_MODE=0710`) were each ruled out. Fixes:
+  - `app/chat.py`: an unreadable store is logged, counted (`chat_verify_store_unreadable`) and shown as "could not read your task list, check the Tasks tab", never as "nothing was written". `verify_chat_honesty.py` section 5; the old fallback fails 4 checks.
+  - `prove_isolation.py` checks the home is 0710 and that the app can open the shared tasks database. On-host canary: 0700 fails 7 checks, including the held write's feed line (the app could not write the feed either).
+  - The running tenants still have the old `chat.py` until their code is redeployed. `--upgrade` refuses a tenant that already has its database, so there is no redeploy path for new-layout tenants yet.
+- **Not done for the three people:** they have no owner account (see item 7 above), so the chat round trip ran on isocheck only. Their agents' model path is proven by `prove_isolation.py`.
+
+**Live hygiene, fixed in the same pass (2026-10-15):**
+- `verify_email_column.py` imported live's code from `/root/jarvis-app`, and Python wrote `app/__pycache__/accounts_cli.cpython-312.pyc` into live's tree. It is a bytecode cache of live's unchanged source: live was not restarted (same PID), `git status` is clean, and it was left in place, since deleting it would be another write.
+- A scan found 20 scripts that imported live, bound a working path to live code or `/root/.hermes`, or ran live's venv. Two canaries (`mutate_config_apply.py`, `verify_failure_event.py`) rewrite live source files in place; `mutate_dedupe.py` targets `/root/.hermes`.
+  - Scripts in use were repointed to the platform tree (`VERIFY_APP_ROOT`) and platform venv: the auth suites and their canaries, metrics, approval executor, sweeps and tasks canaries.
+  - The rest now refuse to start until ported.
+  - `provision_tenant.py` retires `venv: shared` (live's interpreter).
+- `docs/platform/verify_no_live_targets.py` fails on any such script unless it refuses to start; its canary fires on each rule and not on guards. It is in the gate.
+- `docs/platform/gate.sh` is the gate, now in the repo. It ends by counting files written into live's tree during the run: 0.
+
+**Verify fixture, as asked (human, earlier session):** dana's account email was a real `34dev.com` address. It is now `dana@testco.example.com`, matching the fixture's `identity.json`. The fixture was unfrozen for that one row, then re-frozen (`chattr +i`): integrity ok, no real-domain rows left, fixture hash `1930464a3c2bc0fc` → `690fde70ee171b51`.
+- The two auth suites now pass: `verify_email_column.py` 29/29 and `verify_auth_google.py` 24/24. They work on a scratch copy put back in the pre-migration shape and on the sandbox's own accounts copy, never the frozen fixture. Canaries: backfill disabled fails 6; `mutate_auth_google.py` 5/5.
+- Still in the fixture: `hermes/state/activity_feed.jsonl.pre-mask` holds 8 lines with real addresses (a pre-masking backup). Removing it is deleting data, so it waits for a human yes.
+
+**Gate:** 24 suites green at this commit (the 21 before, plus the two auth suites and the live-target scan). Fixture unchanged during the run; live PID 2185197; 0 files written into live's tree.
 
 ## Decided (from the spec, recorded 2026-10-10)
 

@@ -1,4 +1,5 @@
 #!/bin/bash
+echo "REFUSING: this script works on live (/root/jarvis-app or /root/.hermes); port it to the platform tree (VERIFY_APP_ROOT, VERIFY_SKILLS_ROOT) before running it" >&2; exit 2
 # Adding an event must make the count RISE. Under the old windowed hero it could
 # FALL, because a new event pushed an older one out of the 50-event page.
 set -e

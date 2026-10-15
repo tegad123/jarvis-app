@@ -124,7 +124,7 @@ def main() -> int:
 
     print("── 1b. twin: isolation: none renders no users and keeps the drop-in key")
     n = copy.deepcopy(m)
-    n.update(isolation="none", venv="shared", writes_posture="captured", public_origin="http://127.0.0.1:8799")
+    n.update(isolation="none", venv="platform", writes_posture="captured", public_origin="http://127.0.0.1:8799")
     n.setdefault("safety", {})["outbound_recipient_suffix"] = ["acme.example"]
     rc, out = run(n, "--print-units")
     ck("print-units exits 0", rc == 0, out[-300:])
@@ -136,9 +136,9 @@ def main() -> int:
     print("── 2. refusals (all also carry app port 8700, the last-resort stop)")
     cases = [
         ("no isolation field", {"isolation": None}, "isolation must be one of"),
-        ("isolation none on a blocked tenant", {"isolation": "none", "venv": "shared"},
+        ("isolation none on a blocked tenant", {"isolation": "none"},
          "isolation: none is for captured loopback scratch only"),
-        ("two_user on the shared venv", {"venv": "shared"}, "requires venv: platform"),
+        ("the retired shared venv (live's interpreter)", {"venv": "shared"}, "venv: shared is retired"),
         ("two_user with no sentinel_mode", {"sentinel_mode": None}, "requires sentinel_mode"),
         ("no agent_model", {"agent_model": None}, "manifest missing required field agent_model"),
         ("an agent_model that is not a Claude id", {"agent_model": "gpt-4o"}, "agent_model must be a Claude model id"),

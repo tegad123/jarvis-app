@@ -15,6 +15,8 @@ stay green.
 Restores every file in a finally block and rebuilds, so a crash leaves the box
 as it found it.
 """
+import sys
+sys.exit("REFUSING: this script works on live (/root/jarvis-app or /root/.hermes); port it to the platform tree (VERIFY_APP_ROOT, VERIFY_SKILLS_ROOT) before running it")
 import subprocess, sys, time
 from pathlib import Path
 

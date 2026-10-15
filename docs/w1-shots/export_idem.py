@@ -1,3 +1,5 @@
+import sys
+sys.exit("REFUSING: this script works on live (/root/jarvis-app or /root/.hermes); port it to the platform tree (VERIFY_APP_ROOT, VERIFY_SKILLS_ROOT) before running it")
 import os, sys, tempfile
 from pathlib import Path
 sys.path.insert(0,'/root/jarvis-app'); sys.path.insert(0,'/root/.hermes/skills/openclaw-imports/_shared')
