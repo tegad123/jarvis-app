@@ -20,7 +20,11 @@ never printed.
         --pin-file /root/onboarding/isocheck-owner-pin.txt [--tasks-db PATH] [--pg-db NAME]
 
 --tasks-db and --pg-db exist for canaries: pointing either at another tenant
-must turn the matching checks red.
+must turn the matching checks red. --price-scale 1000 is the cost canary.
+
+Tokens are reported per class (input, output, cache read, cache write). Cache
+tokens dominate an agent turn, so a total of input + output alone understates
+what was billed; the cost is recomputed from the split at USD per million.
 """
 from __future__ import annotations
 
@@ -78,12 +82,17 @@ def pg(dbname: str, sql: str, args=()) -> list:
         return c.execute(sql, args).fetchall()
 
 
-def usage(dbname: str, model: str) -> tuple:
-    rows = pg(dbname, "SELECT coalesce(sum(requests),0), coalesce(sum(input_tokens + output_tokens),0), "
-                      "coalesce(sum(cost_usd),0)::float, coalesce(sum(unpriced_requests),0) FROM usage "
+USAGE_COLS = ("requests", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
+              "cost_usd", "unpriced_requests")
+PRICE_KEYS = {"input_tokens": "input", "output_tokens": "output",
+              "cache_read_tokens": "cache_read", "cache_write_tokens": "cache_write"}
+
+
+def usage(dbname: str, model: str) -> dict:
+    rows = pg(dbname, "SELECT " + ", ".join(f"coalesce(sum({k}),0)::float" for k in USAGE_COLS) + " FROM usage "
                       "WHERE model = %s AND purpose = 'agent' AND day = (now() AT TIME ZONE 'UTC')::date",
               (model,))
-    return tuple(rows[0])
+    return dict(zip(USAGE_COLS, rows[0]))
 
 
 def executed(dbname: str) -> int:
@@ -98,6 +107,8 @@ def main() -> int:
     ap.add_argument("--tasks-db", type=Path, default=None)
     ap.add_argument("--pg-db", default=None)
     ap.add_argument("--timeout", type=int, default=300)
+    ap.add_argument("--price-scale", type=float, default=1.0,
+                    help="canary: 1000 reads the table as per-thousand; both cost checks must fail")
     a = ap.parse_args()
     if os.geteuid() != 0:
         print("run as root")
@@ -170,10 +181,24 @@ def main() -> int:
     check(f"the transcript holds the assistant's answer ({len(said)} chars)", len(said) > 0)
 
     u1, x1 = usage(dbname, model), executed(dbname)
-    d_req, d_tok, d_cost = u1[0] - u0[0], u1[1] - u0[1], u1[2] - u0[2]
-    check(f"model usage ledger grew for {model}: +{d_req} request(s), +{d_tok} tokens", d_req >= 1 and d_tok > 0)
-    check(f"   and it is priced, not unpriced: +${d_cost:.6f}, unpriced +{u1[3] - u0[3]}",
-          d_cost > 0 and u1[3] == u0[3])
+    d = {k: u1[k] - u0[k] for k in USAGE_COLS}
+    d_tok = sum(d[k] for k in PRICE_KEYS)
+    split = ", ".join(f"{k.removesuffix('_tokens')} {int(d[k])}" for k in PRICE_KEYS)
+    check(f"model usage ledger grew for {model}: +{int(d['requests'])} request(s), +{int(d_tok)} tokens ({split})",
+          d["requests"] >= 1 and d_tok > 0)
+    check(f"   and it is priced, not unpriced: +${d['cost_usd']:.6f}, unpriced +{int(d['unpriced_requests'])}",
+          d["cost_usd"] > 0 and d["unpriced_requests"] == 0)
+    prices = json.loads(Path(f"/opt/{slug}/jarvis-app/app/model_prices.json").read_text()).get(model) or {}
+    prices = {k: v * a.price_scale for k, v in prices.items()}
+    if prices:
+        expect = sum(d[k] * prices[p] for k, p in PRICE_KEYS.items()) / 1_000_000
+        check(f"   the cost recomputes from the token split at USD per million (${expect:.6f})",
+              abs(expect - d["cost_usd"]) < 1e-5)
+        per_m = d["cost_usd"] / d_tok * 1_000_000 if d_tok else 0
+        lo, hi = min(prices[p] for p in PRICE_KEYS.values()), max(prices[p] for p in PRICE_KEYS.values())
+        check(f"   blended ${per_m:.2f}/M tokens lies within the table's ${lo}-${hi}/M", lo <= per_m <= hi)
+    else:
+        check(f"   {model} has a price in the tenant's model_prices.json", False)
     check(f"nothing left Jarvis: executed audit rows {x0} -> {x1}", x1 == x0)
     print(f"\n{PASS}/{PASS + FAIL} passed")
     return 1 if FAIL else 0

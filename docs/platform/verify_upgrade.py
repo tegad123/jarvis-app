@@ -16,9 +16,18 @@ skill data and secrets are fresh, and the source tenant is only read.
   D. The real upgrade: new commits, every seeded row and file kept, threads
      moved behind the app, old drop-ins archived, the feed file shared 660,
      writes still unset, then prove_isolation.py passes.
+  E. A second upgrade with the platform database in place: a schema the new
+     code does not expect is refused before anything stops (canary); a broken
+     commit rolls back without dropping the database (canary); the real one
+     keeps the database and its rows, dumps it into the snapshot, and the
+     proof passes.
+
+A-D need an old-layout source (threads in shared state). Every tenant is on
+the new layout now, so --existing-db provisions the replica from a platform
+tenant's manifest at the commits it runs (default eddie) and runs E only.
 
     python3 docs/platform/verify_upgrade.py [--source rehearsal] [--slug upgcheck]
-        [--ports 8780,8782,18798] [--skills-sha SHA] [--app-sha SHA] [--keep]
+        [--ports 8780,8782,18798] [--skills-sha SHA] [--app-sha SHA] [--keep] [--existing-db]
 """
 from __future__ import annotations
 
@@ -296,6 +305,53 @@ def run_upgrade(manifest: dict, path: Path) -> subprocess.CompletedProcess:
     return r
 
 
+def section_e(m: dict, slug: str, R: Path, work: Path, bad_sha: str) -> None:
+    print("── E. upgrading a tenant that already has its platform database")
+    db = f"jarvis_{slug}"
+    psql = lambda q: sh("runuser", "-u", "postgres", "--", "psql", "-XqAt", "-d", db, "-c", q,  # noqa: E731
+                        cwd="/").stdout.strip()
+    psql("INSERT INTO usage (day, model, purpose, requests, input_tokens, output_tokens, cache_read_tokens, "
+         "cache_write_tokens, cost_usd, unpriced_requests) VALUES (current_date, 'verify-upgrade-seed', "
+         "'agent', 1, 1, 1, 0, 0, 0, 0)")
+    seeded = lambda: psql("SELECT count(*) FROM usage WHERE model = 'verify-upgrade-seed'")  # noqa: E731
+    check(f"seeded one usage row in {db} (got {seeded()})", seeded() == "1")
+    version = psql("SELECT version_num FROM alembic_version")
+    pid = lambda: sh("systemctl", "show", f"{slug}-app", "-p", "MainPID", "--value").stdout.strip()  # noqa: E731
+    pid0, ran = pid(), head(R / "jarvis-app")
+
+    psql("UPDATE alembic_version SET version_num = 'canary_mismatch'")
+    r = run_upgrade(m, work / "mismatch.yaml")
+    log = (work / "mismatch.log").read_text()
+    check(f"canary: a schema the new code does not expect is refused (rc={r.returncode})",
+          r.returncode != 0 and "needs a human yes" in log)
+    check("   and nothing was stopped: same app process", pid() == pid0)
+    psql(f"UPDATE alembic_version SET version_num = '{version}'")
+
+    r = run_upgrade({**m, "app_origin_sha": bad_sha}, work / "broken2.yaml")
+    log = (work / "broken2.log").read_text()
+    check(f"canary: a broken commit on a tenant with a database rolls back (rc={r.returncode})",
+          r.returncode != 0 and "old version healthy again" in log)
+    check("   the existing database survives the rollback", db_exists(slug) and seeded() == "1")
+    check(f"   app back at the commit it ran before ({ran[:7]})", head(R / "jarvis-app") == ran)
+
+    earlier = set(Path(f"/root/backups/{slug}").glob("upgrade-*"))
+    r = run_upgrade(m, work / "reupgrade.yaml")
+    log = (work / "reupgrade.log").read_text()
+    check(f"re-upgrade with the database in place exits 0 (rc={r.returncode})", r.returncode == 0)
+    if r.returncode:
+        print("\n".join(log.splitlines()[-15:]))
+    check("it kept the database instead of creating one", f"{db} kept: schema {version}" in log)
+    check(f"the seeded usage row is still there (got {seeded()})", seeded() == "1")
+    snaps = [d for d in sorted(set(Path(f"/root/backups/{slug}").glob("upgrade-*")) - earlier)
+             if (d / "opt.tar").exists()]
+    dump = snaps[-1] / "platform.dump" if snaps else Path("/nonexistent")
+    check("the database was dumped into the snapshot, root 600",
+          dump.exists() and dump.stat().st_mode & 0o777 == 0o600)
+    p = sh(PY, str(ROOT / "scripts" / "prove_isolation.py"), "--slug", slug)
+    tail = (p.stdout.strip().splitlines() or [""])[-1]
+    check(f"prove_isolation.py after the re-upgrade: {tail}", p.returncode == 0)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--source", default="rehearsal")
@@ -304,7 +360,12 @@ def main() -> int:
     ap.add_argument("--skills-sha", default=None, help="default: docs/tenants/isocheck pin (platform)")
     ap.add_argument("--app-sha", default=None, help="default: this repo's HEAD")
     ap.add_argument("--keep", action="store_true")
+    ap.add_argument("--existing-db", action="store_true",
+                    help="section E only: provision the replica from --source's manifest at the commits that "
+                         "tenant runs (default source eddie), then upgrade it with its database in place")
     a = ap.parse_args()
+    if a.existing_db and a.source == "rehearsal":
+        a.source = "eddie"
     if os.geteuid() != 0:
         print("run as root (the lead agent, under the agent lock)")
         return 2
@@ -326,6 +387,31 @@ def main() -> int:
     m.setdefault("backup", {})["destination"] = f"/root/backups/{slug}"
     work = Path(tempfile.mkdtemp(prefix="verify-upgrade-"))
     wt = None
+    if a.existing_db:
+        try:
+            old_m = {**m, "app_origin_sha": old_app, "skills_origin_sha": old_skills}
+            (work / "old.yaml").write_text(yaml.safe_dump(old_m, sort_keys=False))
+            r = sh(PY, str(ROOT / "scripts" / "provision_tenant.py"), "--manifest", str(work / "old.yaml"))
+            (work / "provision.log").write_text(re.sub(r"[a-z2-9]{4}-[a-z2-9]{4}-[a-z2-9]{4}", "<redacted>",
+                                                       r.stdout + r.stderr))
+            print(f"── provisioned {slug} from {src}'s manifest at app {old_app[:7]} (rc={r.returncode})")
+            R = Path(f"/opt/{slug}")
+            bad = pt.wait_healthy(slug, {"app": ports[0], "gateway": ports[1]})
+            check(f"replica healthy at the old commit (problems: {bad or 'none'})", not bad)
+            check("replica app at the source's commit", head(R / "jarvis-app") == old_app)
+            check("replica has its platform database before the upgrade", db_exists(slug))
+            if not bad:
+                bad_sha, wt = broken_commit()
+                section_e(m, slug, R, work, bad_sha)
+        finally:
+            if wt:
+                sh("git", "-C", str(ROOT), "worktree", "remove", "--force", str(wt))
+                sh("git", "-C", str(ROOT), "branch", "-D", "canary/upgrade-broken")
+            if not a.keep and Path(f"/opt/{slug}").exists():
+                r = sh(PY, str(ROOT / "scripts" / "provision_tenant.py"), "--teardown", slug, "--yes")
+                print(f"── teardown {slug}: rc={r.returncode}")
+        print(f"\n{PASS}/{PASS + FAIL} passed")
+        return 1 if FAIL else 0
     try:
         build_replica(src, slug, sub)
         print("── A. the replica runs the old version")
@@ -417,6 +503,7 @@ def main() -> int:
         check(f"prove_isolation.py on the upgraded replica: {tail}", p.returncode == 0)
         if p.returncode:
             print("\n".join(ln for ln in p.stdout.splitlines() if "FAIL" in ln))
+        section_e(m, slug, R, work, bad_sha)
     finally:
         if wt:
             sh("git", "-C", str(ROOT), "worktree", "remove", "--force", str(wt))

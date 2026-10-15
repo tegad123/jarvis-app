@@ -361,7 +361,7 @@ Order on rehearsal (each step needs its own restart yes):
 - **Bug found by the round trip:** on its first run the app told the person "No task was created" while the row existed. `_tasks_written_since` swallowed a `PermissionError`: isocheck's hermes home had become 0700 (it is provisioned 0710), which locks the app out of the shared state. The trigger was not found; the proof run, the chat, `accounts_cli` and the gateway (`HERMES_HOME_MODE=0710`) were each ruled out. Fixes:
   - `app/chat.py`: an unreadable store is logged, counted (`chat_verify_store_unreadable`) and shown as "could not read your task list, check the Tasks tab", never as "nothing was written". `verify_chat_honesty.py` section 5; the old fallback fails 4 checks.
   - `prove_isolation.py` checks the home is 0710 and that the app can open the shared tasks database. On-host canary: 0700 fails 7 checks, including the held write's feed line (the app could not write the feed either).
-  - The running tenants still have the old `chat.py` until their code is redeployed. `--upgrade` refuses a tenant that already has its database, so there is no redeploy path for new-layout tenants yet.
+  - The running tenants still have the old `chat.py` until their code is redeployed. `--upgrade` refuses a tenant that already has its database, so there is no redeploy path for new-layout tenants yet. *(Fixed 2026-10-15: eddie, blake, martin redeployed; see below.)*
 - **Not done for the three people:** they have no owner account (see item 7 above), so the chat round trip ran on isocheck only. Their agents' model path is proven by `prove_isolation.py`.
 
 **Live hygiene, fixed in the same pass (2026-10-15):**
@@ -375,9 +375,34 @@ Order on rehearsal (each step needs its own restart yes):
 
 **Verify fixture, as asked (human, earlier session):** dana's account email was a real `34dev.com` address. It is now `dana@testco.example.com`, matching the fixture's `identity.json`. The fixture was unfrozen for that one row, then re-frozen (`chattr +i`): integrity ok, no real-domain rows left, fixture hash `1930464a3c2bc0fc` → `690fde70ee171b51`.
 - The two auth suites now pass: `verify_email_column.py` 29/29 and `verify_auth_google.py` 24/24. They work on a scratch copy put back in the pre-migration shape and on the sandbox's own accounts copy, never the frozen fixture. Canaries: backfill disabled fails 6; `mutate_auth_google.py` 5/5.
-- Still in the fixture: `hermes/state/activity_feed.jsonl.pre-mask` holds 8 lines with real addresses (a pre-masking backup). Removing it is deleting data, so it waits for a human yes.
+- Still in the fixture: `hermes/state/activity_feed.jsonl.pre-mask` holds 8 lines with real addresses (a pre-masking backup). Removing it is deleting data, so it waits for a human yes. *(Shredded 2026-10-15 with a human yes; see the next section.)*
 
 **Gate:** 24 suites green at this commit (the 21 before, plus the two auth suites and the live-target scan). Fixture unchanged during the run; live PID 2185197; 0 files written into live's tree.
+
+## Decided 2026-10-15: model key on rehearsal, three people redeployed, cost check corrected, pre-mask file shredded
+
+Human yes for each item, 2026-10-15.
+
+- **Rehearsal restart for the model key.** Lock held. Drop-ins and config archived first to `/root/archives/rehearsal-before-keyrestart-20261015T230846Z/` (rollback: `sh .../rollback.sh`). Posture before and after: preflight `posture=blocked`, `writes=0`, `JARVIS_ALLOW_WRITES` unset on app and gateway. Healthy 6 s after restart, inside the 2-minute auto-rollback window. The app now loads the key, and the gateway still does not. `prove_isolation.py --expect-app-source tenant_connection --refresh-check`: 124/124, including the 0710 home check, a model answer through the proxy, and a real token refresh.
+- **`--upgrade` for tenants that already have their database.** It refused eddie (`jarvis_eddie already exists`), because it was written for rehearsal's first move. Now:
+  - an existing database is kept, dumped into the snapshot (root 600), and its grants are re-applied;
+  - rollback never drops it;
+  - if `SCHEMA_HEAD` in the staged `app/platform_db.py` differs from the database's alembic version, the upgrade refuses before anything stops, because a migration is a human yes.
+- **`verify_upgrade.py --existing-db`.** Sections A–D need an old-layout source, and none is left: rehearsal is new-layout, so its replica cannot start. This mode provisions the replica from eddie's manifest at eddie's commit (3a349fb) and runs section E: 14/14. Canaries:
+  - a schema mismatch is refused, and the same app process keeps running;
+  - a broken commit rolls back, the database and its seeded row survive, and the app is back at 3a349fb.
+- **Eddie, Blake, Martin** went from 3a349fb to b38cb64, which carries the `chat.py` unreadable-store fix. Proofs are 123/123 each. Ledger delta per tenant:
+  - accounts 0 → 0, threads 1 → 1, usage rows 1 → 1, approvals 0 → 0, schema 0001 → 0001;
+  - `actions` 3 → 4: the proof's own probe, a held `external_send` to `probe@isolation.invalid` (outcome `shadowed`, verdict `deny`);
+  - the tasks databases are still empty files.
+  Posture after: blocked, writes unset, the key in the app only.
+- **The cost check, corrected.** The price table is USD per million, and `model_proxy.price` divides correctly. The ledger recomputes by hand: isocheck's day row at 80 in, 2,562 out, 259,530 cache read and 78,054 cache write gives $0.409231, matching the ledger exactly. The fault was `verify_tenant_chat.py`, which reported only input + output tokens (the "932 tokens"). It now reports all four classes and recomputes the cost from the split. Measured round trip:
+  - 7 requests and 221,898 tokens (16 in, 1,273 out, 184,413 cache read, 36,196 cache write);
+  - $0.210202, a blended $0.95/M;
+  - cache writes are about 65% of the cost.
+  Canary `--price-scale 1000` fails both cost checks.
+- **`activity_feed.jsonl.pre-mask`.** It was never committed: no ref in the app repo (GitHub origin included) or the skills repo has the path, and its blob hash is in neither object store. It was shredded (`shred -u -n 3 -z`) from the fixture, which was then re-frozen. Fixture: 682 → 681 files, hash `690fde70ee171b51` → `4b747e7cd87522e4`. Identical copies (same sha256) remain in nine verify sandboxes under `/tmp/claude-0/-root/*/hermes/state/`; deleting those waits for a human yes.
+- **Hermes-home watcher.** A root bpftrace program logs any mode other than 0710 set on `/opt/*/hermes` (see AGENTS.md, current known state). Remove by 2026-10-29. The hourly ctime changes on the homes were file creation (`kanban.db-wal`), not mode changes. Neither the isolation proof nor a full chat round trip reproduced the 0700 reset under trace.
 
 ## Decided (from the spec, recorded 2026-10-10)
 

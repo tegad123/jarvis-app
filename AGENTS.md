@@ -19,7 +19,8 @@ emails and texts to real clients. Act accordingly.
   /opt/rehearsal/app-private (docs/platform/decisions.md). Since 2026-10-14
   it runs the current layout (broker, Sentinel shadow, model proxy, Postgres
   jarvis_rehearsal) at app 6d847b0 / skills 74c0fb1, upgraded in place with
-  `--upgrade`, then restarted once more (human yes) for JARVIS_APP_ROOT.
+  `--upgrade`, then restarted once more (human yes) for JARVIS_APP_ROOT, and
+  again 2026-10-15 (human yes) to load the model key.
   It is a tenant, NOT a test target: never point verify scripts or sandboxes
   at its config or stores.
 - ISOCHECK: app 8740, gateway 8682, /opt/isocheck. A scratch tenant made by
@@ -31,6 +32,7 @@ emails and texts to real clients. Act accordingly.
   /opt/<slug>, manifests docs/tenants/<slug>.yaml. Each person's own Jarvis in
   practice mode (two-user, sentinel shadow, writes blocked), no Google
   connected, placeholder mailboxes `<slug>-assistant@assistant.invalid`.
+  App b38cb64 since 2026-10-15 (`--upgrade`, proofs 123/123).
   Connecting a real mailbox is a human STOP gate; after that, restarting
   the tenant is too (`--reconfigure` refuses without `--restart-approved`).
   The lead may restart them under the agent lock while no mailbox is connected.
@@ -66,9 +68,14 @@ emails and texts to real clients. Act accordingly.
   `provision_tenant.py --manifest M --upgrade [--restart-approved]`. It keeps
   data, secrets and the OAuth client, snapshots /opt/<slug> and its units to
   /root/backups/<slug>/upgrade-<stamp>/, and restores that snapshot by itself
-  if app or gateway is not healthy within 120 s. Prove it first with
-  docs/platform/verify_upgrade.py (builds a replica of rehearsal's tree,
-  never its data).
+  if app or gateway is not healthy within 120 s. A tenant that already has
+  jarvis_<slug> keeps it: the database is dumped into the snapshot, grants
+  are re-applied, it is never dropped on rollback, and a schema version the
+  new code does not expect is refused before anything stops (a migration is
+  a human yes). Prove it first with docs/platform/verify_upgrade.py: sections
+  A-D need an old-layout source tenant and none is left, so use
+  `--existing-db` (replica provisioned from eddie's manifest at eddie's
+  commits, never its data; section E with two canaries).
 - Tenant agents reach Claude only through their app's model proxy
   (/api/model/anthropic). The platform key belongs in
   /etc/jarvis/anthropic.env (root 600, installed by a human); the agent
@@ -173,3 +180,16 @@ live's PID and the number of files written into live's tree (must be 0).
   enabled behind the `.example` recipient boundary so action claims are
   testable inside the sandbox.
 - No external tester is active.
+- A Hermes-home watcher runs on this host. REMOVE BY 2026-10-29. It exists
+  because isocheck's /opt/isocheck/hermes once flipped from 0710 to 0700, which
+  locks the app out of shared state, and the cause was never reproduced
+  (Hermes's `ensure_hermes_home` sets 0700 when `HERMES_HOME_MODE` is unset).
+  It is a root bpftrace program, `/root/archives/hermes-home-watch.bt`,
+  attached to chmod, fchmodat and fchmodat2. It logs every mode change other
+  than 0710 on a path under /opt/ ending in `/hermes`, with process, parent and
+  uid, to `/root/archives/hermes-home-watch.log`. It changes nothing, and
+  prove_isolation's 0710 check stays the gate. Its canary is a chmod on a
+  throwaway /opt/watchcanary/hermes (two lines, labelled watchcanary, are
+  already in the log). Stop it with `pkill -f hermes-home-watch.bt`. If it has
+  not fired by the remove-by date, stop it, delete the .bt file and this bullet,
+  and record the outcome in decisions.md.

@@ -1503,8 +1503,13 @@ def upgrade(manifest_path: Path, restart_approved: bool) -> None:
     db_existed = subprocess.run(["runuser", "-u", "postgres", "--", "psql", "-XqAt", "-c",
                                  f"SELECT 1 FROM pg_database WHERE datname = 'jarvis_{slug}'"],
                                 capture_output=True, text=True, cwd="/").stdout.strip() == "1"
+    db_version = ""
     if db_existed:
-        die(f"jarvis_{slug} already exists; --upgrade creates it")
+        db_version = subprocess.run(["runuser", "-u", "postgres", "--", "psql", "-XqAt", "-d", f"jarvis_{slug}",
+                                     "-c", "SELECT version_num FROM alembic_version"],
+                                    capture_output=True, text=True, cwd="/").stdout.strip()
+        if not db_version:
+            die(f"jarvis_{slug} exists but has no alembic version; refusing to guess its schema")
     if not PLATFORM_OAUTH_CLIENT.is_file() and not (opt / "app-private" / "oauth_client.json").exists():
         die("no OAuth client for the tenant")
 
@@ -1529,6 +1534,15 @@ def upgrade(manifest_path: Path, restart_approved: bool) -> None:
         die("provision_client minted secrets during an upgrade render")
     shutil.rmtree(render_home)
     log(f"staged app {sha_app} and skills {sha_skills} in {new}")
+    if db_existed:
+        head = re.search(r'^SCHEMA_HEAD\s*=\s*"([^"]+)"', (new / "jarvis-app" / "app" / "platform_db.py")
+                         .read_text(), re.M)
+        if not head:
+            die("staged app/platform_db.py has no SCHEMA_HEAD; cannot tell whether the schema changes")
+        if head.group(1) != db_version:
+            die(f"jarvis_{slug} is at schema {db_version}, the new code wants {head.group(1)}: "
+                "a schema migration needs a human yes; nothing was stopped")
+        log(f"jarvis_{slug} kept: schema {db_version} is already what the new code expects")
 
     units = [f"{slug}-app.service", f"{slug}-gateway.service"]
     timers = [p.name for p in tenant_unit_paths(slug) if p.suffix == ".timer"]
@@ -1541,6 +1555,10 @@ def upgrade(manifest_path: Path, restart_approved: bool) -> None:
     for f in ("opt.tar", "units.tar"):
         os.chmod(snap / f, 0o600)
     log(f"snapshot: {snap}/opt.tar and units.tar; enabled timers {enabled_timers}")
+    if db_existed:
+        run([str(PLATFORM_VENV), str(REPO / "scripts" / "pg_tenant.py"), "dump", slug, str(snap / "platform.dump")])
+        os.chmod(snap / "platform.dump", 0o600)
+        log(f"snapshot: jarvis_{slug} dumped to {snap / 'platform.dump'}")
 
     created_db = False
     try:
@@ -1598,8 +1616,12 @@ def upgrade(manifest_path: Path, restart_approved: bool) -> None:
                                        f"{manifest['display_name']}.\n")
         trim_agent_env(hermes)
         apply_isolation(opt, names, skill_data_dirs(opt, shipped), keep_private=True)
-        create_platform_db(jarvis, slug, names["app_user"])
-        created_db = True
+        if db_existed:
+            run([str(PLATFORM_VENV), str(jarvis / "scripts" / "pg_tenant.py"), "migrate", slug])
+            log(f"jarvis_{slug}: grants re-applied at schema {db_version}")
+        else:
+            create_platform_db(jarvis, slug, names["app_user"])
+            created_db = True
 
         run(["systemctl", "daemon-reload"])
         run(["systemctl", "start", *units])
