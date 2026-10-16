@@ -415,6 +415,7 @@ Human yes, 2026-10-15, for the owner logins and for deleting the sandbox copies 
   - In all three, the attempt is one `actions` row: `shadowed`, `external_send`, `email_send`, to `buyer@client.invalid`, verdict `deny`.
   - A feed line reads "Practice mode: Jarvis would have tried to send an email to buyer@client.invalid".
   - Executed rows stayed 0 and the outbox stayed empty.
+  - It is now `docs/model/verify_tenant_outbound.py`: 5/5 on each of eddie, blake and martin, with a fresh recipient per run and the home still 0710 afterwards. Canary `--pg-db` pointed at another tenant's ledger fails both audit checks.
 - **The 0700 cause.** The first chats failed the app's own check (`verified ok: None`): "Permission denied" on `hermes/state`, because the homes were 0700 again. The watcher caught the gateway process itself, running as the agent user, calling `chmod(/opt/<slug>/hermes, 0700)` the same second it rewrote `auth.json`.
   - The code path is `hermes_cli/auth.py` `_save_auth_store` → `hermes_constants.secure_parent_dir`. It hardcodes 0700 on the parent of `auth.json` (the home) and ignores `HERMES_HOME_MODE`, which only `_secure_dir` honours.
   - When it happens: on isocheck, at its first chat; on eddie, blake and martin, at their first chat after `--upgrade` rewrote the agent's `.env`. A plain gateway restart followed by a chat did not reproduce it on isocheck.
