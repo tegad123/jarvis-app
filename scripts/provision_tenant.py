@@ -1373,15 +1373,10 @@ def reconfigure(manifest_path: Path, restart_approved: bool) -> None:
     run(["systemctl", "daemon-reload"])
     units = [f"{slug}-app.service", f"{slug}-gateway.service"]
     run(["systemctl", "restart", *units])
-    deadline = time.time() + 120
-    while time.time() < deadline:
-        states = [subprocess.run(["systemctl", "is-active", u], capture_output=True, text=True).stdout.strip()
-                  for u in units]
-        if states == ["active", "active"] and _ping(int(manifest["ports"]["app"])):
-            log(f"reconfigured {slug}: app and gateway active, app answers /api/ping")
-            return
-        time.sleep(2)
-    die(f"{slug} not healthy within 120s after reconfigure: {states} (journalctl -u {units[0]})")
+    bad = wait_healthy(slug, manifest["ports"])
+    if bad:
+        die(f"{slug} not healthy within {UPGRADE_TIMEOUT}s after reconfigure: {bad} (journalctl -u {units[0]})")
+    log(f"reconfigured {slug}: app and gateway active, app answers /api/ping, gateway /health ok")
 
 
 LEGACY_FILES = ("hermes/state/approvals.jsonl", "app-private/approvals_decisions.jsonl",

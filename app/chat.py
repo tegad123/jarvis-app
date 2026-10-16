@@ -401,6 +401,11 @@ def _iter_sse_frames(buffer: str) -> Tuple[List[Tuple[Optional[str], str]], str]
 
 
 def _ndjson(obj: Dict) -> bytes:
+    if obj.get("type") == "error":
+        # The person sees the error; the operator needs a record of it too.
+        _bump("chat_error_shown")
+        log.warning("chat error shown to the person: %s (detail %s)",
+                    str(obj.get("message") or "")[:200], str(obj.get("detail") or "")[:80])
     return (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
 
 

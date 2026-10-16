@@ -192,6 +192,42 @@ ck("the unreadable store was counted",
 ck("   and not counted as an unbacked claim",
    after.get("intent_claim_unbacked", 0) == before.get("intent_claim_unbacked", 0))
 
+# ── 6. an error the person sees is on the operator's record too ─────────────
+# Seen on a tenant: the first message after a restart showed "error" to the
+# person and left nothing in the app's log, so the cause could not be found.
+print("\n── 6. AN ERROR SHOWN TO THE PERSON — logged and counted ───────")
+import json as _json  # noqa: E402
+import logging  # noqa: E402
+
+seen = []
+handler = logging.Handler()
+handler.emit = lambda rec: seen.append(rec.getMessage())
+chat_mod.log.addHandler(handler)
+before = counters()
+chat_mod._ndjson({"type": "delta", "text": "hello"})
+ck("a normal event is not counted as an error (presence twin)",
+   counters().get("chat_error_shown", 0) == before.get("chat_error_shown", 0))
+tid = threads_mod.create_thread("honesty-dead-gateway")["thread_id"]
+real_url = chat_mod.GATEWAY_CHAT_URL
+chat_mod.GATEWAY_CHAT_URL = "http://127.0.0.1:9/v1/chat/completions"
+
+
+async def _turn():
+    return [line async for line in chat_mod.stream_chat(tid, "hi")]
+
+try:
+    lines = asyncio.run(_turn())
+finally:
+    chat_mod.GATEWAY_CHAT_URL = real_url
+    chat_mod.log.removeHandler(handler)
+events = [_json.loads(x) for x in lines]
+ck("the unreachable gateway is shown to the person as an error",
+   any(e.get("type") == "error" for e in events), str(events)[:200])
+after = counters()
+ck("   and counted once (chat_error_shown)",
+   after.get("chat_error_shown", 0) == before.get("chat_error_shown", 0) + 1, str(after.get("chat_error_shown")))
+ck("   and logged with its detail", any("chat error shown" in m and "ConnectError" in m for m in seen), str(seen)[:200])
+
 print(f"\n{sum(ok)}/{len(ok)} passed")
 print("counters now: " + ", ".join(
     f"{k}={v}" for k, v in sorted(counters().items())
