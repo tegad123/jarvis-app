@@ -36,11 +36,12 @@ emails and texts to real clients. Act accordingly.
   Connecting a real mailbox is a human STOP gate; after that, restarting
   the tenant is too (`--reconfigure` refuses without `--restart-approved`).
   The lead may restart them under the agent lock while no mailbox is connected.
-  Their agents answer through the model proxy (key installed 2026-10-15), but
-  none has an owner account yet: the env-file passphrase is the operator's
-  and cannot chat. Owner PINs are minted with `app.accounts_cli set-pin`
-  (as the app user) only with a human yes, written straight to a root-only
-  file under /root/onboarding/, never printed.
+  Their agents answer through the model proxy (key installed 2026-10-15).
+  Each has one owner account since 2026-10-15 (human yes); the PIN is in
+  /root/onboarding/<slug>-owner-pin.txt (root 600), never printed. More
+  PINs are minted with `app.accounts_cli set-pin` (as the app user) only
+  with a human yes. `docs/model/verify_tenant_chat.py --slug <slug>
+  --pin-file ...` is their real chat test (costs a model round trip).
 - Two-user tenants run the agent in broker mode: Google calls, counters and
   channel creation go through the app's loopback /api/broker; the threads and
   accounts databases are in app-private and the agent cannot open them.
@@ -182,8 +183,12 @@ live's PID and the number of files written into live's tree (must be 0).
 - No external tester is active.
 - A Hermes-home watcher runs on this host. REMOVE BY 2026-10-29. It exists
   because isocheck's /opt/isocheck/hermes once flipped from 0710 to 0700, which
-  locks the app out of shared state, and the cause was never reproduced
-  (Hermes's `ensure_hermes_home` sets 0700 when `HERMES_HOME_MODE` is unset).
+  locks the app out of shared state. On 2026-10-16 it caught the cause: the
+  gateway's auth-store save (`hermes_cli/auth.py` `_save_auth_store` ->
+  `hermes_constants.secure_parent_dir`) hardcodes 0700 on the home and
+  ignores `HERMES_HOME_MODE`. Until Hermes is patched (human yes: live's
+  gateway runs the same install), check a tenant's home after any upgrade,
+  reconfigure or first chat and restore 0710.
   It is a root bpftrace program, `/root/archives/hermes-home-watch.bt`,
   attached to chmod, fchmodat and fchmodat2. It logs every mode change other
   than 0710 on a path under /opt/ ending in `/hermes`, with process, parent and

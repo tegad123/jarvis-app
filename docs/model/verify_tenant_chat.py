@@ -11,7 +11,9 @@ decides to run the task-manager skill. Asserted on outcomes, never wording:
     tenant's own tasks database (an internal record: allowed in practice mode);
   - the model usage ledger in the tenant's Postgres database grew (requests,
     tokens and a priced cost for the agent model), so the cost guard sees it;
-  - nothing left Jarvis: no audit row with outcome 'executed' was added.
+  - nothing left Jarvis: no audit row with outcome 'executed' was added;
+  - the agent's home is still 0710 afterwards (0700 locks the app out of
+    the shared tasks database and feed).
 
 The owner PIN is read from a root-only file (accounts_cli set-pin output) and
 never printed.
@@ -200,6 +202,9 @@ def main() -> int:
     else:
         check(f"   {model} has a price in the tenant's model_prices.json", False)
     check(f"nothing left Jarvis: executed audit rows {x0} -> {x1}", x1 == x0)
+    mode = Path(f"/opt/{slug}/hermes").stat().st_mode & 0o777
+    check(f"the agent's home is still 0710 after the chat (got {oct(mode)}; Hermes's auth-store save, "
+          "hermes_cli/auth.py _save_auth_store -> secure_parent_dir, sets 0700)", mode == 0o710)
     print(f"\n{PASS}/{PASS + FAIL} passed")
     return 1 if FAIL else 0
 

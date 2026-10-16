@@ -404,6 +404,25 @@ Human yes for each item, 2026-10-15.
 - **`activity_feed.jsonl.pre-mask`.** It was never committed: no ref in the app repo (GitHub origin included) or the skills repo has the path, and its blob hash is in neither object store. It was shredded (`shred -u -n 3 -z`) from the fixture, which was then re-frozen. Fixture: 682 → 681 files, hash `690fde70ee171b51` → `4b747e7cd87522e4`. Identical copies (same sha256) remain in nine verify sandboxes under `/tmp/claude-0/-root/*/hermes/state/`; deleting those waits for a human yes.
 - **Hermes-home watcher.** A root bpftrace program logs any mode other than 0710 set on `/opt/*/hermes` (see AGENTS.md, current known state). Remove by 2026-10-29. The hourly ctime changes on the homes were file creation (`kanban.db-wal`), not mode changes. Neither the isolation proof nor a full chat round trip reproduced the 0700 reset under trace.
 
+## Decided 2026-10-15: owner logins for Eddie, Blake and Martin; their Jarvis holds a real request; the 0700 cause found
+
+Human yes, 2026-10-15, for the owner logins and for deleting the sandbox copies of the pre-mask file.
+
+- **Owner logins.** One owner PIN per tenant, minted with `app.accounts_cli set-pin owner --role owner` as the app user, written straight to `/root/onboarding/<slug>-owner-pin.txt` (root 600) and never printed. Accounts 0 → 1 each. The databases stay app-owned, mode 600.
+- **Chat on each person's tenant.** `verify_tenant_chat.py` passes 13/13 on eddie, blake and martin: a task asked for in chat lands in that tenant's own list, sourced from chat. Each round trip cost $0.14–$0.16, priced, and executed rows stayed 0.
+- **A real outbound request, held.** The owner asked each Jarvis to email `buyer@client.invalid`.
+  - Eddie and Martin tried at once. Blake's agent first drafted the email and asked for approval, then tried after "send it".
+  - In all three, the attempt is one `actions` row: `shadowed`, `external_send`, `email_send`, to `buyer@client.invalid`, verdict `deny`.
+  - A feed line reads "Practice mode: Jarvis would have tried to send an email to buyer@client.invalid".
+  - Executed rows stayed 0 and the outbox stayed empty.
+- **The 0700 cause.** The first chats failed the app's own check (`verified ok: None`): "Permission denied" on `hermes/state`, because the homes were 0700 again. The watcher caught the gateway process itself, running as the agent user, calling `chmod(/opt/<slug>/hermes, 0700)` the same second it rewrote `auth.json`.
+  - The code path is `hermes_cli/auth.py` `_save_auth_store` → `hermes_constants.secure_parent_dir`. It hardcodes 0700 on the parent of `auth.json` (the home) and ignores `HERMES_HOME_MODE`, which only `_secure_dir` honours.
+  - When it happens: on isocheck, at its first chat; on eddie, blake and martin, at their first chat after `--upgrade` rewrote the agent's `.env`. A plain gateway restart followed by a chat did not reproduce it on isocheck.
+  - The homes were restored to 0710, and a second chat on each kept 0710.
+  - Fixing it means patching the shared Hermes install that live's gateway also runs, so it waits for a human yes.
+  - `verify_tenant_chat.py` now checks that the home is still 0710 after the chat. Canary: home set to 0700 by hand fails that check, 13/14.
+- **Sandbox copies of the pre-mask file.** All nine were already gone. The gate rebuilt those sandboxes from the fixture after the original was shredded. They were removed by the rebuild, not shredded. No copy is left on the filesystem.
+
 ## Decided (from the spec, recorded 2026-10-10)
 
 - Customer #1: 34 Dev team.
