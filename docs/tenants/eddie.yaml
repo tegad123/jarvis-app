@@ -116,6 +116,7 @@ people:
     title: owner
     roles:
     - owner
+    - internal
     email:
     - eddie@assistant.invalid
     platform_ids:

@@ -120,7 +120,7 @@ people:
     name: Owner
     display_name: Owner
     title: owner
-    roles: ["owner"]
+    roles: ["owner", "internal"]
     email: ["owner@cz.local"]
     platform_ids:
       discord: ["999111222333444999"]

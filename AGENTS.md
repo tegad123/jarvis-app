@@ -32,7 +32,10 @@ emails and texts to real clients. Act accordingly.
   /opt/<slug>, manifests docs/tenants/<slug>.yaml. Each person's own Jarvis in
   practice mode (two-user, sentinel shadow, writes blocked), no Google
   connected, placeholder mailboxes `<slug>-assistant@assistant.invalid`.
-  App b38cb64 since 2026-10-15 (`--upgrade`, proofs 123/123).
+  App bfd501b since 2026-10-16 (`--upgrade`, proofs 123/123).
+  Their owners carry roles owner + internal (task.add needs internal or
+  assistant; roles are literal). The provisioner refuses an owner without
+  internal, and `--reconfigure` re-applies the manifest's roles.
   Connecting a real mailbox is a human STOP gate; after that, restarting
   the tenant is too (`--reconfigure` refuses without `--restart-approved`).
   The lead may restart them under the agent lock while no mailbox is connected.
@@ -186,9 +189,11 @@ live's PID and the number of files written into live's tree (must be 0).
   locks the app out of shared state. On 2026-10-16 it caught the cause: the
   gateway's auth-store save (`hermes_cli/auth.py` `_save_auth_store` ->
   `hermes_constants.secure_parent_dir`) hardcodes 0700 on the home and
-  ignores `HERMES_HOME_MODE`. Until Hermes is patched (human yes: live's
-  gateway runs the same install), check a tenant's home after any upgrade,
-  reconfigure or first chat and restore 0710.
+  ignores `HERMES_HOME_MODE`. Hermes scale-vault-local 0f8bc16 (local commit,
+  never pushed: origin is upstream) makes it keep `HERMES_HOME_MODE` for the
+  home only (human yes). Live sets no `HERMES_HOME_MODE`, so its behaviour
+  is unchanged. Gateways started before the patch (rehearsal) still run the
+  old code until restarted. The watcher now confirms the fix holds.
   It is a root bpftrace program, `/root/archives/hermes-home-watch.bt`,
   attached to chmod, fchmodat and fchmodat2. It logs every mode change other
   than 0710 on a path under /opt/ ending in `/hermes`, with process, parent and

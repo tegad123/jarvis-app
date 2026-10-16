@@ -424,6 +424,28 @@ Human yes, 2026-10-15, for the owner logins and for deleting the sandbox copies 
   - `verify_tenant_chat.py` now checks that the home is still 0710 after the chat. Canary: home set to 0700 by hand fails that check, 13/14.
 - **Sandbox copies of the pre-mask file.** All nine were already gone. The gate rebuilt those sandboxes from the fixture after the original was shredded. They were removed by the rebuild, not shredded. No copy is left on the filesystem.
 
+## Decided 2026-10-16: Hermes keeps the home at 0710; owners carry internal; chat errors are counted
+
+- **Hermes patch (human yes: "patch").** Hermes scale-vault-local commit 0f8bc16 (local only; origin is upstream NousResearch, never pushed).
+  - Change: `secure_parent_dir` uses `HERMES_HOME_MODE` when the parent is `HERMES_HOME` itself, and 0700 everywhere else.
+  - Proof: three new unit tests (the mode is kept for the home, only for the home, and 0700 without the variable); 53 passed. A real `_save_auth_store` run as isocheck's agent kept 0710; the same run without the variable set 0700.
+  - Live sets no `HERMES_HOME_MODE`, so its behaviour is unchanged.
+  - Rehearsal's gateway started before the patch and runs the old code until a restart. That restart is a human STOP because the tenant has a real mailbox.
+- **Owners were missing the internal role.** Every checked-in manifest gave the owner `roles: ["owner"]`.
+  - Task-skill roles are literal and `task.add` needs internal or assistant, so an owner-attributed add was denied. Example: "owner lacks required role 'internal or assistant' for 'task.add'" on martin. Whether chat filed a task depended on which `--actor` the model passed.
+  - The verify fixture's owner (dana) is owner + internal; the manifests now match it.
+  - `validate_manifest` refuses an owner without internal. `verify_provision_isolation.py` checks this refusal; with the check removed, it fails 68/69.
+  - `--reconfigure` now re-applies each existing person's roles from the manifest. It refuses a person the tenant doesn't have, because adding people still needs a re-provision.
+  - Canary on the live tenants: the same `add_task.py --actor <owner email>` run as each agent was DENY before the reconfigure and ALLOW after, on eddie, blake and martin.
+  - Rehearsal's manifest is fixed in the file only. Applying it needs a reconfigure, which restarts a tenant with a real mailbox (human STOP).
+- **`--reconfigure` waits for health.** It restarts the units, then fails unless the app answers /api/ping and the gateway /health within the upgrade timeout.
+- **Chat errors are counted.** Every error event the Ask tab shows bumps `chat_error_shown` and logs a warning. `verify_chat_honesty.py` section 6 points the gateway URL at a dead port and expects +1 and a ConnectError in the log (49/49; with the change reverted, it fails 2). Eddie's one transient post-restart chat error was never reproduced; it would now be counted.
+- **Rollout.** eddie, blake and martin run app bfd501b (`--upgrade`, existing databases kept, proofs 123/123).
+- **After the roles fix**, on each of eddie, blake and martin:
+  - Proof 123/123, `verify_tenant_chat` 14/14 (the home still 0710), `verify_tenant_outbound` 5/5.
+  - The task-skill authz log shows 0 DENY since the reconfigure (eddie 1 ALLOW and 1 DEFAULT, blake 2 ALLOW, martin 2 ALLOW).
+  - The proof runs left a few test tasks ("Roles fix proof …", "Schedule the inspection for …") in each tenant's list.
+
 ## Decided (from the spec, recorded 2026-10-10)
 
 - Customer #1: 34 Dev team.

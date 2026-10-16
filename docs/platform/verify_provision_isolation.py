@@ -148,6 +148,9 @@ def main() -> int:
         ("an unknown switch", {"switches": {"egress": "on"}}, "switches must be a mapping"),
         ("a background_model that is not a Claude id", {"background_model": "gpt-4o-mini"},
          "background_model must be a Claude model id"),
+        ("an owner without the internal role",
+         {"people": {"owner": {"roles": ["owner"], "email": ["owner@isoprint.invalid"]}}},
+         "is an owner without the internal role"),
     ]
     for label, patch, msg in cases:
         bad = copy.deepcopy(m)

@@ -122,7 +122,7 @@ people:
     name: Owner
     display_name: Owner
     title: owner
-    roles: ["owner"]
+    roles: ["owner", "internal"]
     email: ["notevaultai+owner@gmail.com"]
     platform_ids:
       discord: ["888111222333444999"]

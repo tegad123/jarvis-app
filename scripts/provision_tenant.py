@@ -1139,6 +1139,11 @@ def validate_manifest(manifest: dict) -> tuple:
             die(f"manifest missing required field {key}")
     check_models(manifest)
     switch_states(manifest)
+    for key, person in (manifest.get("people") or {}).items():
+        roles = (person or {}).get("roles") or []
+        if "owner" in roles and "internal" not in roles:
+            die(f"people.{key} is an owner without the internal role: roles are literal, and "
+                "task.add needs internal or assistant, so the owner could not file their own tasks")
     if manifest["mailbox_strategy"] != "dedicated_account":
         die("mailbox_strategy must be dedicated_account (send_as_alias is rejected)")
     if str(manifest["agent_display_name"]).strip().lower() == "jarvis":
@@ -1347,7 +1352,12 @@ def reconfigure(manifest_path: Path, restart_approved: bool) -> None:
     ident_p = shared / "identity.json"
     ident = json.loads(ident_p.read_text())
     ident["agent_display_name"] = name
-    for person in (ident.get("people") or {}).values():
+    ident_people = ident.get("people") or {}
+    for key, mp in (manifest.get("people") or {}).items():
+        if key not in ident_people:
+            die(f"manifest person {key} is not on the running tenant; people are added by re-provisioning")
+        ident_people[key]["roles"] = list((mp or {}).get("roles") or [])
+    for person in ident_people.values():
         if "assistant" in (person.get("roles") or []):
             person["name"] = person["display_name"] = name
     changed += [ident_p] if rewrite_keeping_owner(ident_p, json.dumps(ident, indent=2) + "\n") else []
