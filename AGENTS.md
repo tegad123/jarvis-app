@@ -20,7 +20,9 @@ emails and texts to real clients. Act accordingly.
   it runs the current layout (broker, Sentinel shadow, model proxy, Postgres
   jarvis_rehearsal) at app 6d847b0 / skills 74c0fb1, upgraded in place with
   `--upgrade`, then restarted once more (human yes) for JARVIS_APP_ROOT, and
-  again 2026-10-15 (human yes) to load the model key.
+  again 2026-10-15 (human yes) to load the model key, and 2026-10-16 (human
+  yes, `--reconfigure --restart-approved`) for the owner's internal role and
+  the patched Hermes.
   It is a tenant, NOT a test target: never point verify scripts or sandboxes
   at its config or stores.
 - ISOCHECK: app 8740, gateway 8682, /opt/isocheck. A scratch tenant made by
@@ -44,7 +46,10 @@ emails and texts to real clients. Act accordingly.
   /root/onboarding/<slug>-owner-pin.txt (root 600), never printed. More
   PINs are minted with `app.accounts_cli set-pin` (as the app user) only
   with a human yes. `docs/model/verify_tenant_chat.py --slug <slug>
-  --pin-file ...` is their real chat test (costs a model round trip).
+  --pin-file ...` is their real chat test (costs a model round trip). It
+  deletes the task it creates and checks the list ends as it began. Their
+  task lists hold real tasks only (proof tasks cleared 2026-10-16). Don't
+  file test tasks on them by hand; use isocheck.
 - Two-user tenants run the agent in broker mode: Google calls, counters and
   channel creation go through the app's loopback /api/broker; the threads and
   accounts databases are in app-private and the agent cannot open them.
@@ -189,11 +194,14 @@ live's PID and the number of files written into live's tree (must be 0).
   locks the app out of shared state. On 2026-10-16 it caught the cause: the
   gateway's auth-store save (`hermes_cli/auth.py` `_save_auth_store` ->
   `hermes_constants.secure_parent_dir`) hardcodes 0700 on the home and
-  ignores `HERMES_HOME_MODE`. Hermes scale-vault-local 0f8bc16 (local commit,
-  never pushed: origin is upstream) makes it keep `HERMES_HOME_MODE` for the
-  home only (human yes). Live sets no `HERMES_HOME_MODE`, so its behaviour
-  is unchanged. Gateways started before the patch (rehearsal) still run the
-  old code until restarted. The watcher now confirms the fix holds.
+  ignores `HERMES_HOME_MODE`. Hermes scale-vault-local 0f8bc16 makes it keep
+  `HERMES_HOME_MODE` for the home only (human yes). The install's origin is
+  upstream NousResearch, never pushed to; the patched branch is kept as
+  `hermes-agent/scale-vault-local` in github.com/tegad123/jarvis-skills. The
+  install is a shallow clone, so push from a full clone of upstream. Live
+  sets no `HERMES_HOME_MODE`, so its behaviour is unchanged. Every tenant
+  gateway, rehearsal included, has run the patched code since 2026-10-16.
+  The watcher now confirms the fix holds.
   It is a root bpftrace program, `/root/archives/hermes-home-watch.bt`,
   attached to chmod, fchmodat and fchmodat2. It logs every mode change other
   than 0710 on a path under /opt/ ending in `/hermes`, with process, parent and

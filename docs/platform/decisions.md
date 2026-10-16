@@ -444,7 +444,30 @@ Human yes, 2026-10-15, for the owner logins and for deleting the sandbox copies 
 - **After the roles fix**, on each of eddie, blake and martin:
   - Proof 123/123, `verify_tenant_chat` 14/14 (the home still 0710), `verify_tenant_outbound` 5/5.
   - The task-skill authz log shows 0 DENY since the reconfigure (eddie 1 ALLOW and 1 DEFAULT, blake 2 ALLOW, martin 2 ALLOW).
-  - The proof runs left a few test tasks ("Roles fix proof …", "Schedule the inspection for …") in each tenant's list.
+  - The proof runs left a few test tasks ("Roles fix proof …", "Schedule the inspection for …") in each tenant's list. They were cleared the same day; see below.
+
+## Decided 2026-10-16: rehearsal reconfigured, the Hermes patch kept on GitHub, proof tasks cleared
+
+Human yes, 2026-10-16, for all three.
+
+- **Rehearsal `--reconfigure --restart-approved`.** Same conditions as the key restart:
+  - Agent lock held. Posture before and after: writes unset, sentinel shadow, app ping 200.
+  - Drop-ins and config saved to `/root/archives/rehearsal-before-rolesrestart-20261016T031207Z/`, with `rollback.sh` next to them.
+  - Only `identity.json` changed: the owner gained `internal`.
+  - Proof (`--expect-app-source tenant_connection --refresh-check`) 124/124, including the home at 0710 and a real token refresh.
+  - Two-minute watch: 12 of 12 app-ping and gateway-health checks returned 200, the PIDs didn't change, and NRestarts stayed 0.
+  - The gateway now runs the patched Hermes.
+- **Where the Hermes patch lives.** Branch `hermes-agent/scale-vault-local` in github.com/tegad123/jarvis-skills, head `0f8bc1642be6bee78c678651b394ccede905278e`. On top of upstream 36cb5ae it carries 276e5c7 (the unit-name fix) and 0f8bc16 (`secure_parent_dir`).
+  - The branch is unrelated to the skills history: it is upstream's full history plus the two local commits.
+  - The installed copy at /usr/local/lib/hermes-agent is a 3-commit shallow clone, and pushing from it fails because GitHub needs the ancestors. So the branch was pushed from a throwaway full clone of upstream that fetched the two local commits; the hashes are unchanged.
+  - The installed copy's remotes and object store were left as they were, and both local commits scanned clean for secrets before the push.
+- **Proof tasks cleared.** eddie 6, blake 4, martin 3. Every one was a proof task: "Schedule the inspection for …" and "Order the survey for …" from `verify_tenant_chat`, plus "Roles fix proof …" canaries. The script refused to delete if any other title was present.
+  - Backups: `/root/backups/<slug>/tasks-before-proof-cleanup-20261016T032103Z.db` (600).
+  - All three lists are at 0, and the database and its side files are still agent-owned, 660.
+- **Proofs stay out of tenant data from now on.** `verify_tenant_chat.py` deletes the one task it created (by `task_id`, after its checks) and asserts that the list ends exactly as it began.
+  - Each of eddie, blake and martin: 15/15, list 0 → 0.
+  - Canary `--keep-task` on isocheck fails that check (8 → 9); the leftover was removed.
+  - Not covered: the verifiers' Ask-tab conversations stay in each tenant's chat history (there is no thread-delete route), and their `actions` rows and "would have" feed lines stay because the audit log is append-only.
 
 ## Decided (from the spec, recorded 2026-10-10)
 

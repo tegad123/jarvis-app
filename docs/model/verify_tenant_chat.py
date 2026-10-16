@@ -13,7 +13,10 @@ decides to run the task-manager skill. Asserted on outcomes, never wording:
     tokens and a priced cost for the agent model), so the cost guard sees it;
   - nothing left Jarvis: no audit row with outcome 'executed' was added;
   - the agent's home is still 0710 afterwards (0700 locks the app out of
-    the shared tasks database and feed).
+    the shared tasks database and feed);
+  - the proof deletes the one task it created, so the tenant's task list ends
+    exactly as it began (real tenants keep only real tasks). --keep-task is
+    the canary for that check.
 
 The owner PIN is read from a root-only file (accounts_cli set-pin output) and
 never printed.
@@ -107,6 +110,7 @@ def main() -> int:
     ap.add_argument("--pin-file", required=True, type=Path)
     ap.add_argument("--person", default="owner")
     ap.add_argument("--tasks-db", type=Path, default=None)
+    ap.add_argument("--keep-task", action="store_true", help="canary: leave the proof's task behind")
     ap.add_argument("--pg-db", default=None)
     ap.add_argument("--timeout", type=int, default=300)
     ap.add_argument("--price-scale", type=float, default=1.0,
@@ -133,6 +137,8 @@ def main() -> int:
     street = f"{random.randint(1000, 9999)} {random.choice(('Meridian St', 'Harborline Ave', 'Copperleaf Dr'))}"
     phrase = f"Track this: {random.choice(('order the survey for', 'schedule the inspection for'))} {street}"
     before_ids = {r["task_id"] for r in chat_rows(tasks_db)}
+    before_all = {r[0] for r in sqlite3.connect(f"file:{tasks_db}?mode=ro", uri=True)
+                  .execute("SELECT task_id FROM tasks")}
     u0, x0 = usage(dbname, model), executed(dbname)
 
     c = httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=a.timeout)
@@ -205,6 +211,16 @@ def main() -> int:
     mode = Path(f"/opt/{slug}/hermes").stat().st_mode & 0o777
     check(f"the agent's home is still 0710 after the chat (got {oct(mode)}; Hermes's auth-store save, "
           "hermes_cli/auth.py _save_auth_store -> secure_parent_dir, sets 0700)", mode == 0o710)
+    if found and not a.keep_task:
+        con = sqlite3.connect(str(tasks_db))
+        with con:
+            con.execute("DELETE FROM digest_map WHERE task_id = ?", (found["task_id"],))
+            con.execute("DELETE FROM tasks WHERE task_id = ?", (found["task_id"],))
+        con.close()
+    after_ids = {r[0] for r in sqlite3.connect(f"file:{tasks_db}?mode=ro", uri=True)
+                 .execute("SELECT task_id FROM tasks")}
+    check(f"the proof left the tenant's task list as it found it ({len(before_all)} -> {len(after_ids)} tasks)",
+          found is not None and after_ids == before_all)
     print(f"\n{PASS}/{PASS + FAIL} passed")
     return 1 if FAIL else 0
 
