@@ -10,11 +10,6 @@
 #   {slug}.hooks.yamin.io                                → its own webhook port
 # Add a tenant = three ingress rules + `cloudflared tunnel route dns yamin <host>` each.
 # The live tenant (34dev) keeps its quick tunnels until it is moved by decision.
-#
-# 2026-10-16 (human decision): personal tenants are at {slug}.yamin.io, one
-# level deep like rehearsal. Only their app is public, behind Cloudflare
-# Access. Their gateways stay loopback-only (the app reaches them on
-# 127.0.0.1), and a hooks hostname is added only if Gmail push is turned on.
 tunnel: yamin
 credentials-file: /etc/cloudflared/yamin.json
 ingress:
@@ -26,10 +21,13 @@ ingress:
     service: http://127.0.0.1:8672        # rehearsal gateway
   - hostname: rehearsal-hooks.yamin.io
     service: http://127.0.0.1:18793       # rehearsal Gmail webhook listener (when enabled)
+  # Part A (human yes 2026-10-16): each person's app only. Gateways stay
+  # loopback-only; a hooks hostname is added in Part C if Gmail push is wanted.
+  # Every hostname here sits behind a Cloudflare Access application.
   - hostname: eddie.yamin.io
-    service: http://127.0.0.1:8750        # eddie app (behind Access)
+    service: http://127.0.0.1:8750        # eddie app
   - hostname: blake.yamin.io
-    service: http://127.0.0.1:8760        # blake app (behind Access)
+    service: http://127.0.0.1:8760        # blake app
   - hostname: martin.yamin.io
-    service: http://127.0.0.1:8770        # martin app (behind Access)
+    service: http://127.0.0.1:8770        # martin app
   - service: http_status:404
