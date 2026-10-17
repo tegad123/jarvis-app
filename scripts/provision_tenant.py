@@ -1795,6 +1795,17 @@ def check_loadout(manifest_path: Optional[Path], skills_tree: Optional[Path],
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+def hold_agent_lock() -> None:
+    """Provision, upgrade, reconfigure and teardown change the server: hold the
+    agent lock (scripts/agent_lock.py) for the whole run, or change nothing."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import agent_lock
+    try:
+        agent_lock.ensure("provision_tenant", " ".join(sys.argv[1:])[:200])
+    except agent_lock.Held as h:
+        die(f"the agent lock is held by another process tree: {h}. Nothing was changed.")
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Stamp or teardown a Jarvis tenant.")
     ap.add_argument("--manifest", type=Path, help="ops YAML (docs/tenants/{slug}.yaml)")
@@ -1830,6 +1841,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.apply_ingress:
         print("REFUSED: --apply-ingress is not implemented in slice 2; commands are printed during provision")
         return 2
+    if args.teardown or not (args.check_loadout or args.print_units or args.check_collisions):
+        hold_agent_lock()
     if args.teardown:
         teardown(args.teardown, args.yes)
         return 0

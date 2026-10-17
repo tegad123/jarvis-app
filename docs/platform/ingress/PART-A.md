@@ -37,7 +37,14 @@ Policy 2 lets the lead agent run the lockout proof against the public address
 from this host. Create the token under Access → Service credentials → Service
 Tokens, name `jarvis-verify`, duration 1 month. Then put its client id and
 secret on two lines in `/root/onboarding/cf-access-verify-token.txt` (root
-600). The agent sends them as headers and never prints them. Delete the token
+600), without them passing through chat or a command line:
+
+```sh
+install -m 600 -o root -g root /dev/stdin /root/onboarding/cf-access-verify-token.txt
+# paste the client id, Enter, the client secret, Enter, then Ctrl-D
+```
+
+The agent sends them as headers and never prints them. Delete the token
 and the policy when you no longer want host-side proofs.
 
 PWA install bypass, per hostname. Browsers fetch the web-app manifest

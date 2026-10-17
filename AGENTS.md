@@ -126,14 +126,22 @@ emails and texts to real clients. Act accordingly.
    report. A report claiming a commit without its hash from the log is
    unverified. Do not report a task complete on the strength of having
    run `git commit` — report it complete on the strength of the log.
-8. One agent changes the server at a time. Only the lead agent makes server
-   changes (restarts, users, groups, permissions, services, provisioning,
-   anything under /opt or /etc), and only while holding the lock:
-   `scripts/agent_lock.py acquire --who NAME --why TEXT` before, and
-   `scripts/agent_lock.py release --who NAME` after. If acquire returns 2,
-   someone else holds it: stop and ask the human. Never delete a lock you
-   did not take. Helper agents never take the lock and never touch the
-   server; they work in their own git worktree on a feature branch.
+8. One agent changes the server at a time, and the kernel enforces it.
+   Server changes (restarts, users, groups, permissions, services,
+   provisioning, anything under /opt or /etc) run under
+   `scripts/agent_lock.py run --who NAME --why TEXT -- CMD`, which holds
+   flock(2) on /root/.jarvis-agent-lock while CMD runs; a multi-step change
+   is one script run that way. The provisioner (every mode that changes the
+   server) and root's `systemctl` (/usr/local/sbin/systemctl, the guard, for
+   start/stop/restart/enable/disable/mask of tenant units) refuse to run while
+   a process outside their own process tree holds the lock. If anything
+   reports the lock held, stop and ask the human. Never bypass the guard with
+   /usr/bin/systemctl. `agent_lock.py status` shows the holder.
+9. Single lead only (human decision 2026-10-17). No helper agents of any
+   kind run on this server: no subagents, no background or cloud agents, no
+   Cursor agent workers. One conversation, one runner. If a second runner of
+   any agent session appears (a `cursor-agent ... worker start` process, a
+   commit or restart you did not make), stop it and tell the human.
 
 ## Engineering principles (these are law, learned from real failures here)
 - A fallback that does not announce itself is a false green. Every fallback
