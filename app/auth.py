@@ -11,6 +11,7 @@ dependency) does not change when they do.
 """
 
 import hmac
+import logging
 import time
 import uuid
 from collections import defaultdict, deque
@@ -22,6 +23,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from . import config
 
 _SALT = "jarvis-app-session-v1"
+log = logging.getLogger("jarvis.auth")
 
 
 def _serializer() -> URLSafeTimedSerializer:
@@ -70,6 +72,82 @@ def record_failure(request: Request) -> None:
 
 def clear_failures(request: Request) -> None:
     _failures.pop(_client_ip(request), None)
+
+
+# ------------------------------------------------------------ person lockout
+#
+# The per-IP throttle above is spoofable and resets as failures age out. This
+# is the account-side guard: LOGIN_LOCK_FAILURES wrong PINs for one person key
+# lock that key for LOGIN_LOCK_SECONDS, whoever is asking and from wherever,
+# and a right PIN is refused until the lock lapses. Keys that do not exist lock
+# the same way, so the lock never reveals which person keys are real. State is
+# in this process's memory: an app restart clears every lock.
+
+_LOCK_TABLE_MAX = 10_000
+_pin_failures: Dict[str, Deque[float]] = defaultdict(deque)
+_locked_until: Dict[str, float] = {}
+
+
+def _lock_key(person_key: str) -> str:
+    return (person_key or "").strip().lower()[:128]
+
+
+def _bump(name: str) -> None:
+    try:
+        from . import threads
+        threads.bump_counter(name)
+    except Exception:
+        log.warning("login counter %s could not be bumped", name)
+
+
+def person_locked(person_key: str) -> float:
+    """Seconds left on this person key's lock, 0 when it is not locked."""
+    key = _lock_key(person_key)
+    until = _locked_until.get(key, 0.0)
+    left = until - time.time()
+    if left > 0:
+        _bump("login_refused_locked")
+        log.warning("login refused: person key %r is locked for %ds more", key, int(left))
+        return left
+    if until:
+        _locked_until.pop(key, None)
+    return 0.0
+
+
+def record_pin_failure(person_key: str) -> bool:
+    """Count a wrong PIN; True when this failure locked the key."""
+    key = _lock_key(person_key)
+    now = time.time()
+    if len(_pin_failures) >= _LOCK_TABLE_MAX and key not in _pin_failures:
+        for k in [k for k, b in _pin_failures.items() if not b or now - b[-1] > config.LOGIN_LOCK_SECONDS]:
+            _pin_failures.pop(k, None)
+        if len(_pin_failures) >= _LOCK_TABLE_MAX:
+            _pin_failures.pop(next(iter(_pin_failures)))
+            log.warning("login lockout table full; dropped the oldest person key")
+    bucket = _pin_failures[key]
+    while bucket and now - bucket[0] > config.LOGIN_LOCK_SECONDS:
+        bucket.popleft()
+    bucket.append(now)
+    _bump("login_pin_failed")
+    log.warning("login failed: wrong PIN for person key %r (%d of %d)",
+                key, len(bucket), config.LOGIN_LOCK_FAILURES)
+    if len(bucket) >= config.LOGIN_LOCK_FAILURES:
+        _locked_until[key] = now + config.LOGIN_LOCK_SECONDS
+        _pin_failures.pop(key, None)
+        _bump("login_locked")
+        log.warning("login locked: person key %r after %d wrong PINs, for %ds",
+                    key, config.LOGIN_LOCK_FAILURES, config.LOGIN_LOCK_SECONDS)
+        return True
+    return False
+
+
+def lock_duration_text() -> str:
+    s = config.LOGIN_LOCK_SECONDS
+    return f"{s // 60} minutes" if s >= 120 else f"{s} seconds"
+
+
+def clear_pin_failures(person_key: str) -> None:
+    _pin_failures.pop(_lock_key(person_key), None)
 
 
 # --------------------------------------------------------------------- login

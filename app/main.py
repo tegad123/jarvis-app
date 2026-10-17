@@ -239,15 +239,26 @@ def login(body: LoginRequest, request: Request, response: Response):
         )
     # ── per-person sign-in ────────────────────────────────────────────────
     if body.person_key:
+        if auth.person_locked(body.person_key):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Too many wrong PINs. Sign-in is locked for {auth.lock_duration_text()}.",
+            )
         acct = auth.verify_pin(body.person_key, body.pin or "")
         if not acct:
             auth.record_failure(request)
+            if auth.record_pin_failure(body.person_key):
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail=f"Too many wrong PINs. Sign-in is locked for {auth.lock_duration_text()}.",
+                )
             # One message for "no such person", "wrong PIN" and "disabled": a
             # login form that distinguishes them tells an attacker which person
             # keys are real.
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                                 detail="That PIN is not right.")
         auth.clear_failures(request)
+        auth.clear_pin_failures(body.person_key)
         # Their private line, created on first sight rather than at account
         # creation — a person added to the registry outside the app still gets
         # one the moment they sign in.

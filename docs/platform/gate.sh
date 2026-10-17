@@ -28,6 +28,7 @@ run "postgres                " $PY docs/platform/verify_postgres.py
 run "provision_isolation     " python3 docs/platform/verify_provision_isolation.py
 run "agent_lock              " python3 docs/platform/verify_agent_lock.py
 run "auth_email_column       " $PY docs/auth/verify_email_column.py
+run "auth_pin_lockout        " $PY -W ignore docs/auth/verify_pin_lockout.py
 run "auth_google (sandbox)   " $PY docs/auth/verify_auth_google.py
 run "no_live_targets         " $PY docs/platform/verify_no_live_targets.py
 bash docs/tasks/tasks_sandbox.sh stop >/dev/null; K1=$(KH); echo "fixture (all files incl. sidecars) $K0 -> $K1 unchanged=$([ $K0 = $K1 ] && echo yes || echo NO)"; echo "/opt/testco exists: $([ -e /opt/testco ] && echo YES || echo no); live MainPID=$(systemctl show -p MainPID --value jarvis-app); /root/jarvis-app status_sha=$(git -C /root/jarvis-app status --porcelain | sha256sum | cut -c1-12)"

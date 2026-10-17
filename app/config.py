@@ -125,6 +125,10 @@ except Exception:
 # guards a single shared passphrase, so unbounded guessing is not acceptable.
 LOGIN_MAX_FAILURES = int(get("APP_LOGIN_MAX_FAILURES", "10"))
 LOGIN_WINDOW_SECONDS = int(get("APP_LOGIN_WINDOW_SECONDS", "300"))
+# Per-person PIN lockout (app/auth.py): this many wrong PINs for one person key
+# lock it for this long.
+LOGIN_LOCK_FAILURES = int(get("APP_LOGIN_LOCK_FAILURES", "5"))
+LOGIN_LOCK_SECONDS = int(get("APP_LOGIN_LOCK_SECONDS", "900"))
 
 # Public origin for OAuth redirect_uri. Scheme + host, no trailing slash.
 # Required to START Google login; never guessed from request.base_url.

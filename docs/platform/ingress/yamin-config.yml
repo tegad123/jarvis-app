@@ -1,0 +1,35 @@
+# Named Cloudflare tunnel for yamin.io — replaces the three quick tunnels for
+# the tenants routed here. Installed to /etc/cloudflared/config.yml by apply.sh.
+#
+# HOSTNAME SCHEME
+#   app.yamin.io           the app UI/API of the tenant at the bare hostnames (unassigned; testco retired)
+#   gateway.yamin.io       that tenant's Hermes gateway API
+#   hooks.yamin.io         Gmail Pub/Sub push webhook (one listener per tenant, own port)
+#   {slug}.app.yamin.io    a further tenant's app       → its own app port
+#   {slug}.gateway.yamin.io                              → its own gateway port
+#   {slug}.hooks.yamin.io                                → its own webhook port
+# Add a tenant = three ingress rules + `cloudflared tunnel route dns yamin <host>` each.
+# The live tenant (34dev) keeps its quick tunnels until it is moved by decision.
+#
+# 2026-10-16 (human decision): personal tenants are at {slug}.yamin.io, one
+# level deep like rehearsal. Only their app is public, behind Cloudflare
+# Access. Their gateways stay loopback-only (the app reaches them on
+# 127.0.0.1), and a hooks hostname is added only if Gmail push is turned on.
+tunnel: yamin
+credentials-file: /etc/cloudflared/yamin.json
+ingress:
+  # app/gateway/hooks.yamin.io (testco) removed 2026-10-13: testco retired,
+  # see docs/platform/decisions.md. Those hostnames now hit the 404 catch-all.
+  - hostname: rehearsal.yamin.io
+    service: http://127.0.0.1:8730        # rehearsal app
+  - hostname: rehearsal-gw.yamin.io
+    service: http://127.0.0.1:8672        # rehearsal gateway
+  - hostname: rehearsal-hooks.yamin.io
+    service: http://127.0.0.1:18793       # rehearsal Gmail webhook listener (when enabled)
+  - hostname: eddie.yamin.io
+    service: http://127.0.0.1:8750        # eddie app (behind Access)
+  - hostname: blake.yamin.io
+    service: http://127.0.0.1:8760        # blake app (behind Access)
+  - hostname: martin.yamin.io
+    service: http://127.0.0.1:8770        # martin app (behind Access)
+  - service: http_status:404
