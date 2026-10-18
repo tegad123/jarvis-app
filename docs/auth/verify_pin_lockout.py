@@ -120,7 +120,8 @@ def sandbox(canary: bool) -> int:
     codes = [login("dana", wrong_pin(pin)).status_code for _ in range(5)]
     check(f"four wrong PINs answer 401, the fifth 429 locked (got {codes})", codes == [401] * 4 + [429])
     r = login("dana", pin)
-    check(f"the right PIN is refused while locked (got {r.status_code}: {r.json().get('detail')})",
+    check(f"the right PIN is refused while locked (got {r.status_code}: "
+          f"{r.json().get('detail') if r.status_code == 429 else '<detail withheld>'})",
           r.status_code == 429)
     delta = {n: ctr(n) - before[n] for n in names}
     check(f"counted: {delta}", delta == {"login_pin_failed": 5, "login_locked": 1, "login_refused_locked": 1})
@@ -158,9 +159,19 @@ def journal_count(unit: str, since: str, text: str) -> int:
     return sum(1 for line in out.splitlines() if text in line)
 
 
+def pin_from(path: Path) -> str:
+    """The PIN out of accounts_cli set-pin output (the onboarding file), never printed."""
+    import re
+    text = path.read_text()
+    m = re.search(r"PIN FOR \S+ .*?\n\s*\n\s+(\S+)\s*\n", text, re.S)
+    if not m:
+        sys.exit(f"no PIN found in {path} (expected accounts_cli set-pin output)")
+    return m.group(1)
+
+
 def live(a) -> int:
     import httpx
-    pin = Path(a.pin_file).read_text().strip()
+    pin = pin_from(Path(a.pin_file))
     headers = {}
     if a.access_token_file:
         cid, secret = Path(a.access_token_file).read_text().split()[:2]
@@ -173,7 +184,6 @@ def live(a) -> int:
     r = login(pin)
     check(f"the right PIN signs in ({r.status_code})", r.status_code == 200)
     if r.status_code != 200:
-        print(f"   body: {r.text[:200]}")
         print(f"\n{PASS}/{PASS + FAIL} passed")
         return 1
     cookie = "; ".join(f"{k}={v}" for k, v in r.cookies.items())
@@ -190,7 +200,8 @@ def live(a) -> int:
     check(f"{a.failures - 1} wrong PINs answer 401, wrong PIN {a.failures} answers 429 locked (got {codes})",
           codes == [401] * (a.failures - 1) + [429])
     r = login(pin)
-    check(f"the right PIN is refused while locked ({r.status_code}: {r.json().get('detail') if r.content else ''})",
+    check(f"the right PIN is refused while locked ({r.status_code}: "
+          f"{r.json().get('detail') if r.status_code == 429 else '<detail withheld>'})",
           r.status_code == 429)
     c1 = counters()
     if c0 is not None and c1 is not None:

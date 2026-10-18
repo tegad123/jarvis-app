@@ -469,6 +469,56 @@ Human yes, 2026-10-16, for all three.
   - Canary `--keep-task` on isocheck fails that check (8 → 9); the leftover was removed.
   - Not covered: the verifiers' Ask-tab conversations stay in each tenant's chat history (there is no thread-delete route), and their `actions` rows and "would have" feed lines stay because the audit log is append-only.
 
+## Decided 2026-10-16: Part A at <slug>.yamin.io behind Access; PIN lockout first; assistant accounts on Workspace
+
+Human decisions: Part A approved with `<slug>.yamin.io`. The human runs the Cloudflare tunnel and Access steps from `docs/platform/ingress/PART-A.md`. No tenant goes public before PIN lockout. Assistant accounts will be Google Workspace. Order: A, then C (Google), then B (Slack) later.
+
+- **PIN lockout.** Five wrong PINs for one person key lock it for 15 minutes (`APP_LOGIN_LOCK_FAILURES`, `APP_LOGIN_LOCK_SECONDS`), from any address. The right PIN is refused while locked. Keys that don't exist lock the same way, so the lock never reveals which keys are real.
+  - Every failure, lock and refused attempt is logged (`jarvis.auth`) and counted (`login_pin_failed`, `login_locked`, `login_refused_locked`).
+  - State lives in the app's memory, so a restart clears locks. The per-IP throttle (10 per 5 minutes) stays.
+  - `docs/auth/verify_pin_lockout.py`: sandbox 7/7, in the gate. Canary `--canary-no-lock` gives 2/7.
+- **Not yet fixed:** the deployed login screen says "Wait a few minutes" on a 429. The committed `static/` build dates from 2026-08-30, and a rebuild would ship every later frontend change, so it is its own supervised task (human, 2026-10-17: later).
+- **OAuth client.** `/etc/jarvis/oauth_client.json` is a web client in Google Cloud project `jarvis-platform-507204` (number 222647815845). Its registered redirects are `localhost:8085`, `app.yamin.io` and `rehearsal.yamin.io`.
+  - The owning organization is not in the file. Whether 34dev accounts count as internal depends on it: an Internal consent screen only admits the owning organization's users.
+  - Rehearsal connected a consumer `@gmail.com` account, which only an External app allows.
+- **Tunnel draft.** `docs/platform/ingress/yamin-config.yml` is today's config plus one rule per person's app. It passes `cloudflared ingress validate`, and each host maps to its own port. The gateways stay on loopback.
+- **PWA install bypass.** The manifest fetch carries no cookies, so `/manifest.webmanifest` and `/icons` get an Access bypass.
+
+## Decided 2026-10-17: a second runner, the lock made enforced, single lead only
+
+- **What happened.** At 02:30 UTC on 10-17 a Cursor agent worker (`cursor-agent ... worker start`, pid 2051561, detached under systemd, working directory `/root/jarvis-app`) started three seconds after this server's Cursor host reconnected. It then ran a second copy of the lead's own conversation:
+  - Only that conversation's ID appears in the agent-exec log.
+  - Its agent store and the user store logged `lock_lost` to another writer from 02:36 on.
+  - At 02:47 it committed the lead's in-progress work as `fdc89b7` and ran `--upgrade` on eddie, blake and martin, while the lead held the advisory lock.
+  - The advisory lock could not stop it: the duplicate believed it was "lead" and already held the lock.
+  - The lead never launched it; the only helper used before was a read-only research agent on 10-16.
+- **Stopped** 2026-10-17 23:3x with SIGTERM. It did not respawn within 45 s.
+  - Its command line held a Cursor API key in clear text, readable by anyone who can list processes on this host. Rotating it is the human's call.
+- **What it changed.**
+  - `fdc89b7`: `app/auth.py`, `app/config.py`, `app/main.py`, `verify_pin_lockout.py` and `gate.sh` are byte-identical to the lead's verified versions.
+  - `PART-A-RUNBOOK.md` duplicated `PART-A.md`. It is deleted; its stdin token-install snippet was kept.
+  - `yamin-config.yml` was replaced by the lead's validated version.
+  - On the host: the three upgrades (units, drop-ins, logrotate and pg_hba rewritten as `--upgrade` does, snapshots `upgrade-20261017T0247*`). Nothing else changed in `/etc` or `/usr/local`, and it made no skills or Hermes commits.
+  - The writes in `/root/jarvis-app/.git` are the shared object store of the platform worktree. Live's HEAD, reflog and tree are unchanged.
+  - Posture after its upgrades: writes unset, sentinel shadow. Proofs after it are below.
+- **The lock is enforced (human decision).** `flock(2)` on `/root/.jarvis-agent-lock`; the kernel drops it when the holder exits, so a lock can't go stale.
+  - `agent_lock.py run --who --why -- CMD` holds it for CMD's lifetime; `acquire`/`release` are gone. The holder's PID is read from `/proc/locks`.
+  - A process passes if it takes the lock or if the holder is one of its ancestors. A second runner outside that process tree is refused even if it knows the protocol.
+  - The provisioner holds it for every mode that changes the server.
+  - `/usr/local/sbin/systemctl` (installed by `scripts/install_agent_lock_guard.sh`) is the same file. It gates start, stop, restart, reload, kill, enable, disable, mask and unmask of tenant units (`/opt/<slug>` with `jarvis-app`, `hermes` and a unit) and passes everything else to `/usr/bin/systemctl`. It refuses before anything stops, and logs to the journal under the tag `jarvis-agent-lock`.
+  - systemd's own starts (boot, `Restart=`) never pass through it. A human or agent can still bypass it with `/usr/bin/systemctl`; AGENTS.md rule 8 forbids that.
+- **Proof.** `docs/platform/verify_agent_lock.py` 19/19, in the gate:
+  - 20 racers, exactly one wins.
+  - The provisioner's `--upgrade`, `--reconfigure` and `--reconfigure --restart-approved` are refused with eddie untouched.
+  - A tenant restart is refused with the PID unchanged and logged, and goes through once the lock is free.
+  - Canary (ensure() a no-op): 13/19.
+  - `--live-upgrade-race` 24/24: a real `--upgrade` of eddie held the lock, and a second `--upgrade` of eddie and one of blake started during it were refused. The first finished healthy with one snapshot, and eddie now runs b79867b.
+- **Single lead only (human decision).** No helper agents of any kind on this server: no subagents, no background or cloud agents, no Cursor agent workers (AGENTS.md rule 9).
+- **Proofs after the second runner's upgrades.** `prove_isolation` 123/123 on each of eddie (b79867b), blake and martin (fdc89b7, app code identical); homes 0710.
+  - `verify_pin_lockout.py --url http://127.0.0.1:<port> --wait-expiry`: 7/7 on each. Right PIN 200; 4×401 then 429 locked; the right PIN refused with 429; counters +5/+1/+1; the lock and the refusal in the journal; the right PIN works again after 15 minutes.
+  - The second runner had tried the same live probe at 02:48. It failed at its first step (the onboarding file is accounts_cli output, not a bare PIN), so it sent no wrong PINs.
+  - The probe now extracts the PIN the way `verify_tenant_chat` does and never prints a response body, because a 422 echoes the input. Its logs and the second runner's /tmp files held no PIN pattern and were shredded.
+
 ## Decided (from the spec, recorded 2026-10-10)
 
 - Customer #1: 34 Dev team.
