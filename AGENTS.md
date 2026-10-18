@@ -141,7 +141,11 @@ emails and texts to real clients. Act accordingly.
    kind run on this server: no subagents, no background or cloud agents, no
    Cursor agent workers. One conversation, one runner. If a second runner of
    any agent session appears (a `cursor-agent ... worker start` process, a
-   commit or restart you did not make), stop it and tell the human.
+   commit or restart you did not make), stop it and tell the human. The
+   worker comes from Cursor's built-in `cursor-agent-worker` extension
+   (starts with the window, no setting). Check with
+   `pgrep -fa 'cursor-agent.*worker start'` (the command line carries a key:
+   never paste it), and stop it with `kill -TERM <pid>`.
 
 ## Engineering principles (these are law, learned from real failures here)
 - A fallback that does not announce itself is a false green. Every fallback
