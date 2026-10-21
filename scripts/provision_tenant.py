@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pwd
 import re
 import secrets
 import shutil
@@ -324,6 +325,7 @@ def apply_isolation(opt: Path, n: Dict[str, str], data_dirs: List[Path], keep_pr
         run(["find", str(hermes / d), "-type", "f", "-exec", "chmod", "660", "{}", "+"])
     run(["chmod", "-R", "o-rwx", str(hermes)])
     os.chmod(hermes / ".env", 0o600)
+    lock_agent_plugin(hermes)
     private.mkdir(mode=0o700, exist_ok=True)
     if not (keep_private and (private / "oauth_client.json").exists()):
         run(["install", "-m", "600", "-o", app, "-g", app, str(PLATFORM_OAUTH_CLIENT),
@@ -916,9 +918,6 @@ def install_agent_plugin(hermes: Path, app_tree: Path) -> List[Path]:
         die(f"{src} has no Jarvis plugin; the app at this commit predates it")
     dest = hermes / "plugins" / "jarvis"
     dest.mkdir(parents=True, exist_ok=True)
-    for d in (dest.parent, dest):
-        os.chown(d, 0, 0)
-        os.chmod(d, 0o755)
     shipped = {f.name: f for f in src.iterdir() if f.is_file() and f.suffix in (".py", ".json", ".yaml")}
     changed = []
     for name, f in sorted(shipped.items()):
@@ -926,14 +925,31 @@ def install_agent_plugin(hermes: Path, app_tree: Path) -> List[Path]:
         if not out.is_file() or out.read_bytes() != f.read_bytes():
             out.write_bytes(f.read_bytes())
             changed.append(out)
-        os.chown(out, 0, 0)
-        os.chmod(out, 0o644)
     for p in sorted(dest.iterdir()):
         if p.name not in shipped:
             shutil.rmtree(p) if p.is_dir() else p.unlink()
             changed.append(p)
+    lock_agent_plugin(hermes)
     log(f"agent plugin at {dest}: {len(changed)} file(s) changed" if changed else f"agent plugin at {dest}: unchanged")
     return changed
+
+
+def lock_agent_plugin(hermes: Path) -> None:
+    """root-owned, readable by the agent through its own group only. Runs
+    again at the end of apply_isolation, whose chown -R would undo it."""
+    dest = hermes / "plugins" / "jarvis"
+    if not dest.is_dir():
+        return
+    gid = hermes.stat().st_gid if hermes.stat().st_uid == 0 else pwd.getpwuid(hermes.stat().st_uid).pw_gid
+    for d in (dest.parent, dest):
+        os.chown(d, 0, gid)
+        os.chmod(d, 0o750)
+    for f in dest.iterdir():
+        if f.is_dir():
+            shutil.rmtree(f)
+            continue
+        os.chown(f, 0, gid)
+        os.chmod(f, 0o640)
 
 
 def write_file(path: Path, text: str, mode: int = 0o644) -> None:

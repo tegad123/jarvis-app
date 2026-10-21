@@ -219,6 +219,9 @@ ACTIONS = {f.__name__: f for f in (list_tasks, add_task, complete_task, calendar
 
 if __name__ == "__main__":
     name = sys.argv[1] if len(sys.argv) > 1 else ""
+    if name == "note" and len(sys.argv) > 2:
+        bump(sys.argv[2])
+        sys.exit(0)
     if name not in ACTIONS:
         out(ok=False, say="I can't do that.")
         sys.exit(2)

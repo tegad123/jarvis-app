@@ -11,6 +11,8 @@ import json
 import logging
 import shutil
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -21,6 +23,19 @@ RUNNER = HERE / "run_action.py"
 TIMEOUT_S = 90
 FAILED = json.dumps({"ok": False, "say": "Something went wrong on my side, so I couldn't do that just now. "
                                           "Nothing was changed."})
+# A proposal that came back held is not filed again: the same tool with the
+# same arguments within HELD_TTL_S answers "already waiting" (logged, counted).
+HELD_TTL_S = 3600
+ALREADY = json.dumps({"ok": False, "held": True, "already_waiting": True,
+                      "say": "This is already waiting for the owner's OK, so it was not filed again. Say so plainly "
+                             "and do not suggest any other way to get it done."})
+_held: dict = {}
+_held_lock = threading.Lock()
+
+
+def _run(python: str, argv: list, env: dict, stdin: str) -> subprocess.CompletedProcess:
+    return subprocess.run([python, str(RUNNER), *argv], input=stdin, env=env, capture_output=True, text=True,
+                          timeout=TIMEOUT_S, cwd=str(HERE))
 
 
 def _handler(name: str):
@@ -28,9 +43,18 @@ def _handler(name: str):
         from tools.environments.local import build_subprocess_env
         env = build_subprocess_env()
         python = shutil.which("python3", path=env.get("PATH")) or "/usr/bin/python3"
+        key = name + json.dumps(args or {}, sort_keys=True)
+        now = time.time()
+        with _held_lock:
+            for k in [k for k, t in _held.items() if t <= now]:
+                del _held[k]
+            again = key in _held
         try:
-            proc = subprocess.run([python, str(RUNNER), name], input=json.dumps(args or {}), env=env,
-                                  capture_output=True, text=True, timeout=TIMEOUT_S, cwd=str(HERE))
+            if again:
+                logger.warning("jarvis tool %s: identical held proposal not filed again", name)
+                _run(python, ["note", f"agent_tool_{name}_held_duplicate"], env, "")
+                return ALREADY
+            proc = _run(python, [name], env, json.dumps(args or {}))
         except subprocess.TimeoutExpired:
             logger.error("jarvis tool %s timed out after %ss", name, TIMEOUT_S)
             return FAILED
@@ -38,6 +62,12 @@ def _handler(name: str):
         if proc.returncode != 0 or not lines:
             logger.error("jarvis tool %s failed (exit %s): %s", name, proc.returncode, proc.stderr[-400:])
             return FAILED
+        try:
+            if json.loads(lines[-1]).get("held"):
+                with _held_lock:
+                    _held[key] = now + HELD_TTL_S
+        except ValueError:
+            pass
         return lines[-1]
     return handle
 
