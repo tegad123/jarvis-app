@@ -174,7 +174,9 @@ def live(a) -> int:
     pin = pin_from(Path(a.pin_file))
     headers = {}
     if a.access_token_file:
-        cid, secret = Path(a.access_token_file).read_text().split()[:2]
+        # two lines, bare values or CF_ACCESS_CLIENT_ID=... / CF_ACCESS_CLIENT_SECRET=...
+        cid, secret = [ln.split("=", 1)[-1].strip().strip('"') for ln in
+                       Path(a.access_token_file).read_text().splitlines() if ln.strip()][:2]
         headers = {"CF-Access-Client-Id": cid, "CF-Access-Client-Secret": secret}
     c = httpx.Client(base_url=a.url.rstrip("/"), headers=headers, timeout=30, follow_redirects=False)
     since = time.strftime("%Y-%m-%d %H:%M:%S")

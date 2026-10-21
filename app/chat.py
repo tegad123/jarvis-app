@@ -54,7 +54,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 import httpx
 
-from . import attachments, config, threads
+from . import actor_refs, attachments, config, threads, whoami
 
 log = logging.getLogger("jarvis.chat")
 
@@ -464,6 +464,23 @@ async def stream_chat(
         "User-Agent": "jarvis-app/1.0",
         # Deliberately NO X-Hermes-Session-Id — see the module docstring.
     }
+    # Who is asking comes from the session, never from the model: the gateway
+    # binds this reference into the turn's tool environment (JARVIS_ACTOR_MSG)
+    # and authz resolves it through POST /api/broker/actor.
+    actor_ref = ""
+    if person_key:
+        actor_ref = actor_refs.mint(person_key, thread_id)
+        headers["X-Jarvis-Actor-Ref"] = actor_ref
+        name = whoami.display_name_for(person_key) or person_key
+        payload["messages"].insert(0, {"role": "system", "content": (
+            f"This chat is with {name} (person key '{person_key}'), signed in to the app. "
+            "The app verifies who is signed in and attaches it to every tool call in this turn "
+            "(JARVIS_ACTOR_MSG), so permission-checked scripts such as add_task.py identify them "
+            "on their own: do not pass --actor or --actor-msg, and do not ask who is speaking.")})
+        _bump("chat_turn_actor_ref")
+    else:
+        _bump("chat_turn_without_actor")
+        log.warning("chat turn without a signed-in person: tools get no verified actor")
 
     assistant_text: List[str] = []
     finished_cleanly = False
@@ -501,6 +518,8 @@ async def stream_chat(
                 {"role": "assistant", "content": text, "ts": _now()},
             )
             _bump("meeting_ask_turns")
+            if actor_ref:
+                actor_refs.end(actor_ref)
             return
 
     try:
@@ -589,6 +608,9 @@ async def stream_chat(
         # our connection drops, which is what we want — an abandoned question
         # should stop the work rather than keep billing.
         raise
+    finally:
+        if actor_ref:
+            actor_refs.end(actor_ref)
 
     # Persist the turn only if something was actually said. A failed turn with
     # partial text is still worth keeping so the next question has context.

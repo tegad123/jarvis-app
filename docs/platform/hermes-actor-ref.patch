@@ -1,0 +1,156 @@
+Only in b/gateway: __pycache__
+Only in b/gateway/platforms: __pycache__
+diff -ru a/gateway/platforms/api_server.py b/gateway/platforms/api_server.py
+--- a/gateway/platforms/api_server.py	2026-10-21 14:16:30.133517230 +0000
++++ b/gateway/platforms/api_server.py	2026-10-21 14:16:30.196517955 +0000
+@@ -70,6 +70,13 @@
+     "api_server_request_profile", default=None
+ )
+ 
++# local (jarvis): actor reference from X-Jarvis-Actor-Ref for the current
++# request. Bound only for loopback callers holding API_SERVER_KEY (the app);
++# anything else is ignored and logged. Opaque here: the app that minted it is
++# the only resolver.
++_ACTOR_REF_RE = re.compile(r"^app:[A-Za-z0-9_-]{16,64}$")
++_api_request_actor_ref: ContextVar[str] = ContextVar("api_server_actor_ref", default="")
++
+ def _approval_event_choices(*, smart_denied: bool, allow_permanent: bool) -> list[str]:
+     if smart_denied:
+         return ["once", "deny"]
+@@ -1957,6 +1964,23 @@
+ 
+         return _profile_runtime_scope(get_profile_dir(profile))
+ 
++    def _request_actor_ref(self, request: "web.Request") -> str:
++        """local (jarvis): the X-Jarvis-Actor-Ref to bind for this request, or ""."""
++        raw = request.headers.get("X-Jarvis-Actor-Ref", "").strip()
++        if not raw:
++            return ""
++        why = ""
++        if not _ACTOR_REF_RE.match(raw):
++            why = "not an app actor reference"
++        elif request.remote not in ("127.0.0.1", "::1"):
++            why = "not a loopback caller"
++        elif not self._expected_api_key() or self._check_auth(request) is not None:
++            why = "request not authenticated with API_SERVER_KEY"
++        if why:
++            logger.warning("X-Jarvis-Actor-Ref ignored: %s", why)
++            return ""
++        return raw
++
+     def _make_profile_prefix_middleware(self):
+         """Reject unknown /p/<profile>/ prefixes and scope the request home."""
+ 
+@@ -1969,10 +1993,12 @@
+                     status=404,
+                 )
+             token = _api_request_profile.set(profile)
++            ref_token = _api_request_actor_ref.set(self._request_actor_ref(request))
+             try:
+                 with self._profile_scope(profile):
+                     return await handler(request)
+             finally:
++                _api_request_actor_ref.reset(ref_token)
+                 _api_request_profile.reset(token)
+ 
+         return profile_prefix_middleware
+@@ -5927,6 +5953,7 @@
+         chat_id: str = "",
+         session_key: str = "",
+         session_id: str = "",
++        actor_ref: str = "",
+     ) -> list:
+         """Bind session contextvars for an API-server agent run.
+ 
+@@ -5952,6 +5979,7 @@
+             session_id=session_id,
+             async_delivery=False,
+             cron_session="",
++            actor_ref=actor_ref,
+         )
+ 
+     async def _run_agent(
+@@ -6005,6 +6033,7 @@
+         # run_in_executor threads, so the profile scope must be re-entered
+         # inside _run() from this explicit value.
+         request_profile = _api_request_profile.get()
++        request_actor_ref = _api_request_actor_ref.get()
+ 
+         def _run():
+             from gateway.session_context import clear_session_vars
+@@ -6014,6 +6043,7 @@
+                     chat_id=session_id or "",
+                     session_key=gateway_session_key or session_id or "",
+                     session_id=session_id or "",
++                    actor_ref=request_actor_ref,
+                 )
+                 agent = None
+                 try:
+diff -ru a/gateway/session_context.py b/gateway/session_context.py
+--- a/gateway/session_context.py	2026-10-21 14:16:30.118517057 +0000
++++ b/gateway/session_context.py	2026-10-21 14:16:30.189517874 +0000
+@@ -101,6 +101,13 @@
+ # masks any leaked process env value.
+ _CRON_SESSION: ContextVar = ContextVar("HERMES_CRON_SESSION", default=_UNSET)
+ 
++# local (jarvis): the signed-in person's actor reference for an API-server turn,
++# minted by the calling app (X-Jarvis-Actor-Ref) and resolved only by it. Kept
++# OUT of _VAR_MAP on purpose: a turn without a reference must leave the tool
++# environment exactly as it was. tools/environments/local.py adds
++# JARVIS_ACTOR_MSG only when this holds a non-empty reference.
++_SESSION_ACTOR_REF: ContextVar = ContextVar("JARVIS_ACTOR_MSG", default=_UNSET)
++
+ # Whether the current session's delivery channel can route an ASYNC completion
+ # back to the agent AFTER the current turn ends (i.e. wake a fresh turn).
+ #
+@@ -220,6 +227,7 @@
+     async_delivery: bool = True,
+     ui_session_id: str = "",
+     cron_session: Any = _UNSET,
++    actor_ref: str = "",
+ ) -> list:
+     """Set all session context variables and return reset tokens.
+ 
+@@ -260,6 +268,7 @@
+         _SESSION_MESSAGE_ID.set(message_id),
+         _SESSION_PROFILE.set(profile),
+         _CRON_SESSION.set(cron_session),
++        _SESSION_ACTOR_REF.set(actor_ref),
+         _SESSION_ASYNC_DELIVERY.set(bool(async_delivery)),
+     ]
+     try:
+@@ -297,6 +306,7 @@
+         _SESSION_MESSAGE_ID,
+         _SESSION_PROFILE,
+         _CRON_SESSION,
++        _SESSION_ACTOR_REF,
+     ):
+         var.set("")
+     # Reset async-delivery capability to the "never set" sentinel rather than a
+@@ -348,6 +358,7 @@
+     """
+     for var in _VAR_MAP.values():
+         var.set(_UNSET)
++    _SESSION_ACTOR_REF.set(_UNSET)
+     # Reset the async-delivery capability to "never bound here" (_UNSET) for the
+     # same inheritance-leak reason as the mapped vars above — see clear_session_vars,
+     # which resets this var on the handler-exit path for the symmetric concern.
+Only in b/tools/environments: __pycache__
+diff -ru a/tools/environments/local.py b/tools/environments/local.py
+--- a/tools/environments/local.py	2026-10-21 14:16:30.148517402 +0000
++++ b/tools/environments/local.py	2026-10-21 14:16:30.190517886 +0000
+@@ -451,6 +451,14 @@
+             # Unset for THIS task while a concurrent host is engaged: drop any
+             # inherited global so a sibling session's value can't leak in.
+             env.pop(var_name, None)
++    # local (jarvis): the app's per-turn actor reference, only when one is bound.
++    try:
++        from gateway.session_context import _SESSION_ACTOR_REF
++        actor_ref = _SESSION_ACTOR_REF.get()
++    except Exception:
++        actor_ref = ""
++    if isinstance(actor_ref, str) and actor_ref:
++        env["JARVIS_ACTOR_MSG"] = actor_ref
+ 
+ 
+ def _sanitize_subprocess_env(base_env: dict | None, extra_env: dict | None = None) -> dict:

@@ -1321,8 +1321,8 @@ def rewrite_keeping_owner(path: Path, text: str) -> bool:
 
 
 def reconfigure(manifest_path: Path, restart_approved: bool) -> None:
-    """Display names, timezone, models and switches from the manifest onto an
-    existing two-user tenant, then restart its app and gateway. No re-clone,
+    """Display names, timezone, models, switches and public_origin from the
+    manifest onto an existing two-user tenant, then restart its app and gateway. No re-clone,
     no new secrets, no data touched. Ports, posture and isolation are not
     reconfigurable; those re-provision."""
     manifest = load_yaml(manifest_path)
@@ -1378,7 +1378,9 @@ def reconfigure(manifest_path: Path, restart_approved: bool) -> None:
         role = dropin.parent.name[len(slug) + 1:-len(".service.d")]
         tmpl = ISOLATION_TEMPLATE.get(role, "job.isolation.conf")
         changed += [dropin] if rewrite_keeping_owner(dropin, fill(read_template(tmpl), mapping)) else []
-    log(f"reconfigure {slug}: {len(changed)} file(s) changed")
+    oauth = UNIT_DIR / f"{slug}-app.service.d" / "oauth.conf"
+    changed += [oauth] if rewrite_keeping_owner(oauth, fill(read_template("oauth.isolated.conf"), mapping)) else []
+    log(f"reconfigure {slug}: {len(changed)} file(s) changed: {[str(p) for p in changed]}")
 
     run(["systemctl", "daemon-reload"])
     units = [f"{slug}-app.service", f"{slug}-gateway.service"]

@@ -45,6 +45,7 @@ from typing import Any, Dict, Optional, Tuple
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from . import actor_refs
 from . import config
 from . import platform_db
 from . import platform_store as store
@@ -610,6 +611,33 @@ async def post_counters(request: Request):
         metrics.record(name, value, ref)
         return {"ok": True}
     raise HTTPException(status_code=400, detail="op must be bump or record.")
+
+
+@router.get("/actor/active")
+async def get_actor_active(request: Request):
+    _authorize(request)
+    return {"active": actor_refs.active_count()}
+
+
+@router.post("/actor")
+async def post_actor(request: Request):
+    """Who sent the chat turn a tool is running in: the agent passes the
+    reference the gateway put in its environment, the app answers from the
+    session it minted it for."""
+    _authorize(request)
+    body = await request.json()
+    ref = body.get("ref") if isinstance(body, dict) else None
+    if not isinstance(ref, str) or not ref.startswith(actor_refs.PREFIX) or len(ref) > 100:
+        _bump("broker_actor_refused")
+        raise HTTPException(status_code=400, detail="ref must be an app: actor reference.")
+    entry, why = actor_refs.resolve(ref)
+    if entry is None:
+        _bump(f"broker_actor_{why}")
+        log.warning("broker: actor reference refused (%s)", why)
+        raise HTTPException(status_code=404, detail=f"actor reference {why}")
+    _bump("broker_actor_resolved")
+    return {"person_key": entry["person_key"], "thread_id": entry["thread_id"],
+            "age_s": entry["age_s"], "turn_ended": entry["ended"] is not None}
 
 
 @router.post("/channels")
