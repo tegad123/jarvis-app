@@ -61,7 +61,7 @@ emails and texts to real clients. Act accordingly.
   Part A: tega.yamin.io (docs/platform/ingress/PART-A.md, "Tega"), public
   since 2026-10-21 (public_origin in the manifest; Access app "tega", service
   token in /root/onboarding/cf-access-verify-token.txt, KEY=value lines).
-- Tenant agent behaviour (tega on app 338bd38; eddie/blake/martin not yet):
+- Tenant agent behaviour (tega, eddie, blake, martin on app bfe2793):
   the agent's only tools are the eight in
   scripts/hermes_plugin/jarvis/tools.json (Hermes plugin "jarvis", copied
   root-owned 0640 into HERMES_HOME/plugins; platform_toolsets.api_server:
@@ -69,7 +69,7 @@ emails and texts to real clients. Act accordingly.
   turn opens with the app's STATUS FROM THE APP block (app/agent_status.py),
   and the model proxy trims the system prompt to persona + status + date.
   Buttons in chat come only from the app (`action` event), never from model
-  text. Proofs: docs/model/verify_agent_behaviour.py,
+  text; they are saved in messages.actions and re-checked on every history read. Proofs: docs/model/verify_agent_behaviour.py,
   docs/model/verify_agent_tools.py --slug, docs/frontend/verify_chat_links.mjs.
 - App chat identity (two-user tenants on app 08be2f4+): each chat turn the app
   mints an opaque `app:<random>` reference, sends it as `X-Jarvis-Actor-Ref`,
