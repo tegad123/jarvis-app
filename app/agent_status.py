@@ -12,6 +12,7 @@ from it.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Dict, List
@@ -19,6 +20,7 @@ from typing import Dict, List
 from . import broker, config, google_connection
 
 SPEC_PATH = Path(__file__).resolve().parents[1] / "scripts" / "hermes_plugin" / "jarvis" / "tools.json"
+SOUL_PATH = Path(__file__).resolve().parents[1] / "scripts" / "templates" / "SOUL.md"
 SPEC = json.loads(SPEC_PATH.read_text())
 TOOLS: Dict[str, dict] = {t["name"]: t for t in SPEC["tools"]}
 ALLOWED = frozenset(TOOLS)
@@ -107,6 +109,46 @@ def render(st: dict, name: str) -> str:
     lines.append("When they ask what you can do, or whether you have access to something, answer from this status "
                  "only, in a sentence or two.")
     return "\n".join(lines)
+
+
+def _first_line_patterns() -> List["re.Pattern"]:
+    pats = []
+    for para in SOUL_PATH.read_text().strip().split("\n\n"):
+        first = para.strip().splitlines()[0]
+        pats.append(re.compile("^" + ".+?".join(re.escape(x) for x in re.split(r"\{\{[A-Z_]+\}\}", first)) + "$"))
+    return pats
+
+
+PERSONA = _first_line_patterns()
+OWN_PREFIXES = ("STATUS FROM THE APP",)
+DATE_PREFIX = "Conversation started:"
+
+
+def is_agent_prompt(text: str) -> bool:
+    return any(PERSONA[0].match(p.strip().split("\n", 1)[0]) for p in text.split("\n\n") if p.strip())
+
+
+def shape_prompt(text: str) -> tuple:
+    """(text, kept, dropped) for the chat agent's system prompt.
+
+    Only the persona (paragraphs whose first line matches the SOUL template),
+    the app's status block and the date line reach the model; every other
+    paragraph the agent framework adds is dropped, including ones it adds in
+    a future version. kept/dropped are the paragraphs' first lines, cut short."""
+    out, kept, dropped = [], [], []
+    for para in text.split("\n\n"):
+        if not para.strip():
+            continue
+        first = para.strip().split("\n", 1)[0]
+        if first.startswith(DATE_PREFIX):
+            out.append(first)
+            kept.append(first[:60])
+        elif first.startswith(OWN_PREFIXES) or any(p.match(first) for p in PERSONA):
+            out.append(para)
+            kept.append(first[:60])
+        else:
+            dropped.append(first[:60])
+    return "\n\n".join(out), kept, dropped
 
 
 def strip_disallowed(tools: List[dict]) -> tuple:

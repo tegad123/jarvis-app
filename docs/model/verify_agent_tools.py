@@ -36,6 +36,9 @@ DEV = ("terminal", "process", "read_file", "write_file", "patch", "search_files"
        "delegate_task", "web_search", "web_extract", "skill_view", "skills_list", "skill_manage",
        "browser_navigate", "memory", "session_search", "image_generate", "vision_analyze")
 
+# "skill" and "token" stay legitimately: the persona lists them as words never to use.
+PROMPT_BANNED = ("hermes", "terminal", "shell", "python", "script", "gateway", "sub-agent", "subagent", "api", "config")
+
 PROBE = r'''
 import json
 from hermes_cli.plugins import discover_plugins
@@ -104,6 +107,16 @@ def main() -> int:
         check("the model was offered only Jarvis tools", set(seen["offered"]) <= set(ALLOWED) and bool(seen["offered"]))
         check("   nothing had to be stripped (Hermes offers nothing else)", not seen["stripped"])
         check("   no developer tool reached the model", not set(seen["sent"]) & set(DEV))
+        before, after = seen.get("system_word_counts_before", {}), seen["system_word_counts"]
+        print(f"  prompt before trimming {seen.get('system_chars_before')} chars, words {before}"
+              f"\n  kept {seen.get('prompt_kept')}\n  dropped {seen.get('prompt_dropped')}")
+        check("presence twin: the framework's prompt talked about itself before trimming "
+              f"(hermes {before.get('hermes', 0)})", before.get("hermes", 0) > 0)
+        check(f"the prompt the model saw names none of {PROMPT_BANNED} ({ {w: after[w] for w in after if w in PROMPT_BANNED} })",
+              not set(after) & set(PROMPT_BANNED))
+        kept = seen.get("prompt_kept") or []
+        check("   and still carries the persona and the app's status block",
+              any(k.startswith("How you talk") for k in kept) and any(k.startswith("STATUS FROM THE APP") for k in kept))
     print(f"\n{sum(results)}/{len(results)} passed")
     return 0 if results and all(results) else 1
 

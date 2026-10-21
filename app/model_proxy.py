@@ -17,6 +17,9 @@ No key configured is a loud 503, never a silent fallback to another model.
 Only the Jarvis tools (app/agent_status.ALLOWED) reach the model: any other
 tool in a request is stripped, counted and logged, and the names offered on the
 latest request are kept in agent_tools_seen.json beside the threads database.
+The chat agent's system prompt is cut to the persona, the app's status block
+and the date (agent_status.shape_prompt); the framework's own guidance about
+itself, the host and its files never reaches the model.
 JARVIS_MODEL_UPSTREAM is honoured in mock mode only (verify sandboxes).
 """
 import hmac
@@ -81,13 +84,43 @@ def _system_text(req: dict) -> str:
     return str(sysp or "")
 
 
+def _shape_system(req: dict) -> tuple:
+    """Trim the chat agent's system prompt to what agent_status.shape_prompt keeps; (kept, dropped)."""
+    sysp = req.get("system")
+    if not agent_status.is_agent_prompt(_system_text(req)):
+        return [], []
+    kept, dropped = [], []
+    if isinstance(sysp, list):
+        blocks = []
+        for b in sysp:
+            if not isinstance(b, dict) or not isinstance(b.get("text"), str):
+                blocks.append(b)
+                continue
+            text, k, d = agent_status.shape_prompt(b["text"])
+            kept += k
+            dropped += d
+            if text:
+                blocks.append({**b, "text": text})
+        req["system"] = blocks
+    else:
+        req["system"], kept, dropped = agent_status.shape_prompt(str(sysp or ""))
+    return kept, dropped
+
+
 def _allowlist_tools(body: bytes) -> bytes:
     try:
         req = json.loads(body)
     except ValueError:
         return body
-    if not isinstance(req, dict) or not isinstance(req.get("tools"), list):
+    if not isinstance(req, dict):
         return body
+    before = _system_text(req).lower()
+    kept_paras, dropped_paras = _shape_system(req)
+    if dropped_paras:
+        _bump("model_proxy_prompt_trimmed")
+        log.info("model proxy: trimmed %d framework paragraph(s) from the agent prompt", len(dropped_paras))
+    if not isinstance(req.get("tools"), list):
+        return json.dumps(req).encode() if dropped_paras else body
     offered = [str(t.get("name")) for t in req["tools"] if isinstance(t, dict)]
     kept, stripped = agent_status.strip_disallowed(req["tools"])
     if stripped:
@@ -107,7 +140,10 @@ def _allowlist_tools(body: bytes) -> bytes:
         seen = {"at": datetime.now(timezone.utc).isoformat(), "offered": sorted(offered),
                 "sent": sorted(t["name"] for t in kept), "stripped": sorted(stripped),
                 "system_chars": len(system),
-                "system_word_counts": {w: system.count(w) for w in TECH_WORDS if w in system}}
+                "system_word_counts": {w: system.count(w) for w in TECH_WORDS if w in system},
+                "system_chars_before": len(before),
+                "system_word_counts_before": {w: before.count(w) for w in TECH_WORDS if w in before},
+                "prompt_kept": kept_paras, "prompt_dropped": dropped_paras}
         out = threads_mod.DB_PATH.parent / "agent_tools_seen.json"
         tmp = out.with_suffix(".tmp")
         tmp.write_text(json.dumps(seen, indent=1) + "\n")
@@ -115,7 +151,7 @@ def _allowlist_tools(body: bytes) -> bytes:
     except Exception as exc:
         _bump("model_proxy_tools_seen_failed")
         log.error("model proxy: could not record the tools seen (%s)", type(exc).__name__)
-    return json.dumps(req).encode() if stripped else body
+    return json.dumps(req).encode() if stripped or dropped_paras else body
 
 
 def _upstream() -> str:
