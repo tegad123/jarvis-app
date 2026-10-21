@@ -30,4 +30,6 @@ ingress:
     service: http://127.0.0.1:8760        # blake app
   - hostname: martin.yamin.io
     service: http://127.0.0.1:8770        # martin app
+  - hostname: tega.yamin.io
+    service: http://127.0.0.1:8780        # tega app
   - service: http_status:404

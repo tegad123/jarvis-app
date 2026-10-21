@@ -24,6 +24,11 @@ never printed.
     python3 docs/model/verify_tenant_chat.py --slug isocheck \
         --pin-file /root/onboarding/isocheck-owner-pin.txt [--tasks-db PATH] [--pg-db NAME]
 
+--url sends the chat through a public address (e.g. https://tega.yamin.io)
+instead of the loopback port; --access-token-file holds a Cloudflare Access
+service token as two lines (client id, secret), sent as headers, never printed.
+The ledger checks still read the tenant's own stores on this host.
+
 --tasks-db and --pg-db exist for canaries: pointing either at another tenant
 must turn the matching checks red. --price-scale 1000 is the cost canary.
 
@@ -113,6 +118,8 @@ def main() -> int:
     ap.add_argument("--keep-task", action="store_true", help="canary: leave the proof's task behind")
     ap.add_argument("--pg-db", default=None)
     ap.add_argument("--timeout", type=int, default=300)
+    ap.add_argument("--url", default=None, help="public address of the tenant app; default its loopback port")
+    ap.add_argument("--access-token-file", type=Path, default=None)
     ap.add_argument("--price-scale", type=float, default=1.0,
                     help="canary: 1000 reads the table as per-thousand; both cost checks must fail")
     a = ap.parse_args()
@@ -132,7 +139,15 @@ def main() -> int:
     model = (rt.get("models") or {}).get("agent") or ""
     tasks_db = a.tasks_db or Path(rt["paths"]["tasks_db"])
     dbname = a.pg_db or f"jarvis_{slug}"
-    print(f"tenant {slug}: app :{port}, agent model {model}, tasks {tasks_db}, ledger {dbname}")
+    base = (a.url or f"http://127.0.0.1:{port}").rstrip("/")
+    if re.search(r":(8700|8710)\b", base):
+        print("REFUSING: live or testco port")
+        return 2
+    headers = {}
+    if a.access_token_file:
+        cid, secret = a.access_token_file.read_text().split()[:2]
+        headers = {"CF-Access-Client-Id": cid, "CF-Access-Client-Secret": secret}
+    print(f"tenant {slug}: app {base}, agent model {model}, tasks {tasks_db}, ledger {dbname}")
 
     street = f"{random.randint(1000, 9999)} {random.choice(('Meridian St', 'Harborline Ave', 'Copperleaf Dr'))}"
     phrase = f"Track this: {random.choice(('order the survey for', 'schedule the inspection for'))} {street}"
@@ -141,7 +156,13 @@ def main() -> int:
                   .execute("SELECT task_id FROM tasks")}
     u0, x0 = usage(dbname, model), executed(dbname)
 
-    c = httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=a.timeout)
+    c = httpx.Client(base_url=base, headers=headers, timeout=a.timeout, follow_redirects=False)
+    if a.url:
+        r = c.get("/api/ping")
+        is_app = r.status_code == 200 and r.headers.get("content-type", "").startswith("application/json") \
+            and r.json().get("service") == "jarvis-app"
+        check(f"the public address reaches the tenant app's API, not an Access login or the web page "
+              f"(HTTP {r.status_code}, {r.headers.get('content-type', '')})", is_app)
     r = c.post("/api/login", json={"person_key": a.person, "pin": pin_from(a.pin_file)})
     check(f"owner signs in to the tenant app (HTTP {r.status_code})", r.status_code == 200)
     c.headers["cookie"] = "; ".join(f"{k}={v}" for k, v in r.cookies.items())

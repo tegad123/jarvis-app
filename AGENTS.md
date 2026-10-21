@@ -50,6 +50,15 @@ emails and texts to real clients. Act accordingly.
   deletes the task it creates and checks the list ends as it began. Their
   task lists hold real tasks only (proof tasks cleared 2026-10-16). Don't
   file test tasks on them by hand; use isocheck.
+- TEGA: app 8780, gateway 8782, hooks 18798, /opt/tega, manifest
+  docs/tenants/tega.yaml. Same layout and rules as EDDIE/BLAKE/MARTIN
+  (practice mode, owner + internal, owner PIN in
+  /root/onboarding/tega-owner-pin.txt). App 81fde8f, provisioned 2026-10-21.
+  The owner email is real (tegad8@gmail.com: identity only, outside
+  boundary_domains, never a recipient). `identity.py has-role internal` is
+  true for it, `is-internal` (domain) false. A `@34dev.com` address can't be
+  used: the preflight refuses any `34dev` term in a tenant's config.
+  Part A: tega.yamin.io (docs/platform/ingress/PART-A.md, "Tega").
 - Two-user tenants run the agent in broker mode: Google calls, counters and
   channel creation go through the app's loopback /api/broker; the threads and
   accounts databases are in app-private and the agent cannot open them.
@@ -146,6 +155,9 @@ emails and texts to real clients. Act accordingly.
    (starts with the window, no setting). Check with
    `pgrep -fa 'cursor-agent.*worker start'` (the command line carries a key:
    never paste it), and stop it with `kill -TERM <pid>`.
+   It came back on 2026-10-21 (started with the window at 02:37, re-ran
+   the lead's chat proof at 02:49) and was stopped again: check for it at
+   the start of every session, not only after an incident.
 
 ## Engineering principles (these are law, learned from real failures here)
 - A fallback that does not announce itself is a false green. Every fallback

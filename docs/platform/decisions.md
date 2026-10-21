@@ -519,6 +519,20 @@ Human decisions: Part A approved with `<slug>.yamin.io`. The human runs the Clou
   - The second runner had tried the same live probe at 02:48. It failed at its first step (the onboarding file is accounts_cli output, not a bare PIN), so it sent no wrong PINs.
   - The probe now extracts the PIN the way `verify_tenant_chat` does and never prints a response body, because a 422 echoes the input. Its logs and the second runner's /tmp files held no PIN pattern and were shredded.
 
+## Decided 2026-10-21: a fourth tenant, tega; the worker came back
+
+- **Tega provisioned (human request).** Slug `tega`, owner Tega Umukoro (`owner`, `internal`), "Tega's Assistant", America/Chicago, shadow, writes blocked, `claude-sonnet-5-5`, mailbox `tega-assistant@assistant.invalid`. Ports app 8780, gateway 8782, hooks 18798 (collision check clean). App 81fde8f, skills 74c0fb1.
+- **Owner email.** The request carried the placeholder `<your email>`; the human chose `tega@34dev.com`. The prior-tenant preflight guard (`34dev|cqhouston|spencerhuck`) refused both units on `identity.json`, as the 2026-10-14 entry predicted. The units were left in a 5-second restart loop and were stopped under the lock. The human chose `tegad8@gmail.com` and said yes to tearing down the never-started build. Teardown archived the empty `jarvis_tega` database (restore proven) before dropping it; re-provision passed. The guard is unchanged.
+  - The provisioner prints the owner passphrase once; its two logs were shredded. The passphrase is also in `/etc/jarvis/tega-app.env` (root 600).
+- **Proofs on loopback.** `prove_isolation` 123/123. `verify_tenant_outbound` 5/5: one shadowed `external_send`, executed rows 0 -> 0. `verify_tenant_chat` 15/15: +$0.090744, task list 0 -> 0.
+  - The first chat run crashed: it started before the tenant's first boot had created the tasks table. Re-run green. The crash is kept, since treating a missing table as empty would hide a wrong path.
+- **`verify_tenant_chat.py --url URL [--access-token-file F]`** for the public-address proof. With `--url`, it first checks that `/api/ping` answers with the app's JSON. The app serves its web page with 200 for unknown paths, so a status check alone passed the canary `--url http://127.0.0.1:8780/not-the-app`. It now fails at that check. Loopback through `--url`: 16/16.
+- **Chat task filing depends on the model.** The PWA chat does not tell the gateway who is signed in. The model passes the owner's address itself (`provenance=asserted` in `authz.log`). One `--url` run of the four on tega got 12/15: the model declined to guess who was asking, filed nothing, and the reply was still clean. Not fixed here: passing a verified identity from app to gateway is an app change and needs a decision.
+- **The Cursor agent worker came back.** `cursor-agent ... worker start` pid 4099559 started at 02:37:25, 30 s after this session's host and as its child, workspace `/root/jarvis-app`. At 02:49:06, after the lead's 12/15 run had returned, it re-ran the lead's exact `--url` command into the same log file (16/16, its task cleaned up). At 02:49:35 it wrote an unverified TEGA entry into `AGENTS.md` in the platform worktree.
+  - It made no commits, took no lock (the `jarvis-agent-lock` journal holds only the lead's operations), and changed nothing else after 02:43 in the repos, `/opt/tega`, `/etc/jarvis`, `/etc/cloudflared`, `/root/onboarding` or live.
+  - Stopped with SIGTERM; no respawn within 20 s. Its `AGENTS.md` edit was reverted. The lead checked its one claim (`is-internal` false, `has-role internal` true for the owner) and wrote its own entry.
+- **Part A for tega only.** `docs/platform/ingress/yamin-config-tega.yml` is the installed `/etc/cloudflared/config.yml` plus one rule (`tega.yamin.io` -> 8780). Eddie, Blake and Martin are not in it, because their Access steps aren't done. `yamin-config.yml` (the full draft) gains the same rule. Both pass `ingress validate`. In the tega file, tega maps to 8780, rehearsal to 8730, and eddie and unknown hosts to 404.
+
 ## Decided (from the spec, recorded 2026-10-10)
 
 - Customer #1: 34 Dev team.

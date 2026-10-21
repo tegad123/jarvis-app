@@ -145,3 +145,56 @@ Send each person their hostname and, separately, their PIN (from
 `/root/onboarding/<slug>-owner-pin.txt`). They sign in with the one-time code
 sent to their email, then pick their own name and enter the PIN. On a phone: Share →
 Add to Home Screen.
+
+## Tega (tega.yamin.io), on its own
+
+Human request 2026-10-21: tega only; eddie, blake and martin follow later.
+The Access app for `tega.yamin.io` exists (one-time PIN, the owner's email
+only). Two more Access pieces are needed before the public proofs:
+
+- **Install files bypass**: a self-hosted application "Jarvis – Tega (install
+  files)" with domains `tega.yamin.io/manifest.webmanifest` and
+  `tega.yamin.io/icons`, policy **Bypass**, Include → Everyone (section 1).
+- **Verifier**: on the Tega application, a second policy **Service Auth**,
+  Include → Service Token → `jarvis-verify`, and the token in
+  `/root/onboarding/cf-access-verify-token.txt` (section 1). Without it the
+  lead's proofs from this host get the Access login like anyone else.
+
+Tunnel and DNS, as root on this host. The config is the installed one plus
+the tega rule only (`yamin-config-tega.yml`):
+
+```bash
+cd /root/jarvis-platform
+STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+mkdir -p /root/archives
+cp -p /etc/cloudflared/config.yml /root/archives/cloudflared-config.yml.before-tega-$STAMP
+diff /etc/cloudflared/config.yml docs/platform/ingress/yamin-config-tega.yml   # expect only the 4 added lines
+install -m 644 -o root -g root docs/platform/ingress/yamin-config-tega.yml /etc/cloudflared/config.yml
+cloudflared tunnel --config /etc/cloudflared/config.yml ingress validate
+cloudflared tunnel --config /etc/cloudflared/config.yml ingress rule https://tega.yamin.io/    # expect 127.0.0.1:8780
+cloudflared tunnel route dns yamin tega.yamin.io
+systemctl restart cloudflared-yamin.service   # rehearsal blinks for a few seconds
+systemctl is-active cloudflared-yamin.service
+curl -s -o /dev/null -w '%{http_code} -> %{redirect_url}\n' https://tega.yamin.io/api/ping   # expect 302 -> *.cloudflareaccess.com
+```
+
+A 200 from the last line means Access is not in front: stop. Rollback:
+`install -m 644 /root/archives/cloudflared-config.yml.before-tega-$STAMP /etc/cloudflared/config.yml && systemctl restart cloudflared-yamin.service`,
+then delete the `tega` CNAME in the yamin.io DNS zone.
+
+Later, installing the full `yamin-config.yml` (eddie, blake, martin) keeps the
+tega rule: it is in both files.
+
+App side, after your go (lead agent):
+
+- `public_origin: https://tega.yamin.io` in `docs/tenants/tega.yaml`, then
+  `--manifest docs/tenants/tega.yaml --reconfigure` under the agent lock;
+  `prove_isolation --slug tega` 123/123.
+- `verify_pin_lockout.py --url https://tega.yamin.io --person-key owner
+  --pin-file /root/onboarding/tega-owner-pin.txt --unit tega-app
+  --access-token-file /root/onboarding/cf-access-verify-token.txt --wait-expiry`
+  (locks the owner for 15 minutes).
+- `verify_tenant_chat.py --slug tega --pin-file /root/onboarding/tega-owner-pin.txt
+  --url https://tega.yamin.io --access-token-file /root/onboarding/cf-access-verify-token.txt`.
+- From your phone: open https://tega.yamin.io, one-time code to your email,
+  pick your name, enter the PIN.
