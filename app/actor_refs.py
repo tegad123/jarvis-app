@@ -26,7 +26,7 @@ _lock = threading.Lock()
 _refs: Dict[str, dict] = {}
 
 
-def mint(person_key: str, thread_id: str) -> str:
+def mint(person_key: str, thread_id: str, role: str = "member") -> str:
     ref = PREFIX + secrets.token_urlsafe(24)
     now = time.time()
     with _lock:
@@ -34,7 +34,8 @@ def mint(person_key: str, thread_id: str) -> str:
             del _refs[k]
         if len(_refs) >= _MAX_LIVE:
             del _refs[min(_refs, key=lambda k: _refs[k]["created"])]
-        _refs[ref] = {"person_key": person_key, "thread_id": thread_id, "created": now, "ended": None}
+        _refs[ref] = {"person_key": person_key, "thread_id": thread_id, "role": role, "created": now,
+                      "ended": None, "actions": []}
     return ref
 
 
@@ -61,6 +62,24 @@ def resolve(ref: str) -> Tuple[Optional[dict], str]:
             del _refs[ref]
             return None, "expired"
         return dict(entry, age_s=int(now - entry["created"])), ""
+
+
+def request_action(ref: str, action: str) -> bool:
+    """A tool in a running turn asks the app to show one of its own controls.
+    Only while the turn runs: its reply is the only place it can appear."""
+    with _lock:
+        entry = _refs.get(ref)
+        if entry is None or entry["ended"] is not None or _expired(entry, time.time()):
+            return False
+        if action not in entry["actions"]:
+            entry["actions"].append(action)
+        return True
+
+
+def actions(ref: str) -> list:
+    with _lock:
+        entry = _refs.get(ref)
+        return list(entry["actions"]) if entry else []
 
 
 def active_count() -> int:

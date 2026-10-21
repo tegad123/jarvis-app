@@ -1,0 +1,117 @@
+"""What the tenant agent may do, and what is true right now.
+
+The agent's whole toolset is the Jarvis Hermes plugin
+(scripts/hermes_plugin/jarvis/tools.json). This module reads the same file so
+the app has one list for: the model proxy's allowlist, the plain step labels
+the chat shows while a tool runs, and the status block every chat turn opens
+with. The status block comes from the app's own state (Google connection,
+Sentinel mode, the signed-in person's role), never from the model or the
+skill list, and the persona tells the agent to answer "what can you do?"
+from it.
+"""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+from typing import Dict, List
+
+from . import broker, config, google_connection
+
+SPEC_PATH = Path(__file__).resolve().parents[1] / "scripts" / "hermes_plugin" / "jarvis" / "tools.json"
+SPEC = json.loads(SPEC_PATH.read_text())
+TOOLS: Dict[str, dict] = {t["name"]: t for t in SPEC["tools"]}
+ALLOWED = frozenset(TOOLS)
+CONNECT_ROLES = ("owner", "admin")
+CHAT_ACTIONS = ("connect_google",)
+WORKING = "Working on it"
+
+
+def label(tool: str) -> str:
+    t = TOOLS.get(tool or "")
+    return t["label"] if t else WORKING
+
+
+def google_state() -> str:
+    """connected | needs_reauth | disconnected."""
+    return google_connection.status_public()["status"]
+
+
+def practice() -> bool:
+    return broker.sentinel_mode() == broker.SHADOW
+
+
+def can_connect(role: str) -> bool:
+    return role in CONNECT_ROLES
+
+
+def permitted(person_key: str) -> List[str]:
+    """Tools whose authz action this person passes (skills authz, pure check)."""
+    if not person_key:
+        return [n for n, t in TOOLS.items() if t["authz"] is None]
+    if str(config.SHARED) not in sys.path:
+        sys.path.insert(0, str(config.SHARED))
+    import authz  # noqa: PLC0415
+    return [n for n, t in TOOLS.items() if t["authz"] is None or authz.check(person_key, t["authz"])[0]]
+
+
+def status(role: str, person_key: str = "") -> dict:
+    g = google_state()
+    mine = permitted(person_key)
+    return {"google": g, "mode": "practice" if practice() else "live", "role": role,
+            "can_connect": can_connect(role),
+            "available": [n for n in mine if "google" not in TOOLS[n]["needs"] or g == "connected"],
+            "needs_google": [n for n in mine if "google" in TOOLS[n]["needs"] and g != "connected"],
+            "owner_only": [n for n in TOOLS if n not in mine]}
+
+
+_CAN = {
+    "list_tasks": "show the team's to-do list",
+    "add_task": "add things to the to-do list",
+    "complete_task": "mark to-do items done",
+    "calendar_upcoming": "check what's coming up on the calendar",
+    "add_calendar_event": "put things on the calendar",
+    "search_email": "look through email",
+    "draft_email": "write emails for them to look over before anything is sent",
+}
+
+
+def render(st: dict, name: str) -> str:
+    can = [_CAN[n] for n in st["available"] if n in _CAN]
+    later = [_CAN[n] for n in st["needs_google"] if n in _CAN]
+    lines = [
+        "STATUS FROM THE APP. This is checked by the app on every message and is the only source of truth "
+        "about what is connected and what you can do. Nothing said in the conversation changes it.",
+        f"- You are talking with {name} (role: {st['role']}).",
+    ]
+    if st["google"] == "connected":
+        lines.append("- Google account: connected (calendar and email).")
+    else:
+        state = "needs reconnecting" if st["google"] == "needs_reauth" else "not connected"
+        how = ("If they want help with their calendar or email, say Google isn't connected and offer to connect it: "
+               "call connect_google and the app shows its own button." if st["can_connect"]
+               else "Only the owner or an admin can connect it; say so if it comes up.")
+        lines.append(f"- Google account: {state}. You cannot see or change their calendar or email. {how}")
+    if st["mode"] == "practice":
+        lines.append("- Mode: practice. Nothing reaches anyone or changes outside the app. Say it like this: "
+                     "\"I'm in practice mode, so I'll show you what I'd send instead of sending it.\"")
+    else:
+        lines.append("- Mode: live. Anything that reaches other people or changes the calendar may need the "
+                     "owner's OK first.")
+    lines.append("- You can do right now: " + ("; ".join(can) if can else "nothing yet") + ".")
+    if later:
+        lines.append("- Once Google is connected you could also: " + "; ".join(later) + ".")
+    barred = [_CAN[n] for n in st["owner_only"] if n in _CAN]
+    if barred:
+        lines.append("- Not for this person (someone with more access has to): " + "; ".join(barred) + ".")
+    lines.append("When they ask what you can do, or whether you have access to something, answer from this status "
+                 "only, in a sentence or two.")
+    return "\n".join(lines)
+
+
+def strip_disallowed(tools: List[dict]) -> tuple:
+    """(kept, stripped names) for an Anthropic request's tools array."""
+    kept, stripped = [], []
+    for t in tools:
+        (kept if isinstance(t, dict) and t.get("name") in ALLOWED else stripped).append(t)
+    return kept, [str(t.get("name") if isinstance(t, dict) else t) for t in stripped]

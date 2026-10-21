@@ -54,7 +54,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 import httpx
 
-from . import actor_refs, attachments, config, threads, whoami
+from . import actor_refs, agent_status, attachments, config, threads, whoami
 
 log = logging.getLogger("jarvis.chat")
 
@@ -414,7 +414,7 @@ def _ndjson(obj: Dict) -> bytes:
 
 async def stream_chat(
     thread_id: str, message: str, attachment_ids: Optional[List[str]] = None,
-    person_key: Optional[str] = None,
+    person_key: Optional[str] = None, role: str = "member",
 ) -> AsyncIterator[bytes]:
     """
     Proxy one turn. Yields NDJSON lines:
@@ -423,6 +423,7 @@ async def stream_chat(
         {"type":"tool","status":"running"|"completed","tool":..,"label":..,"toolCallId":..}
         {"type":"done","finish_reason":"stop","usage":{...}}
         {"type":"verified","ok":true|false,"message":"...","task_ids":[...]}
+        {"type":"action","action":"connect_google","label":"..."}
         {"type":"error","message":"..."}
 
     Always yields at least one line — an empty stream would render as a silent
@@ -449,8 +450,8 @@ async def stream_chat(
     # turn would multiply the bill and quickly exceed the 10 MB body cap; the
     # model has already described them into the transcript.
     payload = {
-        # No system prompt: Hermes owns the assistant's identity and prompt
-        # stack. "Jarvis" is a display name in the UI, not a persona we inject.
+        # The persona is the tenant's SOUL.md (provisioner template); the app
+        # adds only what it alone knows: who is signed in and the status block.
         "messages": [
             {"role": m["role"], "content": m["content"]} for m in history
         ]
@@ -468,19 +469,25 @@ async def stream_chat(
     # binds this reference into the turn's tool environment (JARVIS_ACTOR_MSG)
     # and authz resolves it through POST /api/broker/actor.
     actor_ref = ""
+    name = "someone who is not signed in"
     if person_key:
-        actor_ref = actor_refs.mint(person_key, thread_id)
+        actor_ref = actor_refs.mint(person_key, thread_id, role)
         headers["X-Jarvis-Actor-Ref"] = actor_ref
         name = whoami.display_name_for(person_key) or person_key
-        payload["messages"].insert(0, {"role": "system", "content": (
-            f"This chat is with {name} (person key '{person_key}'), signed in to the app. "
-            "The app verifies who is signed in and attaches it to every tool call in this turn "
-            "(JARVIS_ACTOR_MSG), so permission-checked scripts such as add_task.py identify them "
-            "on their own: do not pass --actor or --actor-msg, and do not ask who is speaking.")})
         _bump("chat_turn_actor_ref")
     else:
         _bump("chat_turn_without_actor")
         log.warning("chat turn without a signed-in person: tools get no verified actor")
+    try:
+        status_block = agent_status.render(agent_status.status(role, person_key or ""), name)
+        _bump("chat_turn_status_block")
+    except Exception as exc:
+        status_block = ("STATUS FROM THE APP: unavailable this turn. Do not say what is connected or what you can "
+                        "do; say you can't check right now.")
+        _bump("chat_turn_status_unavailable")
+        log.error("chat: status block unavailable (%s)", type(exc).__name__)
+    payload["messages"].insert(0, {"role": "system", "content": status_block + (
+        "\nThe app knows who is signed in and tells your tools itself; never ask who is speaking.")})
 
     assistant_text: List[str] = []
     finished_cleanly = False
@@ -550,17 +557,14 @@ async def stream_chat(
                         # is not a chat.completion.chunk — branch on the name,
                         # never on the shape.
                         if event == "hermes.tool.progress":
-                            out = {
-                                "type": "tool",
-                                "status": obj.get("status"),
-                                "tool": obj.get("tool"),
-                                "toolCallId": obj.get("toolCallId"),
-                            }
-                            # 'completed' payloads carry no label; the client
-                            # caches the one from 'running'.
-                            if obj.get("label"):
-                                out["label"] = obj["label"]
-                            yield _ndjson(out)
+                            # The person sees the app's plain step, never the
+                            # tool's name or arguments.
+                            tool = obj.get("tool") or ""
+                            if obj.get("status") == "running" and tool not in agent_status.ALLOWED:
+                                _bump("chat_tool_unlisted")
+                                log.error("chat: the agent ran a tool outside its allowlist (%s)", tool[:60])
+                            yield _ndjson({"type": "tool", "status": obj.get("status"), "tool": "jarvis",
+                                           "toolCallId": obj.get("toolCallId"), "label": agent_status.label(tool)})
                             continue
 
                         choices = obj.get("choices") or []
@@ -609,8 +613,18 @@ async def stream_chat(
         # should stop the work rather than keep billing.
         raise
     finally:
+        requested = actor_refs.actions(actor_ref) if actor_ref else []
         if actor_ref:
             actor_refs.end(actor_ref)
+
+    # The app's own controls, asked for by a tool during the turn and drawn by
+    # the app. Re-checked now: a button that would not work is not shown.
+    if "connect_google" in requested:
+        if agent_status.google_state() != "connected" and agent_status.can_connect(role):
+            _bump("chat_action_connect_google_shown")
+            yield _ndjson({"type": "action", "action": "connect_google", "label": "Connect your Google account"})
+        else:
+            _bump("chat_action_connect_google_dropped")
 
     # Persist the turn only if something was actually said. A failed turn with
     # partial text is still worth keeping so the next question has context.

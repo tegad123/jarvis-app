@@ -1,0 +1,16 @@
+name: jarvis
+version: 1.0.0
+description: "The tenant agent's whole toolset: to-do list, calendar, email and the Google connect request. Each tool runs one fixed action through the tenant's app; there is no shell."
+author: jarvis
+kind: standalone
+platforms:
+  - linux
+provides_tools:
+  - list_tasks
+  - add_task
+  - complete_task
+  - calendar_upcoming
+  - add_calendar_event
+  - search_email
+  - draft_email
+  - connect_google

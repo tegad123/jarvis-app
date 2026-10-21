@@ -902,6 +902,40 @@ def skill_data_dirs(opt: Path, shipped: List[str]) -> List[Path]:
     return [opt / "skills" / "openclaw-imports" / s / "data" for s in sorted(shipped)]
 
 
+def soul_text(manifest: dict) -> str:
+    return fill(read_template("SOUL.md"), {"AGENT_NAME": manifest["agent_display_name"],
+                                           "DISPLAY_NAME": manifest["display_name"]})
+
+
+def install_agent_plugin(hermes: Path, app_tree: Path) -> List[Path]:
+    """The agent's whole toolset, copied root-owned from the tenant's own app
+    tree (the app reads the same tools.json for its allowlist): the agent user
+    can load it and never change it. Files no longer shipped are removed."""
+    src = app_tree / "scripts" / "hermes_plugin" / "jarvis"
+    if not (src / "tools.json").is_file():
+        die(f"{src} has no Jarvis plugin; the app at this commit predates it")
+    dest = hermes / "plugins" / "jarvis"
+    dest.mkdir(parents=True, exist_ok=True)
+    for d in (dest.parent, dest):
+        os.chown(d, 0, 0)
+        os.chmod(d, 0o755)
+    shipped = {f.name: f for f in src.iterdir() if f.is_file() and f.suffix in (".py", ".json", ".yaml")}
+    changed = []
+    for name, f in sorted(shipped.items()):
+        out = dest / name
+        if not out.is_file() or out.read_bytes() != f.read_bytes():
+            out.write_bytes(f.read_bytes())
+            changed.append(out)
+        os.chown(out, 0, 0)
+        os.chmod(out, 0o644)
+    for p in sorted(dest.iterdir()):
+        if p.name not in shipped:
+            shutil.rmtree(p) if p.is_dir() else p.unlink()
+            changed.append(p)
+    log(f"agent plugin at {dest}: {len(changed)} file(s) changed" if changed else f"agent plugin at {dest}: unchanged")
+    return changed
+
+
 def write_file(path: Path, text: str, mode: int = 0o644) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)
@@ -1038,11 +1072,8 @@ def provision(manifest_path: Path) -> None:
     mapping_pre = common_map(manifest, posture, "PENDING", "")
     write_file(opt / f"{slug}_preflight.sh", fill(read_template("preflight.sh"), mapping_pre), 0o755)
     write_file(hermes / "config.yaml", fill(read_template("hermes-config.yaml"), mapping_pre))
-    write_file(
-        hermes / "SOUL.md",
-        f"You are {manifest['agent_display_name']}, the assistant for "
-        f"{manifest['display_name']}.\n",
-    )
+    write_file(hermes / "SOUL.md", soul_text(manifest))
+    install_agent_plugin(hermes, jarvis)
 
     passphrase = mint_isolated_secrets(slug, hermes) if isolation == "two_user" else mint_env(hermes)
     print_passphrase_once(passphrase)
@@ -1367,8 +1398,8 @@ def reconfigure(manifest_path: Path, restart_approved: bool) -> None:
     rt["models"] = model_settings(manifest)
     changed += [rt_p] if rewrite_keeping_owner(rt_p, json.dumps(rt, indent=2) + "\n") else []
     soul = hermes / "SOUL.md"
-    changed += [soul] if rewrite_keeping_owner(
-        soul, f"You are {name}, the assistant for {manifest['display_name']}.\n") else []
+    changed += [soul] if rewrite_keeping_owner(soul, soul_text(manifest)) else []
+    changed += install_agent_plugin(hermes, opt / "jarvis-app")
 
     shipped = sorted(d.name for d in (opt / "skills" / "openclaw-imports").iterdir() if (d / "data").is_dir())
     mapping = common_map(manifest, posture_rules(manifest), "IN-ENV-FILE", "", shipped)
@@ -1619,8 +1650,8 @@ def upgrade(manifest_path: Path, restart_approved: bool) -> None:
         hermes = opt / "hermes"
         write_file(opt / f"{slug}_preflight.sh", fill(read_template("preflight.sh"), mapping), 0o755)
         write_file(hermes / "config.yaml", fill(read_template("hermes-config.yaml"), mapping))
-        write_file(hermes / "SOUL.md", f"You are {manifest['agent_display_name']}, the assistant for "
-                                       f"{manifest['display_name']}.\n")
+        write_file(hermes / "SOUL.md", soul_text(manifest))
+        install_agent_plugin(hermes, jarvis)
         trim_agent_env(hermes)
         apply_isolation(opt, names, skill_data_dirs(opt, shipped), keep_private=True)
         if db_existed:

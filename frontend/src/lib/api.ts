@@ -586,6 +586,7 @@ export interface ChatHandlers {
   /** Something was deliberately withheld from the model. */
   onNotice?: (e: Extract<ChatStreamEvent, { type: 'notice' }>) => void
   onVerified?: (e: Extract<ChatStreamEvent, { type: 'verified' }>) => void
+  onAction?: (e: Extract<ChatStreamEvent, { type: 'action' }>) => void
 }
 
 /**
@@ -667,6 +668,9 @@ export async function streamChat(
         break
       case 'verified':
         handlers.onVerified?.(evt)
+        break
+      case 'action':
+        handlers.onAction?.(evt)
         break
     }
   }

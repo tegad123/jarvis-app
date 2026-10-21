@@ -23,6 +23,7 @@ import {
   bumpCounter,
 } from '../lib/api'
 import { THINKING, stepName, truncateLabel } from '../lib/steps'
+import { AssistantText, ChatActionButton, isChatAction, type ChatAction } from '../components/ChatMessage'
 import { ACCEPT_ATTR, MAX_UPLOAD_BYTES, humanSize, prepareForUpload } from '../lib/attachments'
 import type { VoiceState } from '../lib/voice'
 import type { Attachment, ChatMessage, Role, Thread, ThreadMember } from '../lib/types'
@@ -76,6 +77,7 @@ export default function Ask({ role, personKey, onUnauthorized }: Props) {
   // built from the saved row, or a correction when the reply claimed a
   // task that was never written.
   const [verified, setVerified] = useState<{ ok: boolean; message: string } | null>(null)
+  const [chatActions, setChatActions] = useState<ChatAction[]>([])
   const [voice, setVoice] = useState<VoiceState>({ phase: 'idle' })
   const [members, setMembers] = useState<ThreadMember[] | null>(null)
   const [membersOpen, setMembersOpen] = useState(false)
@@ -244,6 +246,7 @@ export default function Ask({ role, personKey, onUnauthorized }: Props) {
       toolLabels.current.clear()
       pinnedRef.current = true
       setVerified(null)
+      setChatActions([])
 
       setMessages((m) => [
         ...m,
@@ -291,12 +294,16 @@ export default function Ask({ role, personKey, onUnauthorized }: Props) {
             onTool: (e) => {
               if (e.status === 'running') {
                 if (e.toolCallId && e.label) toolLabels.current.set(e.toolCallId, e.label)
-                setStep({ name: stepName(e.tool), label: e.label })
+                setStep(e.tool === 'jarvis' && e.label ? { name: e.label } : { name: stepName(e.tool), label: e.label })
               } else {
                 setStep(assistant ? null : { name: THINKING })
               }
             },
             onVerified: (e) => setVerified({ ok: e.ok, message: e.message }),
+            onAction: (e) => {
+              const a = e.action
+              if (isChatAction(a)) setChatActions((cur) => (cur.includes(a) ? cur : [...cur, a]))
+            },
             onDone: () => {
               setStep(null)
               setReplyDoneAt(Date.now())
@@ -633,9 +640,7 @@ export default function Ask({ role, personKey, onUnauthorized }: Props) {
                       />
                     )}
                   </p>
-                  <p className="mt-1.5 whitespace-pre-wrap text-chat text-light-text-primary dark:text-dark-text-primary">
-                    {m.content}
-                  </p>
+                  <AssistantText content={m.content} />
                   {m.partial && (
                     <p className="mt-1 text-caption text-light-text-muted dark:text-dark-text-muted">
                       This answer was cut short.
@@ -732,6 +737,10 @@ export default function Ask({ role, personKey, onUnauthorized }: Props) {
             {verified.message}
           </p>
         )}
+
+        {chatActions.map((a) => (
+          <ChatActionButton key={a} action={a} />
+        ))}
       </div>
       )}
 

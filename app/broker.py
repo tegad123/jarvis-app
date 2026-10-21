@@ -640,6 +640,34 @@ async def post_actor(request: Request):
             "age_s": entry["age_s"], "turn_ended": entry["ended"] is not None}
 
 
+@router.post("/chat/action")
+async def post_chat_action(request: Request):
+    """A tool asks the app to show one of its own controls under the running
+    turn's reply. The app decides from its own state whether it appears; the
+    model never draws a link or button itself."""
+    _authorize(request)
+    from . import agent_status  # noqa: PLC0415
+    body = await _json_body(request)
+    ref, action = body.get("ref"), body.get("action")
+    if action not in agent_status.CHAT_ACTIONS:
+        _bump("broker_chat_action_refused")
+        raise HTTPException(status_code=400, detail=f"action must be one of {agent_status.CHAT_ACTIONS}.")
+    entry, why = actor_refs.resolve(ref) if isinstance(ref, str) and ref.startswith(actor_refs.PREFIX) \
+        else (None, "unknown")
+    if entry is None or entry["ended"] is not None:
+        _bump("broker_chat_action_no_turn")
+        log.warning("broker: chat action %s without a running turn (%s)", action, why or "ended")
+        return {"shown": False, "why": "no_turn"}
+    if agent_status.google_state() == "connected":
+        return {"shown": False, "why": "already_connected"}
+    if not agent_status.can_connect(entry["role"]):
+        _bump("broker_chat_action_not_allowed")
+        return {"shown": False, "why": "not_allowed"}
+    actor_refs.request_action(ref, action)
+    _bump(f"broker_chat_action_{action}")
+    return {"shown": True}
+
+
 @router.post("/channels")
 async def post_channels(request: Request):
     _authorize(request)

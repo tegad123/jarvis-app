@@ -443,7 +443,7 @@ def post_chat(body: ChatRequest, sess: dict = Depends(auth.current_session)):
 
     return StreamingResponse(
         chat_mod.stream_chat(body.thread_id, body.message, body.attachments,
-                             person_key=auth.person_of(sess)),
+                             person_key=auth.person_of(sess), role=auth.role_of(sess)),
         media_type="application/x-ndjson",
         headers={
             "Cache-Control": "no-cache",

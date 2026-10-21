@@ -1,0 +1,117 @@
+{
+  "toolset": "jarvis",
+  "tools": [
+    {
+      "name": "list_tasks",
+      "authz": "task.list",
+      "label": "Checking your to-do list",
+      "needs": [],
+      "description": "List the open items on the team's to-do list.",
+      "parameters": {"type": "object", "properties": {}, "additionalProperties": false}
+    },
+    {
+      "name": "add_task",
+      "authz": "task.add",
+      "label": "Adding it to your to-do list",
+      "needs": [],
+      "description": "Add one item to the team's to-do list for the person you are talking to.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": {"type": "string", "description": "Short, plain description of what needs doing."},
+          "due_date": {"type": "string", "description": "Optional due date, YYYY-MM-DD."},
+          "priority": {"type": "string", "enum": ["low", "medium", "high"]},
+          "notes": {"type": "string", "description": "Optional extra detail."}
+        },
+        "required": ["title"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "complete_task",
+      "authz": "task.complete",
+      "label": "Marking it done",
+      "needs": [],
+      "description": "Mark one to-do item done, by its id (from list_tasks) or by words from its title.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task_id": {"type": "string"},
+          "match": {"type": "string", "description": "Words from the item's title, when you have no id."}
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "calendar_upcoming",
+      "authz": "calendar.read",
+      "label": "Looking at your calendar",
+      "needs": ["google"],
+      "description": "List upcoming events on the assistant's Google Calendar.",
+      "parameters": {
+        "type": "object",
+        "properties": {"days": {"type": "integer", "minimum": 1, "maximum": 31, "description": "How many days ahead (default 7)."}},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "add_calendar_event",
+      "authz": "calendar.add",
+      "label": "Putting it on your calendar",
+      "needs": ["google"],
+      "description": "Put one event on the assistant's Google Calendar. Invites nobody. In practice mode it is shown, not added.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": {"type": "string"},
+          "start": {"type": "string", "description": "ISO 8601 with offset, e.g. 2026-10-22T14:00:00-05:00"},
+          "end": {"type": "string", "description": "ISO 8601 with offset"},
+          "notes": {"type": "string"}
+        },
+        "required": ["title", "start", "end"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "search_email",
+      "authz": "email.read",
+      "label": "Looking through your email",
+      "needs": ["google"],
+      "description": "Find recent emails in the assistant's Gmail. Returns sender, subject, date and a short preview.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {"type": "string", "description": "Gmail search words, e.g. 'from:brad inspection'."},
+          "max_results": {"type": "integer", "minimum": 1, "maximum": 10}
+        },
+        "required": ["query"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "draft_email",
+      "authz": "email.send",
+      "label": "Writing the email",
+      "needs": [],
+      "description": "Propose an email. It always needs the owner's OK before it goes anywhere; in practice mode it is shown, never sent.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "to": {"type": "string"},
+          "subject": {"type": "string"},
+          "body": {"type": "string"}
+        },
+        "required": ["to", "subject", "body"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "connect_google",
+      "authz": null,
+      "label": "Getting the Google connect button ready",
+      "needs": [],
+      "description": "Ask the app to show its own 'Connect your Google account' button in this chat. Use it when something needs Google and Google is not connected. Never write a link yourself.",
+      "parameters": {"type": "object", "properties": {}, "additionalProperties": false}
+    }
+  ]
+}

@@ -14,6 +14,9 @@ The agent never holds the real key.
 
 Same caller rules as the broker: loopback only, never through the tunnel.
 No key configured is a loud 503, never a silent fallback to another model.
+Only the Jarvis tools (app/agent_status.ALLOWED) reach the model: any other
+tool in a request is stripped, counted and logged, and the names offered on the
+latest request are kept in agent_tools_seen.json beside the threads database.
 JARVIS_MODEL_UPSTREAM is honoured in mock mode only (verify sandboxes).
 """
 import hmac
@@ -28,6 +31,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
 
+from . import agent_status
 from . import config
 from . import switches
 from . import threads as threads_mod
@@ -66,6 +70,54 @@ def _authorize(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Model proxy key missing or wrong.")
 
 
+TECH_WORDS = ("hermes", "terminal", "shell", "python", "script", "skill", "gateway", "sub-agent", "subagent",
+              "api", "config", "token")
+
+
+def _system_text(req: dict) -> str:
+    sysp = req.get("system")
+    if isinstance(sysp, list):
+        return " ".join(str(b.get("text") or "") for b in sysp if isinstance(b, dict))
+    return str(sysp or "")
+
+
+def _allowlist_tools(body: bytes) -> bytes:
+    try:
+        req = json.loads(body)
+    except ValueError:
+        return body
+    if not isinstance(req, dict) or not isinstance(req.get("tools"), list):
+        return body
+    offered = [str(t.get("name")) for t in req["tools"] if isinstance(t, dict)]
+    kept, stripped = agent_status.strip_disallowed(req["tools"])
+    if stripped:
+        _bump("model_proxy_tool_stripped")
+        log.error("model proxy: stripped %d tool(s) outside the allowlist: %s", len(stripped),
+                  ", ".join(sorted(stripped))[:400])
+        choice = req.get("tool_choice")
+        if isinstance(choice, dict) and choice.get("name") in stripped:
+            req.pop("tool_choice")
+        if kept:
+            req["tools"] = kept
+        else:
+            req.pop("tools")
+            req.pop("tool_choice", None)
+    system = _system_text(req).lower()
+    try:
+        seen = {"at": datetime.now(timezone.utc).isoformat(), "offered": sorted(offered),
+                "sent": sorted(t["name"] for t in kept), "stripped": sorted(stripped),
+                "system_chars": len(system),
+                "system_word_counts": {w: system.count(w) for w in TECH_WORDS if w in system}}
+        out = threads_mod.DB_PATH.parent / "agent_tools_seen.json"
+        tmp = out.with_suffix(".tmp")
+        tmp.write_text(json.dumps(seen, indent=1) + "\n")
+        tmp.replace(out)
+    except Exception as exc:
+        _bump("model_proxy_tools_seen_failed")
+        log.error("model proxy: could not record the tools seen (%s)", type(exc).__name__)
+    return json.dumps(req).encode() if stripped else body
+
+
 def _upstream() -> str:
     override = os.environ.get("JARVIS_MODEL_UPSTREAM", "").strip()
     if override:
@@ -96,6 +148,7 @@ async def proxy(path: str, request: Request):
     body = await request.body()
     if len(body) > MAX_BODY:
         raise HTTPException(status_code=413, detail="Request too large.")
+    body = _allowlist_tools(body)
     headers = {h: request.headers[h] for h in PASS_REQUEST_HEADERS if h in request.headers}
     headers["x-api-key"] = key
     client = httpx.AsyncClient(timeout=TIMEOUT)

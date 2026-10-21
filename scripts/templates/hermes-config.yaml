@@ -15,3 +15,15 @@ model:
   provider: anthropic
   default: {{AGENT_MODEL}}
   base_url: http://127.0.0.1:{{APP_PORT}}/api/model/anthropic
+# The tenant agent's whole toolset is the Jarvis plugin (HERMES_HOME/plugins/
+# jarvis, installed root-owned from the app tree): no terminal, files, web,
+# code or delegation. The app's model proxy strips anything else regardless.
+plugins:
+  enabled:
+    - jarvis
+platform_toolsets:
+  api_server:
+    - jarvis
+tools:
+  tool_search:
+    enabled: off
