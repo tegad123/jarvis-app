@@ -177,10 +177,16 @@ def capabilities(t: Tenant):
 def calendar(t: Tenant, message: str, label: str):
     print(f"\n── {label}")
     c0 = counters(t.slug)
-    r = t.ask(t.thread(), message)
+    tid = t.thread()
+    r = t.ask(tid, message)
     c1 = counters(t.slug)
     plain(r)
     check("   says plainly that Google isn't connected", not_connected(r["text"]))
+    h = t.c.get("/api/chat/history", params={"thread_id": tid})
+    last = [m for m in (h.json().get("messages") or []) if m.get("role") == "assistant"][:1] if h.status_code == 200 else []
+    saved = last[0].get("actions") if last else None
+    check(f"   after a reload the reply still carries the app's button (history HTTP {h.status_code}, actions {saved})",
+          saved == [{"action": "connect_google", "label": "Connect your Google account"}])
     check(f"   the app shows its own connect button (action event {r['actions']}, "
           f"broker_chat_action_connect_google +{delta(c0, c1, 'broker_chat_action_connect_google')}, "
           f"chat_action_connect_google_shown +{delta(c0, c1, 'chat_action_connect_google_shown')})",
@@ -243,6 +249,11 @@ def main() -> int:
         print(f"/opt/{a.slug} is not a two-user tenant")
         return 2
     t = Tenant(a)
+    page = t.c.get("/")
+    bundle = re.search(r"/assets/(index-[A-Za-z0-9_-]+\.js)", page.text or "")
+    built = sorted(p.name for p in (Path(__file__).resolve().parents[2] / "static" / "assets").glob("index-*.js"))
+    check(f"the page served is this build ({bundle.group(1) if bundle else None}; repo {built})",
+          bool(bundle) and [bundle.group(1)] == built)
     if a.only in (None, "capabilities"):
         capabilities(t)
     if a.only in (None, "calendar"):
