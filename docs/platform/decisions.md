@@ -563,6 +563,25 @@ Human yes, 2026-10-21, for the Hermes change, with conditions: inertness proven 
   - Its command line carries a Cursor API key (`crsr_…`), which appeared in the lead's terminal output while identifying it. Rotate that key.
 - **Skills tests.** 119 tests; 13 failures/errors already on the head before b8c2d1f, identical after.
 
+## Decided 2026-10-21: the tenant agent talks like an assistant and only does real-estate work
+
+From the human's first real test on tega: plain-language persona, honest capabilities from real state, no developer tools, never work around a hold, an app-rendered connect button, and practice mode in plain words. On tega (app 338bd38); eddie/blake/martin wait for the human to see the new answers.
+
+- **Tools.** Before (tega's old config through Hermes's own resolver): 15 tools, cronjob, delegate_task, execute_code, memory, patch, process, read_file, search_files, session_search, skill_manage, skill_view, skills_list, terminal, todo, write_file. After: the eight in `scripts/hermes_plugin/jarvis/tools.json` (list_tasks, add_task, complete_task, calendar_upcoming, add_calendar_event, search_email, draft_email, connect_google).
+  - They are a Hermes user plugin (no Hermes change). Each runs a fixed action through `run_action.py` with no shell: tasks through the skills' scripts, Google and email through the broker, under the turn's verified actor and skills authz.
+  - `platform_toolsets.api_server: [jarvis]`; `tools.tool_search.enabled: off` (it wraps plugin tools behind tool_search/tool_call).
+  - The model proxy also strips any tool outside the list (`model_proxy_tool_stripped`, error logged). Proven not needed so far: stripped is empty on tega.
+  - Plugin files are root:<agent group> 0640 (`lock_agent_plugin`, also re-applied after `apply_isolation`'s chown): the agent can read them, not change them.
+- **Status every turn.** `app/agent_status.py` builds a STATUS FROM THE APP block from real state: Google connection, practice/live (Sentinel mode), role, and what this person may do (authz check per tool). The persona answers "what can you do" from it. Counters `chat_turn_status_block` / `_unavailable` (error logged; the fallback block tells the model it can't check).
+- **Prompt.** Hermes adds its own framing after SOUL.md: "You run on Hermes Agent" with its docs and skills, coding and install guidance, host and home paths, a Python probe, profile paths, an API-server hint. Asked what it runs on, the old agent said "Hermes Agent from Nous Research… Claude… claude-sonnet-5-5… a Linux computer". The model proxy now keeps only paragraphs whose first line matches the tenant's SOUL template, the status block and the date line, and drops everything else, including blocks a future Hermes adds. It is recorded in `agent_tools_seen.json` (kept, dropped, word counts before/after), counter `model_proxy_prompt_trimmed`. A Hermes-side switch would be local modification #3 and was not made.
+- **Holds.** A held action's tool result says to explain it plainly and not suggest another way. The plugin refuses to re-file an identical held proposal for an hour (`agent_tool_<name>_held_duplicate`, warning logged), because a model re-proposing the same email would in live mode mean two approvals for one message. Approval de-duplication inside the broker would be a send-path change and wasn't made.
+- **Connect button.** `connect_google` posts to `/api/broker/chat/action` with the turn's reference; the app emits an `action` event only while that turn runs, only if Google is still not connected and only for owner/admin, and the frontend renders its own button to `/api/google/connect/start`. Model text is rendered as plain text, so a model-written URL or button never becomes clickable. The button is live-turn only: persisting it needs a column on the messages table (a schema change, not made).
+- **Not deployed: the frontend.** `frontend/static/` is the 2026-08-30 build and current source carries the deferred Settings/Google-login changes, so the bundle was not rebuilt. Until it is, tega's web page ignores the `action` event: the reply says "tap the button below" and no button shows (and no link either).
+- **Email via the agent never sends.** draft_email goes to `/api/broker/outbound`, which holds in practice and answers not_brokered in enforce.
+- **Proofs on tega via https://tega.yamin.io (app 338bd38).** `verify_agent_behaviour.py` 39/39, `verify_agent_tools.py --slug tega` 7/7, `verify_tenant_chat.py` 19/19 and `--spoof` 19/19, `verify_chat_links.mjs` 6/6.
+  - Canaries: the old answers fail the tightened checks; the identity question on the untrimmed prompt failed 4/6; `verify_chat_links.mjs --canary` 3/6.
+- **Workers 101324 and 110814** returned and were stopped with SIGTERM after the ancestry check; footprint none.
+
 ## Decided (from the spec, recorded 2026-10-10)
 
 - Customer #1: 34 Dev team.
