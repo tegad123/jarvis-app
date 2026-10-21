@@ -229,6 +229,12 @@ def main() -> int:
               f"provenance {sorted({ln.split('provenance=')[1].split(' |')[0] for ln in allowed})})",
               len(verified_as_me) >= 1)
     check(f"   nothing allowed under any other identity or an asserted one ({len(others)} lines)", not others)
+    if verified_as_me:
+        earlier = authz_log.read_text().splitlines()[:authz_before]
+        refs = sorted({m for ln in verified_as_me for m in re.findall(r"app:[A-Za-z0-9_-]{16,64}", ln)})
+        reused = [r for r in refs if any(r in ln for ln in earlier)]
+        check(f"   this turn's own reference, never seen in an earlier turn ({len(refs)} ref(s), {len(reused)} reused)",
+              len(refs) == 1 and not reused)
     if found:
         check("   recorded as coming from chat, with a reference back", found["source"] == "chat"
               and bool(found.get("source_ref")))

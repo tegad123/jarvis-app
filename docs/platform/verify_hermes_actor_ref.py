@@ -17,6 +17,9 @@ the wrong tree). The probe records, as JSON:
     (tools.environments.local._sanitize_subprocess_env), with no session bound,
     with an API-server session bound (no reference), after clearing it, and
     with an inherited JARVIS_ACTOR_MSG in the parent environment;
+  - what a real terminal (LocalEnvironment: snapshot, source, spawn per
+    command) shows a command across turns with different references, none,
+    and after a tool exported its own JARVIS_ACTOR_MSG;
   - what the API server's real middleware binds for requests: no header,
     a valid reference with the right key from loopback, the wrong key, no key,
     a non-loopback caller, and a malformed reference.
@@ -29,6 +32,8 @@ the tool environment only then, and drop it again after the turn.
     ... --post-installed      after the patch is applied to the install
     ... --canary-leak         POST also binds JARVIS_ACTOR_MSG="" on every turn
                               (the first draft's behaviour); inertness must fail
+    ... --canary-snapshot     POST without the snapshot exclusion (the second
+                              draft): the next turn must see the first turn's ref
 """
 from __future__ import annotations
 
@@ -87,6 +92,27 @@ if "actor_ref" in sc.set_session_vars.__code__.co_varnames:
     out["env_api_bound_ref"] = env()
     sc.clear_session_vars(t)
     out["env_after_ref_cleared"] = env()
+
+import tempfile
+from tools.environments.local import LocalEnvironment
+patched = "actor_ref" in sc.set_session_vars.__code__.co_varnames
+le = LocalEnvironment(cwd=tempfile.mkdtemp(prefix="hprobe-cwd-"), timeout=30)
+def term():
+    return le.execute('echo "[${JARVIS_ACTOR_MSG-unset}]"')["output"].strip()
+term_out = {"noref_unbound": term()}
+t = sc.set_session_vars(**kw); term_out["noref_api"] = term(); sc.clear_session_vars(t)
+le.execute("export PROBE_PERSIST=kept")
+t = sc.set_session_vars(**kw); term_out["user_export_persists"] = le.execute('echo "[$PROBE_PERSIST]"')["output"].strip(); sc.clear_session_vars(t)
+if patched:
+    for name, ref in (("ref_a", sys.argv[2]), ("ref_b", sys.argv[2][:-4] + "BBBB")):
+        t = sc.set_session_vars(actor_ref=ref, **kw); term_out[name] = term(); sc.clear_session_vars(t)
+    t = sc.set_session_vars(**kw); term_out["after_refs_noref"] = term(); sc.clear_session_vars(t)
+    t = sc.set_session_vars(actor_ref=sys.argv[2], **kw)
+    le.execute("export JARVIS_ACTOR_MSG=app:" + "F" * 24)
+    sc.clear_session_vars(t)
+    t = sc.set_session_vars(actor_ref=sys.argv[2][:-4] + "BBBB", **kw); term_out["after_tool_export"] = term(); sc.clear_session_vars(t)
+le.cleanup()
+out["terminal"] = term_out
 
 from gateway.config import PlatformConfig
 from aiohttp.test_utils import make_mocked_request
@@ -156,6 +182,7 @@ def main() -> int:
     ap.add_argument("--pre-ref", default="HEAD", help="Hermes commit before the patch")
     ap.add_argument("--post-installed", action="store_true")
     ap.add_argument("--canary-leak", action="store_true")
+    ap.add_argument("--canary-snapshot", action="store_true")
     a = ap.parse_args()
     work = Path(tempfile.mkdtemp(prefix="hermes-actor-ref-"))
     try:
@@ -167,6 +194,10 @@ def main() -> int:
             post = work / "post"
             shutil.copytree(pre, post, symlinks=True)
             subprocess.run(["patch", "-s", "-p1", "-d", str(post), "-i", str(PATCH)], check=True)
+            if a.canary_snapshot:
+                b = post / "tools/environments/base.py"
+                b.write_text(b.read_text().replace("HERMES_UI_SESSION_ID JARVIS_ACTOR_MSG{extra_unset}",
+                                                   "HERMES_UI_SESSION_ID{extra_unset}"))
         print(f"PRE {a.pre_ref} at {pre}; POST {post}")
         P0, P1 = probe(pre, False), probe(post, a.canary_leak)
         check(f"PRE loaded its own tree ({sorted({str(Path(f).parent.parent) for f in P0['files']})})",
@@ -192,6 +223,10 @@ def main() -> int:
             check(f"   middleware {k}: same status as before ({m0['status']} -> {m1['status']}), "
                   f"nothing bound ({m1['bound']!r})", m0["status"] == m1["status"] and not m1["bound"])
 
+        for k in ("noref_unbound", "noref_api", "user_export_persists"):
+            check(f"   real terminal, {k}: identical ({P0['terminal'][k]!r} -> {P1['terminal'][k]!r})",
+                  P0["terminal"][k] == P1["terminal"][k])
+
         print("Reference bound (POST only)")
         check(f"   the app's request (loopback, right key) binds it ({P1['middleware']['ref_ok']['bound']!r})",
               P1["middleware"]["ref_ok"]["bound"] == REF)
@@ -200,6 +235,13 @@ def main() -> int:
         check("   it overrides an inherited value only while bound, and is gone after the turn "
               f"({'JARVIS_ACTOR_MSG' in P1.get('env_after_ref_cleared', {})})",
               "JARVIS_ACTOR_MSG" not in P1.get("env_after_ref_cleared", {"JARVIS_ACTOR_MSG": 1}))
+        T = P1["terminal"]
+        check(f"   real terminal: each turn's command sees its own reference ({T.get('ref_a')!r}, {T.get('ref_b')!r})",
+              T.get("ref_a") == f"[{REF}]" and T.get("ref_b") == f"[{REF[:-4]}BBBB]")
+        check(f"   real terminal: a turn without one sees none afterwards ({T.get('after_refs_noref')!r})",
+              T.get("after_refs_noref") == "[unset]")
+        check(f"   a tool's own export does not carry into the next turn ({T.get('after_tool_export')!r})",
+              T.get("after_tool_export") == f"[{REF[:-4]}BBBB]")
     finally:
         shutil.rmtree(work, ignore_errors=True)
     print(f"\n{PASS}/{PASS + FAIL} passed")

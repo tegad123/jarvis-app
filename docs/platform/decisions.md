@@ -533,6 +533,34 @@ Human decisions: Part A approved with `<slug>.yamin.io`. The human runs the Clou
   - Stopped with SIGTERM; no respawn within 20 s. Its `AGENTS.md` edit was reverted. The lead checked its one claim (`is-internal` false, `has-role internal` true for the owner) and wrote its own entry.
 - **Part A for tega only.** `docs/platform/ingress/yamin-config-tega.yml` is the installed `/etc/cloudflared/config.yml` plus one rule (`tega.yamin.io` -> 8780). Eddie, Blake and Martin are not in it, because their Access steps aren't done. `yamin-config.yml` (the full draft) gains the same rule. Both pass `ingress validate`. In the tega file, tega maps to 8780, rehearsal to 8730, and eddie and unknown hosts to 404.
 
+## Decided 2026-10-21: tega public; the app tells the gateway who is signed in (local Hermes modification #2)
+
+Human yes, 2026-10-21, for the Hermes change, with conditions: inertness proven before any restart; an opaque app-issued reference accepted only from the app's key over loopback; tools cannot set or forge it; only tega's and isocheck's gateways restarted; commit on scale-vault-local and push; record it here.
+
+- **Tega on https://tega.yamin.io.** `--reconfigure` did not apply `public_origin`; it now also rewrites the app's `oauth.conf` drop-in (dry-render diffed first). `prove_isolation` 123/123 after the switch and again after the last restart.
+  - Access: `/api/ping` with the service token 200 (app JSON), without it 302, with a wrong secret 302. The token file is `KEY=value` lines; both verifiers parse that.
+  - PIN lockout on the public address 7/7; the 15-minute lock cleared at about 14:22 UTC.
+- **Identity design.** The model never supplies who is speaking.
+  - App (`app/actor_refs.py`, `app/chat.py`): each chat turn with a signed-in person mints `app:<token_urlsafe(24)>` in memory, mapped to person and thread. It is valid while the turn runs plus 60 s, at most 900 s, and is sent as `X-Jarvis-Actor-Ref` with a system note naming the person. Counters `chat_turn_actor_ref` / `chat_turn_without_actor` (warning logged).
+  - Broker: `POST /api/broker/actor` resolves a reference (`broker_actor_resolved` / `_unknown` / `_expired` / `_refused`). `GET /api/broker/actor/active` counts running turns. Both are loopback with Bearer API_SERVER_KEY.
+  - Hermes (modification #2): the API server binds the header only if it matches `^app:[A-Za-z0-9_-]{16,64}$`, comes over loopback, and passes `_check_auth` with a key configured; otherwise it logs a warning and binds nothing. The value lives in its own ContextVar, outside `_VAR_MAP`, and reaches tools as `JARVIS_ACTOR_MSG` only when non-empty.
+  - Skills b8c2d1f: `authz` resolves `app:<ref>` through the broker (provenance `transport:app:session`). Inside a gateway cgroup, a self-asserted person is refused, and the system actor is refused while an app turn runs or if the app can't be asked.
+- **Local Hermes modification #2.** scale-vault-local 8a04d42 (session var, tool env, API server header) and b0967e8 (shell snapshot), pushed to `hermes-agent/scale-vault-local` in jarvis-skills (head b0967e87a65d). Re-apply or upstream it on any Hermes upgrade. The full patch against 0f8bc16 is `docs/platform/hermes-actor-ref.patch`.
+  - Inertness, before any restart: `verify_hermes_actor_ref.py` loads 0f8bc16 and the patched tree in separate processes. With no header, the tool environments, middleware status and real-terminal output are byte-identical. With the patch installed: 24/24.
+  - Canaries: `--canary-leak` (the first draft, which bound an empty value every turn) 17/24; `--canary-snapshot` 21/24.
+  - Restarted under the lock: tega's and isocheck's gateways only. Live's gateway is still pid 1781 (started 2026-08-24) on the old code in memory, and with no header it behaves as before when it next restarts.
+- **Bug found by chat filing, fixed in b0967e8.** Runs 1-3 on tega all used the first run's reference, and run 4 was denied as expired. Hermes's terminal dumps `export -p` into a shared snapshot after each command and sources it before the next, so the first turn's `JARVIS_ACTOR_MSG` overrode every later turn's fresh value. Upstream already strips `HERMES_SESSION_*` from that snapshot for the same reason; `JARVIS_ACTOR_MSG` is now stripped too, which also stops a tool's own `export` from carrying over. The fix denies rather than misattributes once the reference expires. Within 60 s, though, a later turn by a different person in the same tenant could have been attributed to the first person. Tega has one person signed in, and the authz log shows owner only.
+  - Hermes's own snapshot tests (`tests/tools/test_snapshot_*`) were not run: pytest is not installed and wasn't added.
+  - `verify_tenant_chat.py` now asserts that each turn's reference was never seen in an earlier authz line. Replayed over the buggy runs' log, it flags runs 2 and 3.
+- **Proofs after the fix, tega via https://tega.yamin.io.**
+  - Chat filing 4/4 (19/19 each, every run its own reference).
+  - `--spoof` 19/19: nothing allowed under another identity.
+  - `verify_actor_guard` 8/8; `--during-turn` 10/10 with a chat running alongside. Run alone, it finds no turn and fails 3 checks; the docstring now says to start a chat with it.
+  - Isocheck (old app, patched Hermes) chat 15/17: only the two app-provenance checks fail, as expected (its app sends no reference, so it files as before, `asserted`). This is the end-to-end inertness check and the provenance check's canary.
+- **Live restarted by needrestart.** At 06:58 UTC unattended-upgrades (liblzma5 / xz-utils) ran needrestart, which restarted jarvis-app.service (now pid 4185897). The agent-lock guard allowed it because the lock was free. No gateway was restarted. Whether needrestart may restart live is the human's call.
+- **Workers kept returning.** `cursor-agent ... worker` pids 4114988, 4142860, 66712 and 84010 (started 14:37:28) were each stopped with SIGTERM after checking they weren't ancestors of the lead's shell. Footprint checks found nothing of theirs: no files, commits or lock operations. Disabling the extension is the human's call.
+- **Skills tests.** 119 tests; 13 failures/errors already on the head before b8c2d1f, identical after.
+
 ## Decided (from the spec, recorded 2026-10-10)
 
 - Customer #1: 34 Dev team.

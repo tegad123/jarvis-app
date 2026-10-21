@@ -58,7 +58,17 @@ emails and texts to real clients. Act accordingly.
   boundary_domains, never a recipient). `identity.py has-role internal` is
   true for it, `is-internal` (domain) false. A `@34dev.com` address can't be
   used: the preflight refuses any `34dev` term in a tenant's config.
-  Part A: tega.yamin.io (docs/platform/ingress/PART-A.md, "Tega").
+  Part A: tega.yamin.io (docs/platform/ingress/PART-A.md, "Tega"), public
+  since 2026-10-21 (public_origin in the manifest; Access app "tega", service
+  token in /root/onboarding/cf-access-verify-token.txt, KEY=value lines).
+- App chat identity (two-user tenants on app 08be2f4+): each chat turn the app
+  mints an opaque `app:<random>` reference, sends it as `X-Jarvis-Actor-Ref`,
+  and the patched Hermes hands it to tools as JARVIS_ACTOR_MSG; skills authz
+  looks it up via /api/broker/actor (provenance transport:app:session). Inside
+  the gateway a tool's own `--actor` is refused. Proofs:
+  docs/platform/verify_hermes_actor_ref.py (run before any gateway restart
+  on a new Hermes), docs/auth/verify_actor_guard.py,
+  docs/model/verify_tenant_chat.py (asserts a fresh reference per turn).
 - Two-user tenants run the agent in broker mode: Google calls, counters and
   channel creation go through the app's loopback /api/broker; the threads and
   accounts databases are in app-private and the agent cannot open them.
@@ -225,6 +235,12 @@ live's PID and the number of files written into live's tree (must be 0).
   install is a shallow clone, so push from a full clone of upstream. Live
   sets no `HERMES_HOME_MODE`, so its behaviour is unchanged. Every tenant
   gateway, rehearsal included, has run the patched code since 2026-10-16.
+  Local Hermes modification #2 (8a04d42 + b0967e8, same branch, human yes
+  2026-10-21; patch also in docs/platform/hermes-actor-ref.patch): the
+  app's actor reference. Re-apply or upstream it on any Hermes upgrade, and
+  rerun verify_hermes_actor_ref.py first. Without the header it is inert, so
+  live (pid 1781, still on the pre-patch code in memory) is unchanged when it
+  next restarts.
   The watcher now confirms the fix holds.
   It is a root bpftrace program, `/root/archives/hermes-home-watch.bt`,
   attached to chmod, fchmodat and fchmodat2. It logs every mode change other

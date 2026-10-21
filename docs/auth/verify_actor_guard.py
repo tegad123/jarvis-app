@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A tool cannot supply its own actor: forged, asserted or stripped.
 
-Runs the tenant's real skills authz (`authz.require(..., "task.add")`) as the
+Runs the tenant's real skills authz, through the calls add_task.py makes, as the
 tenant's agent user, with the gateway's broker settings, never a mock, and
 never writes a task: authz.require only decides and logs.
 
@@ -13,7 +13,8 @@ tool cannot leave it). Cases:
   email-ref   JARVIS_ACTOR_MSG=app:<owner email>     -> denied (not an app reference)
   person      no reference, --actor <owner email>    -> denied (self-asserted person)
   system      no reference, --actor <assistant>      -> denied while an app chat turn runs
-                                                        (--during-turn: waits for one)
+                                                        (--during-turn: waits up to 120 s for one;
+                                                        start a tenant chat alongside it)
 Presence twins, outside the gateway (CLI/timer rules unchanged):
   person      --actor <owner email>                  -> allowed
   forged      JARVIS_ACTOR_MSG=app:<random>          -> denied (forgery fails everywhere)
@@ -46,13 +47,17 @@ def check(label: str, ok: bool) -> bool:
     return ok
 
 
+# The same calls add_task.py makes: add_actor_arg (which reads JARVIS_ACTOR_MSG)
+# and require_from.
 PROBE = r'''
-import sys
+import argparse, sys
 sys.path.insert(0, sys.argv[1])
 import authz
-actor = sys.argv[2] or None
+ap = argparse.ArgumentParser()
+authz.add_actor_arg(ap)
+args = ap.parse_args((["--actor", sys.argv[2]] if sys.argv[2] else []))
 try:
-    key = authz.require(actor, "task.add", sys.argv[3])
+    key = authz.require_from(args, "task.add", sys.argv[3])
     print("ALLOW", key)
 except SystemExit as e:
     print("EXIT", e.code)
