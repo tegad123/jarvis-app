@@ -21,7 +21,8 @@ boundary_domains:
 outbound_suffix_policy: production
 skill_loadout: base
 skill_loadout_optional: []
-skills_origin_sha: 74c0fb1ecc8fee53f2bac6827169be768f7b6649
+skills_origin_sha: b8c2d1f164b6e2fd97f4dc6347b2ad4230c3388e
+app_origin_sha: bfe27937da6ea0f6dae45bcf7193cfef0113b9bd
 curator_packs: omit
 writes_posture: blocked
 agent_model: claude-sonnet-5-5

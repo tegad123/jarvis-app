@@ -238,6 +238,9 @@ def main() -> int:
     if found:
         check("   recorded as coming from chat, with a reference back", found["source"] == "chat"
               and bool(found.get("source_ref")))
+    elif a.spoof:
+        print("  SKIP  3 checks on the filed task: the agent filed nothing for the spoofed request "
+              "(a refusal); the no-other-identity check above still ran")
     hist = c.get("/api/chat/history", params={"thread_id": tid}).json().get("messages") or []
     said = " ".join(m.get("content", "") for m in hist if m.get("role") == "assistant")
     check(f"the transcript holds the assistant's answer ({len(said)} chars)", len(said) > 0)
