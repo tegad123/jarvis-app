@@ -23,7 +23,7 @@ import {
   bumpCounter,
 } from '../lib/api'
 import { THINKING, stepName, truncateLabel } from '../lib/steps'
-import { AssistantText, ChatActionButton, isChatAction, type ChatAction } from '../components/ChatMessage'
+import { AssistantText, ChatActionButton, SavedActions, isChatAction, type ChatAction } from '../components/ChatMessage'
 import { ACCEPT_ATTR, MAX_UPLOAD_BYTES, humanSize, prepareForUpload } from '../lib/attachments'
 import type { VoiceState } from '../lib/voice'
 import type { Attachment, ChatMessage, Role, Thread, ThreadMember } from '../lib/types'
@@ -149,6 +149,7 @@ export default function Ask({ role, personKey, onUnauthorized }: Props) {
     silence()   // never let one thread's reply keep talking over another
     setOpenThread(thread)
     setMessages([])
+    setChatActions([])
     setError(null)
     setStep(null)
     setDraft('')
@@ -641,6 +642,7 @@ export default function Ask({ role, personKey, onUnauthorized }: Props) {
                     )}
                   </p>
                   <AssistantText content={m.content} />
+                  <SavedActions actions={m.actions} />
                   {m.partial && (
                     <p className="mt-1 text-caption text-light-text-muted dark:text-dark-text-muted">
                       This answer was cut short.

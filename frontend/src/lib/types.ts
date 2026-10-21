@@ -196,6 +196,13 @@ export interface ChatMessage {
   /** True when the turn ended before the model finished. */
   partial?: boolean
   attachments?: Attachment[]
+  /** The app's own controls saved under this reply, already re-checked by the server. */
+  actions?: SavedChatAction[]
+}
+
+export interface SavedChatAction {
+  action: string
+  label: string
 }
 
 export interface ChatHistoryResponse {
@@ -206,6 +213,7 @@ export interface ChatHistoryResponse {
     ts?: number
     partial?: boolean
     attachments?: Attachment[]
+    actions?: SavedChatAction[]
   }>
   count: number
 }

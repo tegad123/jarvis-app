@@ -619,10 +619,13 @@ async def stream_chat(
 
     # The app's own controls, asked for by a tool during the turn and drawn by
     # the app. Re-checked now: a button that would not work is not shown.
+    shown: List[str] = []
     if "connect_google" in requested:
-        if agent_status.google_state() != "connected" and agent_status.can_connect(role):
+        if agent_status.action_ok("connect_google", role):
             _bump("chat_action_connect_google_shown")
-            yield _ndjson({"type": "action", "action": "connect_google", "label": "Connect your Google account"})
+            shown.append("connect_google")
+            yield _ndjson({"type": "action", "action": "connect_google",
+                           "label": agent_status.ACTION_LABELS["connect_google"]})
         else:
             _bump("chat_action_connect_google_dropped")
 
@@ -638,7 +641,8 @@ async def stream_chat(
                 "ts": _now(),
                 "attachments": attachment_ids,
             },
-            {"role": "assistant", "content": reply, "ts": _now(), "partial": not finished_cleanly},
+            {"role": "assistant", "content": reply, "ts": _now(), "partial": not finished_cleanly,
+             "actions": shown},
         )
 
     # THE LAST THING THE TURN DOES: check itself. Streamed so the person sees

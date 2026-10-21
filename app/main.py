@@ -40,6 +40,7 @@ from app import approvals as approvals_mod  # noqa: E402
 from app import sentinel as sentinel_mod  # noqa: E402
 from app import attachments as attachments_mod  # noqa: E402
 from app import accounts as accounts_mod  # noqa: E402
+from app import agent_status  # noqa: E402
 from app import google_connection as google_conn_mod  # noqa: E402
 from app import google_oauth  # noqa: E402
 from app import auth, chat as chat_mod, config, health, whoami  # noqa: E402
@@ -465,9 +466,14 @@ def get_chat_history(
     messages = chat_mod.get_history(thread_id)
     # Resolve attachment ids to full records so a reload can re-render chips
     # without one request per attachment.
+    role = auth.role_of(sess)
     for m in messages:
         ids = m.get("attachments") or []
         m["attachments"] = attachments_mod.public_many(ids) if ids else []
+        saved = m.get("actions") or []
+        m["actions"] = agent_status.live_actions(saved, role) if saved else []
+        if len(m["actions"]) < len(saved):
+            threads_mod.bump_counter("chat_history_action_hidden")
     return {"thread_id": thread_id, "messages": messages, "count": len(messages)}
 
 

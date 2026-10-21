@@ -44,7 +44,11 @@ export function run() {
   const button = renderToStaticMarkup(<real.ChatActionButton action="connect_google" />)
   const went = []
   real.ChatActionButton({ action: 'connect_google', go: (u) => went.push(u) }).props.onClick()
-  return { text, button, went, start: real.CONNECT_GOOGLE_START,
+  const saved = renderToStaticMarkup(<real.SavedActions actions={[
+    { action: 'connect_google', label: '<a href="https://evil.example">Connect</a>' },
+    { action: 'connect_google', label: 'again' },
+    { action: 'open_url', label: 'Open https://evil.example' }]} />)
+  return { text, button, went, saved, start: real.CONNECT_GOOGLE_START,
            known: ['connect_google', 'https://evil.example', 'open_url', ''].map(real.isChatAction) }
 }
 `)
@@ -68,5 +72,8 @@ check(`   and its click goes to the app's own connect start (${JSON.stringify(r.
       r.went.length === 1 && r.went[0] === '/api/google/connect/start' && r.start === r.went[0])
 check(`only known actions become a button (${JSON.stringify(r.known)})`,
       JSON.stringify(r.known) === JSON.stringify([true, false, false, false]))
+check(`a saved reply draws one app button, the app's own label, nothing from the saved label (${r.saved.slice(0, 60)}...)`,
+      (r.saved.match(/<button/g) || []).length === 1 && r.saved.includes('Connect your Google account')
+      && !r.saved.includes('evil') && !/<a[\s>]/i.test(r.saved))
 console.log(`\n${pass}/${total} passed`)
 process.exit(pass === total ? 0 : 1)

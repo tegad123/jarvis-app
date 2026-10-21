@@ -50,3 +50,21 @@ export function ChatActionButton({
     </button>
   )
 }
+
+/** Controls saved under a reply in history. Only known actions draw, with this file's own label and target. */
+export function SavedActions({
+  actions,
+  go,
+}: {
+  actions?: { action: string }[]
+  go?: (url: string) => void
+}) {
+  const known = [...new Set((actions ?? []).map((a) => a.action).filter(isChatAction))]
+  return (
+    <>
+      {known.map((a) => (
+        <ChatActionButton key={a} action={a} go={go} />
+      ))}
+    </>
+  )
+}

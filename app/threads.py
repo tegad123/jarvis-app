@@ -149,6 +149,11 @@ def init() -> None:
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(messages)")}
         if "attachments" not in cols:
             conn.execute("ALTER TABLE messages ADD COLUMN attachments TEXT")
+        # messages.actions: JSON array of the app's own chat controls shown
+        # under an assistant reply (app/agent_status.CHAT_ACTIONS), so a
+        # reload can draw them again. Never model text.
+        if "actions" not in cols:
+            conn.execute("ALTER TABLE messages ADD COLUMN actions TEXT")
 
         # direct_for: the person whose private line this is; NULL for channels.
         # A direct line is not a channel with one member — membership is
@@ -353,6 +358,11 @@ def get_history(thread_id: str, limit: Optional[int] = None) -> List[Dict[str, A
             ids = _json.loads(raw) if raw else []
         except Exception:
             ids = []
+        raw_acts = r["actions"] if "actions" in r.keys() else None
+        try:
+            acts = _json.loads(raw_acts) if raw_acts else []
+        except Exception:
+            acts = []
         out.append(
             {
                 "thread_id": r["thread_id"],
@@ -361,6 +371,7 @@ def get_history(thread_id: str, limit: Optional[int] = None) -> List[Dict[str, A
                 "ts": r["ts"],
                 "partial": bool(r["partial"]),
                 "attachments": ids,
+                "actions": acts,
             }
         )
     return out
@@ -577,9 +588,10 @@ def append_messages(thread_id: str, *messages: Dict[str, Any]) -> None:
             import json as _json
 
             att = m.get("attachments") or []
+            acts = m.get("actions") or []
             conn.execute(
-                "INSERT INTO messages (thread_id, role, content, ts, partial, attachments) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO messages (thread_id, role, content, ts, partial, attachments, actions) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     thread_id,
                     m["role"],
@@ -587,6 +599,7 @@ def append_messages(thread_id: str, *messages: Dict[str, Any]) -> None:
                     ts,
                     1 if m.get("partial") else 0,
                     _json.dumps(att) if att else None,
+                    _json.dumps(acts) if acts else None,
                 ),
             )
         if latest:

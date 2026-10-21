@@ -151,6 +151,22 @@ def shape_prompt(text: str) -> tuple:
     return "\n\n".join(out), kept, dropped
 
 
+ACTION_LABELS = {"connect_google": "Connect your Google account"}
+
+
+def action_ok(action: str, role: str) -> bool:
+    """Whether the app's control would work now for this person; a dead button is not shown."""
+    if action == "connect_google":
+        return google_state() != "connected" and can_connect(role)
+    return False
+
+
+def live_actions(actions: List[str], role: str) -> List[dict]:
+    """Saved controls still worth drawing for this reader, as {action, label}."""
+    return [{"action": a, "label": ACTION_LABELS[a]} for a in actions
+            if a in CHAT_ACTIONS and a in ACTION_LABELS and action_ok(a, role)]
+
+
 def strip_disallowed(tools: List[dict]) -> tuple:
     """(kept, stripped names) for an Anthropic request's tools array."""
     kept, stripped = [], []
