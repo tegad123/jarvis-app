@@ -21,7 +21,6 @@ import glob
 import json
 import os
 import platform
-import plistlib
 import re
 import sqlite3
 import subprocess
@@ -253,6 +252,7 @@ def cmd_run(a):
 
 
 def cmd_install(a):
+    import plistlib  # noqa: PLC0415  (some Homebrew Pythons ship a broken pyexpat; only install needs it)
     py = os.path.realpath(sys.executable)
     me = os.path.realpath(__file__)
     logs = os.path.join(HOME, "Library", "Logs", "jarvis-imessage.log")
