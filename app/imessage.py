@@ -31,6 +31,7 @@ log = logging.getLogger("jarvis.imessage")
 
 broker_router = APIRouter(prefix="/api/broker")
 router = APIRouter(prefix="/api/mac")
+settings_router = APIRouter(prefix="/api/imessage")
 
 CODE_MINUTES = 10
 RETENTION_DAYS = 30
@@ -223,25 +224,25 @@ async def post_messages(request: Request, authorization: str = Header(default=""
     return out
 
 
-# ── each person's own Settings ───────────────────────────────────────────────
+# ── each person's own Settings (never under /api/mac: Cloudflare lets only the Mac's token reach that) ──
 
 def _person(sess: dict) -> str:
     auth.require_person(sess)
     return str(auth.person_of(sess))
 
 
-@router.get("/status")
+@settings_router.get("/status")
 def get_status(sess: dict = Depends(auth.current_session)):
     who = _person(sess)
     return {"devices": devices(who), "messages": message_count(who), "retention_days": RETENTION_DAYS}
 
 
-@router.post("/pair")
+@settings_router.post("/pair")
 def post_pair(sess: dict = Depends(auth.current_session)):
     return new_code(_person(sess))
 
 
-@router.delete("/devices/{device_id}")
+@settings_router.delete("/devices/{device_id}")
 def delete_device(device_id: str, sess: dict = Depends(auth.current_session)):
     if not disconnect(_person(sess), device_id):
         raise HTTPException(status_code=404, detail="No connected Mac with that id.")

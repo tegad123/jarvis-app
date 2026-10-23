@@ -151,7 +151,7 @@ if os.environ.get("CANARY") == "1":
     imessage.search = lambda person, *a, **k: real("omar", *a, **k)
 SCR, HELPER, PLUGIN = pathlib.Path(os.environ["SCR"]), os.environ["HELPER"], os.environ["PLUGIN"]
 WORD = os.environ["WORD"]
-app = FastAPI(); app.include_router(imessage.broker_router); app.include_router(imessage.router)
+app = FastAPI(); app.include_router(imessage.broker_router); app.include_router(imessage.router); app.include_router(imessage.settings_router)
 SESS = {}
 app.dependency_overrides[auth.current_session] = lambda: SESS
 def as_person(key, role):
@@ -182,7 +182,7 @@ conn = imessage._db()
 conn.execute("INSERT INTO mac_pairings (code_hash, person_key, expires_at) VALUES (?,?,?)",
              (imessage._hash("ZZZZYYYY"), "omar", "2000-01-01T00:00:00+00:00")); conn.commit()
 out["claim_expired"] = c.post("/api/mac/claim", json={"code": "ZZZZ-YYYY"}).status_code
-code = c.post("/api/mac/pair").json()["code"]
+code = c.post("/api/imessage/pair").json()["code"]
 out["pair_omar"] = list(helper("omar", "pair", "--server", URL, "--code", code, "--name", "Omar's MacBook"))
 out["claim_reused"] = c.post("/api/mac/claim", json={"code": code}).status_code
 cfg = json.loads((SCR / "omar" / "helper.json").read_text())
@@ -197,10 +197,10 @@ raw = b"".join(r["text_cipher"] for r in conn.execute("SELECT text_cipher FROM i
 out["at_rest"] = [WORD.encode() in raw, any(WORD in t["text"] for t in imessage.search("omar", days=30, limit=50))]
 
 as_person("dana", "owner")
-code = c.post("/api/mac/pair").json()["code"]
+code = c.post("/api/imessage/pair").json()["code"]
 out["pair_dana"] = list(helper("dana", "pair", "--server", URL, "--code", code))
 out["sync_dana"] = list(helper("dana", "sync"))
-out["status_dana"] = c.get("/api/mac/status").json()
+out["status_dana"] = c.get("/api/imessage/status").json()
 
 refs = {w: actor_refs.mint(w, f"t-{w}", r) for w, r in (("dana", "owner"), ("omar", "member"), ("priya", "admin"))}
 def read(who, run, **kw):
@@ -240,13 +240,14 @@ o_av, o_txt = told("omar", "member"); p_av, p_txt = told("priya", "admin"); op_a
 out["agent"] = [o_av, "Mac is connected" in o_txt and "cannot send" in o_txt, p_av,
                 "isn't connected" in p_txt, op_av]
 as_person(None, "operator")
-out["operator"] = [c.get("/api/mac/status").status_code, c.post("/api/mac/pair").status_code]
-paths = [r.path for r in imessage.router.routes + imessage.broker_router.routes]
+out["operator"] = [c.get("/api/imessage/status").status_code, c.post("/api/imessage/pair").status_code]
+paths = [r.path for r in imessage.router.routes + imessage.settings_router.routes + imessage.broker_router.routes]
+out["mac_prefix"] = sorted(p for p in paths if p.startswith("/api/mac/"))
 out["send_routes"] = [p for p in paths if "send" in p.lower()] + ([] if "/api/mac/messages" in paths else ["?"])
 
 as_person("omar", "member")
 dana_before = imessage.message_count("dana")
-out["disconnect"] = c.delete(f"/api/mac/devices/{cfg['device_id']}").status_code
+out["disconnect"] = c.delete(f"/api/imessage/devices/{cfg['device_id']}").status_code
 out["after_disconnect"] = [imessage.message_count("omar"), imessage.message_count("dana") - dana_before]
 out["sync_revoked"] = list(helper("omar", "sync"))
 out["post_revoked"] = c.post("/api/mac/messages", json={"messages": []},
@@ -346,6 +347,8 @@ def main() -> int:
     ck("priya has the tool but is told no Mac is connected", o["agent"][2] and o["agent"][3], o["agent"])
     ck("the operator has no iMessage tool", o["agent"][4] is False, o["agent"])
     ck("the operator gets no Mac routes", all(x == 403 for x in o["operator"]), o["operator"])
+    ck("only the Mac's two routes sit under /api/mac (the Cloudflare service-token path)",
+       o["mac_prefix"] == ["/api/mac/claim", "/api/mac/messages"], o["mac_prefix"])
     ck("there is no send route", o["send_routes"] == [], o["send_routes"])
     print("disconnecting:")
     ck("disconnect works", o["disconnect"] == 200, o["disconnect"])

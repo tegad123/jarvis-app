@@ -238,15 +238,15 @@ export function deleteWebsiteLogin(site: string): Promise<{ ok: boolean }> {
 }
 
 export function getMacStatus(): Promise<MacStatus> {
-  return requestOk('/api/mac/status')
+  return requestOk('/api/imessage/status')
 }
 
 export function newMacCode(): Promise<{ code: string; expires_at: string }> {
-  return requestOk('/api/mac/pair', { method: 'POST' })
+  return requestOk('/api/imessage/pair', { method: 'POST' })
 }
 
 export function disconnectMac(deviceId: string): Promise<{ ok: boolean }> {
-  return requestOk(`/api/mac/devices/${encodeURIComponent(deviceId)}`, { method: 'DELETE' })
+  return requestOk(`/api/imessage/devices/${encodeURIComponent(deviceId)}`, { method: 'DELETE' })
 }
 
 /* --------------------------------------------------------------------- feed */
