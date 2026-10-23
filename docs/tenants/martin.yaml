@@ -1,4 +1,4 @@
-# Martin's own Jarvis, practice mode (shadow): every write is held and logged, nothing is sent.
+# Martin's own Jarvis, out of practice mode (2026-10-23): every email and calendar event waits for the owner's tap in Approvals.
 # Names are provisional (the agent may rename; --reconfigure applies it). Mailbox and owner address
 # are .invalid placeholders: connecting a real Google account is a STOP gate (decisions.md).
 # Discord ids are fixture values; no guild is connected.
@@ -22,14 +22,14 @@ outbound_suffix_policy: production
 skill_loadout: base
 skill_loadout_optional: []
 skills_origin_sha: b8c2d1f164b6e2fd97f4dc6347b2ad4230c3388e
-app_origin_sha: dd0626beb04d7a6bdb3c6fdd807fcdca5735f9f3
+app_origin_sha: 8dd4d0a101ad2bac45501b52090b0972821bbc37
 curator_packs: omit
 writes_posture: blocked
 agent_model: claude-sonnet-5-5
 background_model: claude-haiku-5-5
 venv: platform
 isolation: two_user
-sentinel_mode: shadow
+sentinel_mode: enforce
 backup:
   destination: /root/backups/martin
   keep_daily: 14
