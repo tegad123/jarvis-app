@@ -4,13 +4,12 @@ import Chrome from './components/Chrome'
 import TabBar, { canSeeSettings, type TabId } from './components/TabBar'
 import Approvals from './screens/Approvals'
 import Ask from './screens/Ask'
-import Computer from './screens/Computer'
 import Feed from './screens/Feed'
 import Leads from './screens/Leads'
 import Login from './screens/Login'
 import Settings from './screens/Settings'
 import Tasks from './screens/Tasks'
-import { Unauthorized, getBrowserStatus, getSession, logout } from './lib/api'
+import { Unauthorized, getSession, logout } from './lib/api'
 import { applyTheme, initialTheme, type Theme } from './lib/theme'
 import type { Role } from './lib/types'
 
@@ -23,7 +22,6 @@ export default function App() {
   const [auth, setAuth] = useState<AuthState>({ status: 'checking' })
   const [tab, setTab] = useState<TabId>('feed')
   const [theme, setTheme] = useState<Theme>(() => initialTheme())
-  const [browserOn, setBrowserOn] = useState(false)
 
   useEffect(() => {
     applyTheme(theme)
@@ -57,14 +55,6 @@ export default function App() {
   useEffect(() => {
     void check()
   }, [check])
-
-  const person = auth.status === 'in' && auth.role !== 'operator'
-  useEffect(() => {
-    if (!person) return setBrowserOn(false)
-    getBrowserStatus()
-      .then((st) => setBrowserOn(st.enabled))
-      .catch(() => setBrowserOn(false))
-  }, [person])
 
   const signOut = useCallback(async () => {
     await logout()
@@ -155,10 +145,6 @@ export default function App() {
           <Leads personKey={auth.personKey} onUnauthorized={() => setAuth({ status: 'out' })} />
         )}
 
-        {tab === 'computer' && auth.role !== 'operator' && (
-          <Computer onUnauthorized={() => setAuth({ status: 'out' })} />
-        )}
-
         {tab === 'settings' && canSeeSettings(auth.role) && (
           <Settings
             role={auth.role}
@@ -168,7 +154,7 @@ export default function App() {
        </div>
       </main>
 
-      <TabBar active={tab} onChange={onTab} role={auth.role} showComputer={browserOn} />
+      <TabBar active={tab} onChange={onTab} role={auth.role} />
     </div>
   )
 }

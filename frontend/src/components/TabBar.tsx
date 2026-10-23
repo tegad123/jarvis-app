@@ -1,7 +1,7 @@
 import AsteriskMark from './AsteriskMark'
 import type { Role } from '../lib/types'
 
-export type TabId = 'feed' | 'ask' | 'approvals' | 'leads' | 'tasks' | 'computer' | 'settings'
+export type TabId = 'feed' | 'ask' | 'approvals' | 'leads' | 'tasks' | 'settings'
 
 /** Settings is owner/admin only. Members see no tab. Operators observe; they
  *  do not connect or disconnect the tenant mailbox. */
@@ -17,8 +17,6 @@ interface Props {
   active: TabId
   onChange: (tab: TabId) => void
   role: Role
-  /** Each person's own browser tab; the app asks the server whether it is switched on. */
-  showComputer?: boolean
 }
 
 const ICON = { width: 22, height: 22, viewBox: '0 0 24 24', fill: 'none' } as const
@@ -79,16 +77,6 @@ const TABS: { id: TabId; label: string; icon: JSX.Element }[] = [
     ),
   },
   {
-    id: 'computer',
-    label: 'Computer',
-    icon: (
-      <svg {...ICON} aria-hidden="true">
-        <rect x="3.5" y="5" width="17" height="11" rx="2" {...S} strokeLinejoin="round" />
-        <path d="M9 19.5h6M12 16v3.5" {...S} />
-      </svg>
-    ),
-  },
-  {
     id: 'settings',
     label: 'Settings',
     icon: (
@@ -103,9 +91,9 @@ const TABS: { id: TabId; label: string; icon: JSX.Element }[] = [
   },
 ]
 
-export default function TabBar({ active, onChange, role, showComputer = false }: Props) {
+export default function TabBar({ active, onChange, role }: Props) {
   const tabs = TABS.filter(
-    (t) => (t.id !== 'settings' || canSeeSettings(role)) && (t.id !== 'computer' || (showComputer && role !== 'operator')),
+    (t) => t.id !== 'settings' || canSeeSettings(role),
   )
   return (
     // ONE nav, two shapes. Bottom bar on mobile (thumb reach); a narrow LEFT

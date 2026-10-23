@@ -107,8 +107,8 @@ _CAN = {
 _CAN_LIVE = {
     "add_calendar_event": "put things on their calendar, each one only after they tap Approve in the Approvals tab",
     "draft_email": "send emails from their Gmail, each one only after they tap Approve in the Approvals tab",
-    "browser_click": "click, type and sign in on a website once they approve the task for that site in the "
-                     "Approvals tab (30 minutes at a time); payments, purchases and deleting anything always get "
+    "browser_click": "click, type and sign in on a website once they allow the task for that site in the "
+                     "browser window in the chat (30 minutes at a time); payments, purchases and deleting anything always get "
                      "their own approval",
 }
 
@@ -138,11 +138,11 @@ def render(st: dict, name: str) -> str:
         lines.append("- Mode: live. Every email and calendar event waits in the Approvals tab and happens only when "
                      "the owner taps Approve there.")
     if "browser_open" in st["available"]:
-        lines.append("- Web browser: you have one, signed in as them where they saved a login. Reading pages needs "
-                     "no approval. Before clicking, typing or signing in on a site, call browser_request_access "
-                     "once with the whole task; it waits in the Approvals tab. Never ask for or type a password: "
-                     "browser_login uses the saved login. For a code or a CAPTCHA, ask them to take over from the "
-                     "Computer tab.")
+        lines.append("- Web browser: you have one, and they watch it live in a small window in this chat. Reading "
+                     "pages needs no approval. Before clicking, typing or signing in on a site, call "
+                     "browser_request_access once with the whole task; they allow it right in that window. Never "
+                     "ask for or type a password: browser_login uses a saved login, and otherwise they sign in "
+                     "themselves by tapping Take over in the window. Do the same for a code or a CAPTCHA.")
     lines.append("- You can do right now: " + ("; ".join(can) if can else "nothing yet") + ".")
     if later:
         lines.append("- Once Google is connected you could also: " + "; ".join(later) + ".")

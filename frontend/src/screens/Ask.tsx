@@ -28,6 +28,7 @@ import { ACCEPT_ATTR, MAX_UPLOAD_BYTES, humanSize, prepareForUpload } from '../l
 import type { VoiceState } from '../lib/voice'
 import type { Attachment, ChatMessage, Role, Thread, ThreadMember } from '../lib/types'
 import type { Person } from '../lib/api'
+import BrowserWindow from '../components/BrowserWindow'
 
 const EXAMPLE_PROMPTS = [
   'Which emails need me today?',
@@ -744,6 +745,10 @@ export default function Ask({ role, personKey, onUnauthorized }: Props) {
           <ChatActionButton key={a} action={a} />
         ))}
       </div>
+      )}
+
+      {!structureOnly && (
+        <BrowserWindow busy={streaming} onUnauthorized={onUnauthorized} />
       )}
 
       {/* No composer for an operator: break-glass looks, it does not speak.
