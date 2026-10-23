@@ -698,6 +698,12 @@ async def post_google_person(request: Request):
         return JSONResponse(status_code=403, content={"error": "owner_only",
                                                       "detail": "Only the owner can approve actions."})
     _require_sentinel()
+    from . import google_connection  # noqa: PLC0415
+    if sentinel_mode() != SHADOW and google_connection.person_status(person)["status"] != "connected":
+        # Never file an approval that could only fail when approved.
+        _bump("broker_google_person_not_connected")
+        return JSONResponse(status_code=409, content={"error": "not_connected",
+                                                      "detail": "Their Google account isn't connected."})
     status, content = await run_in_threadpool(gate_google, api, version, method, params, ctx, None, person)
     return content if status == 200 else JSONResponse(status_code=status, content=content)
 

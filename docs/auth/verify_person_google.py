@@ -234,6 +234,11 @@ before = len(sends())
 res = broker.execute_approved(platform_store.get_approval(aid2), "always", "dana")
 out["wide_scope"] = [res.get("grant_id"), len(sends()) - before,
                      len(platform_store.active_grants(broker.OWNER, "gmail", ""))]
+rz = actor_refs.mint("zed", "t-zed", "owner")
+pz = approvals.query(status="pending")["count"]
+code, body = post(rz, "gmail", "v1", "users.messages.send",
+                  {"userId": "me", "body": {"raw": raw_mail("client@example.com", "x", "y")}})
+out["unconnected_owner"] = [code, body.get("error"), approvals.query(status="pending")["count"] - pz]
 captured = {}
 broker.gate_google = lambda *a, **k: (captured.update(k) or (200, {"action_id": 1}))
 broker.switches.on = lambda name: True
@@ -361,6 +366,8 @@ def main() -> int:
     ck(f"a rejected event is never added ({res.get('after_reject')} inserts)", res.get("after_reject") == 0)
     ck(f"a wider scope asked for a personal action runs it once and makes no grant ({res.get('wide_scope')})",
        res.get("wide_scope") == [None, 1, 0])
+    ck(f"an owner whose Google isn't connected is told so, and no approval is filed ({res.get('unconnected_owner')})",
+       res.get("unconnected_owner") == [409, "not_connected", 0])
 
     code, _, _ = curl("/api/google/connection/disconnect", omar, "POST")
     ck(f"omar's disconnect leaves dana's row (HTTP {code})", code == 200 and "dana" in rows()["person_google"])

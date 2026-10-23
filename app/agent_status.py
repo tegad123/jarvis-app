@@ -59,13 +59,22 @@ def permitted(person_key: str) -> List[str]:
     return [n for n, t in TOOLS.items() if t["authz"] is None or authz.check(person_key, t["authz"])[0]]
 
 
+# In practice mode an email is only shown, so it needs no account; live, it is
+# sent from the person's own Gmail.
+LIVE_NEEDS_GOOGLE = ("draft_email",)
+
+
 def status(role: str, person_key: str = "") -> dict:
     g = google_state(person_key)
     mine = permitted(person_key)
-    return {"google": g, "mode": "practice" if practice() else "live", "role": role,
+    mode = "practice" if practice() else "live"
+
+    def needs(n: str) -> bool:
+        return "google" in TOOLS[n]["needs"] or (mode == "live" and n in LIVE_NEEDS_GOOGLE)
+    return {"google": g, "mode": mode, "role": role,
             "can_connect": can_connect(role),
-            "available": [n for n in mine if "google" not in TOOLS[n]["needs"] or g == "connected"],
-            "needs_google": [n for n in mine if "google" in TOOLS[n]["needs"] and g != "connected"],
+            "available": [n for n in mine if not needs(n) or g == "connected"],
+            "needs_google": [n for n in mine if needs(n) and g != "connected"],
             "owner_only": [n for n in TOOLS if n not in mine]}
 
 

@@ -209,8 +209,6 @@ def search_email(a):
 def draft_email(a):
     if not actor("draft_email", a["to"]):
         return
-    if not google_connected():
-        return needs_google()
     msg = EmailMessage()
     msg["To"], msg["Subject"] = str(a["to"])[:320], str(a["subject"])[:200]
     msg.set_content(str(a["body"])[:20000])

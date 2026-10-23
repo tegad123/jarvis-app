@@ -144,13 +144,23 @@ def main() -> int:
                      headers={"Authorization": f"Bearer {agent_key}"}, timeout=20)
     check(f"the agent's key cannot decide an approval (got {dec.status_code})", dec.status_code == 401)
 
-    print("── posture: blocked, writes off everywhere")
+    preflight = (OPT / f"{slug}_preflight.sh").read_text()
+    live_writes = 'LIVE_WRITES="approved"' in preflight
     app_env, gw_env = proc_env(app_pid), proc_env(gw_pid)
-    check("app process has no JARVIS_ALLOW_WRITES", "JARVIS_ALLOW_WRITES" not in app_env)
-    check("gateway process has no JARVIS_ALLOW_WRITES", "JARVIS_ALLOW_WRITES" not in gw_env)
     runtime = json.loads((S / "_shared/runtime.json").read_text())
-    check("runtime.safety.allow_writes is false", (runtime.get("safety") or {}).get("allow_writes") is False)
-    check("preflight says POSTURE=\"blocked\"", 'POSTURE="blocked"' in (OPT / f"{slug}_preflight.sh").read_text())
+    if live_writes:
+        print("── posture: live writes approved in the manifest, armed on the app only")
+        check("app process has JARVIS_ALLOW_WRITES=1", app_env.get("JARVIS_ALLOW_WRITES") == "1")
+        check("gateway process has no JARVIS_ALLOW_WRITES", "JARVIS_ALLOW_WRITES" not in gw_env)
+        check("runtime.safety.allow_writes is false (background jobs stay unarmed)",
+              (runtime.get("safety") or {}).get("allow_writes") is False)
+        check("preflight says POSTURE=\"live\" and LIVE_WRITES=\"approved\"", 'POSTURE="live"' in preflight)
+    else:
+        print("── posture: blocked, writes off everywhere")
+        check("app process has no JARVIS_ALLOW_WRITES", "JARVIS_ALLOW_WRITES" not in app_env)
+        check("gateway process has no JARVIS_ALLOW_WRITES", "JARVIS_ALLOW_WRITES" not in gw_env)
+        check("runtime.safety.allow_writes is false", (runtime.get("safety") or {}).get("allow_writes") is False)
+        check("preflight says POSTURE=\"blocked\"", 'POSTURE="blocked"' in preflight)
 
     print("── the agent cannot read app secrets (runuser, then the unit's sandbox)")
     for f in (PRIV / "oauth_client.json", PRIV / "jarvis_accounts.db", PRIV / "jarvis_threads.db", ENVF,
@@ -341,7 +351,14 @@ def main() -> int:
         p = H / "state/activity_feed.jsonl"
         return [json.loads(x) for x in p.read_text().splitlines() if x.strip()] if p.exists() else []
     f0 = len(feed_lines())
-    refusal_counter = "broker_sentinel_shadowed" if mode == "shadow" else "broker_google_write_refused"
+    asks = live_writes and mode == "enforce"
+    refusal_counter = ("broker_sentinel_shadowed" if mode == "shadow" else
+                       "broker_sentinel_ask" if asks else "broker_google_write_refused")
+
+    def pending_ids():
+        with psycopg.connect(host="/var/run/postgresql", user="postgres", dbname=f"jarvis_{slug}") as c:
+            return [r[0] for r in c.execute("SELECT id FROM approvals WHERE status = 'pending'").fetchall()]
+    p0 = pending_ids()
     a0, w0, b0 = (counter("google_creds_tokens_app_side"), counter(refusal_counter),
                   counter("prove_isolation_broker_bump"))
     l0 = len(ledger_lines())
@@ -352,16 +369,26 @@ def main() -> int:
           agent_out.get("raised") == "TokensAreAppSide")
     check("…counted through the broker (google_creds_tokens_app_side +1)",
           counter("google_creds_tokens_app_side") - a0 == 1)
-    want_exc = "ActionHeld" if mode == "shadow" else "WritesDisabled"
+    want_exc = "ActionHeld" if mode == "shadow" or asks else "WritesDisabled"
     check(f"agent send through the broker is not executed: {want_exc} (got {agent_out.get('send')})",
           agent_out.get("send") == want_exc)
     check(f"…counted app-side ({refusal_counter} +1)", counter(refusal_counter) - w0 == 1)
     new = ledger_lines()[l0:]
-    want_outcome = "shadowed" if mode == "shadow" else "writes_disabled"
+    want_outcome = "shadowed" if mode == "shadow" else "approval_required" if asks else "writes_disabled"
     check(f"…one audit row, outcome {want_outcome}, class external_send (.invalid is outside the org)",
           [(e["outcome"], e["action_class"]) for e in new] == [(want_outcome, "external_send")])
     check("…the audit row holds no message body",
           all("probe@isolation" not in json.dumps(e["detail"] or {}) for e in new) and new)
+    filed = [i for i in pending_ids() if i not in p0]
+    if asks:
+        check(f"…it waits for the owner as one pending approval ({len(filed)})", len(filed) == 1)
+        with psycopg.connect(host="/var/run/postgresql", user="postgres", dbname=f"jarvis_{slug}") as c:
+            n = c.execute("UPDATE approvals SET status='rejected', decided_at=now(), decided_by='prove_isolation', "
+                          "decision_json=%s WHERE id = ANY(%s) AND status='pending'",
+                          (json.dumps({"scope": "once", "via": "prove_isolation"}), filed)).rowcount
+        check(f"…and this proof's own approval is rejected, so it never runs ({n})", n == len(filed) == 1)
+    else:
+        check(f"…and files no approval ({len(filed)})", not filed)
     if mode == "shadow":
         check("…and the full proposal is kept in held_actions for the owner", [e["held"] for e in new] == [True])
         wh = [f for f in feed_lines()[f0:] if f.get("kind") == "sentinel.would_have"]
