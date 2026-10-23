@@ -1705,8 +1705,10 @@ def upgrade(manifest_path: Path, restart_approved: bool) -> None:
         run(["systemctl", "start", *units])
         bad = wait_healthy(slug, ports)
         for u in units:
-            if unit_env_has(u, "JARVIS_ALLOW_WRITES"):
+            if unit_env_has(u, "JARVIS_ALLOW_WRITES") and u not in armed_ok:
                 bad.append(f"{u} has JARVIS_ALLOW_WRITES after upgrade")
+            elif u in armed_ok and not unit_env_has(u, "JARVIS_ALLOW_WRITES"):
+                bad.append(f"{u} lacks JARVIS_ALLOW_WRITES although live_writes is approved")
         if bad:
             die(f"{slug} not healthy within {UPGRADE_TIMEOUT}s after upgrade: {bad}")
         if enabled_timers:
