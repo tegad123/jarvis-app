@@ -25,6 +25,7 @@ SPEC = json.loads(SPEC_PATH.read_text())
 TOOLS: Dict[str, dict] = {t["name"]: t for t in SPEC["tools"]}
 ALLOWED = frozenset(TOOLS)
 BROWSER_TOOLS = frozenset(n for n, t in TOOLS.items() if "browser" in t["needs"])
+PERSONAL_TOOLS = BROWSER_TOOLS | {"imessage_search"}
 CONNECT_ROLES = ("owner", "admin", "member")
 CHAT_ACTIONS = ("connect_google",)
 WORKING = "Working on it"
@@ -76,17 +77,24 @@ def allowed_now() -> frozenset:
     return ALLOWED if browser_on() else ALLOWED - BROWSER_TOOLS
 
 
+def mac_connected(person_key: str) -> bool:
+    if not person_key:
+        return False
+    from . import imessage  # noqa: PLC0415
+    return bool(imessage.devices(person_key))
+
+
 def status(role: str, person_key: str = "") -> dict:
     g = google_state(person_key)
     mode = "practice" if practice() else "live"
     hidden = set() if browser_on() else set(BROWSER_TOOLS)
     # Each person's browser is their own; someone who is nobody has none.
-    barred = set() if person_key else set(BROWSER_TOOLS) - hidden
+    barred = set() if person_key else set(PERSONAL_TOOLS) - hidden
     mine = [n for n in permitted(person_key) if n not in hidden and n not in barred]
 
     def needs(n: str) -> bool:
         return "google" in TOOLS[n]["needs"] or (mode == "live" and n in LIVE_NEEDS_GOOGLE)
-    return {"google": g, "mode": mode, "role": role,
+    return {"google": g, "mode": mode, "role": role, "mac": mac_connected(person_key),
             "can_connect": can_connect(role),
             "available": [n for n in mine if not needs(n) or g == "connected"],
             "needs_google": [n for n in mine if needs(n) and g != "connected"],
@@ -102,6 +110,7 @@ _CAN = {
     "search_email": "look through email",
     "draft_email": "write emails for them to look over before anything is sent",
     "browser_open": "open and read any public website in their own browser",
+    "imessage_search": "read their own iMessages and texts, synced from their Mac (reading only, never sending)",
     "browser_click": "show what you would click and type on a website (practice mode: nothing is clicked)",
 }
 _CAN_LIVE = {
@@ -143,6 +152,11 @@ def render(st: dict, name: str) -> str:
                      "browser_request_access once with the whole task; they allow it right in that window. Never "
                      "ask for or type a password: browser_login uses a saved login, and otherwise they sign in "
                      "themselves by tapping Take over in the window. Do the same for a code or a CAPTCHA.")
+    if "imessage_search" in st["available"]:
+        lines.append("- iMessage: " + ("their Mac is connected, so imessage_search reads their texts from the last 30 "
+                                       "days. You cannot send texts; say so if asked." if st.get("mac")
+                                       else "their Mac isn't connected yet. If they ask about their texts, tell them to "
+                                            "open Settings, find iMessage, and tap Connect a Mac. You cannot send texts."))
     lines.append("- You can do right now: " + ("; ".join(can) if can else "nothing yet") + ".")
     if later:
         lines.append("- Once Google is connected you could also: " + "; ".join(later) + ".")

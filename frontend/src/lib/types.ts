@@ -291,6 +291,19 @@ export interface BrowserInput {
   url?: string
 }
 
+export interface MacDevice {
+  device_id: string
+  name: string
+  created_at: string
+  last_sync_at: string | null
+}
+
+export interface MacStatus {
+  devices: MacDevice[]
+  messages: number
+  retention_days: number
+}
+
 export interface WebsiteLogin {
   site: string
   username: string

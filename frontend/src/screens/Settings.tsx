@@ -6,13 +6,16 @@ import {
   Unauthorized,
   deleteWebsiteLogin,
   disconnectGoogleConnection,
+  disconnectMac,
   getBrowserStatus,
   getGoogleConnection,
+  getMacStatus,
   getWebsiteLogins,
+  newMacCode,
   saveWebsiteLogin,
 } from '../lib/api'
 import { absoluteTime, relativeTime } from '../lib/time'
-import type { GoogleConnectionStatus, Role, WebsiteLogin } from '../lib/types'
+import type { GoogleConnectionStatus, MacStatus, Role, WebsiteLogin } from '../lib/types'
 
 /**
  * Settings — the signed-in person's own Google account. Any person; never the
@@ -209,12 +212,126 @@ export default function Settings({ role, onUnauthorized }: Props) {
       </div>
 
       {role !== 'operator' && <WebsiteLogins onUnauthorized={onUnauthorized} />}
+      {role !== 'operator' && <MacMessages onUnauthorized={onUnauthorized} />}
     </section>
   )
 }
 
 /** Saved website logins for Jarvis's browser. The API never returns a
  *  password; the browser types it into the site's own form. */
+function MacMessages({ onUnauthorized }: { onUnauthorized: () => void }) {
+  const [st, setSt] = useState<MacStatus | null>(null)
+  const [code, setCode] = useState<{ code: string; expires_at: string } | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    try {
+      setSt(await getMacStatus())
+    } catch (err) {
+      if (err instanceof Unauthorized) return onUnauthorized()
+      setError(err instanceof ApiError ? err.message : 'Could not read the Mac connection.')
+    }
+  }, [onUnauthorized])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  useEffect(() => {
+    if (!code) return
+    const t = window.setInterval(() => void load(), 4000)
+    return () => window.clearInterval(t)
+  }, [code, load])
+
+  useEffect(() => {
+    if (code && st && st.devices.length > 0) setCode(null)
+  }, [code, st])
+
+  async function pair() {
+    setBusy(true)
+    setError(null)
+    try {
+      setCode(await newMacCode())
+    } catch (err) {
+      if (err instanceof Unauthorized) return onUnauthorized()
+      setError(err instanceof ApiError ? err.message : 'Could not make a code.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function remove(id: string) {
+    setBusy(true)
+    try {
+      await disconnectMac(id)
+      await load()
+    } catch (err) {
+      if (err instanceof Unauthorized) return onUnauthorized()
+      setError(err instanceof ApiError ? err.message : 'Could not disconnect that Mac.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!st) return error ? <p className="mt-5 text-body-s text-light-alert dark:text-dark-alert">{error}</p> : null
+
+  return (
+    <div className="glass-featured mt-5 rounded-card px-4 py-4 lg:px-6 lg:py-5">
+      <h3 className="text-row-title">iMessage</h3>
+      <p className="mt-1 text-body-s text-light-text-secondary dark:text-dark-text-secondary">
+        A small helper on your Mac lets Jarvis read your texts from the last {st.retention_days} days. Reading only:
+        Jarvis can’t send a text. Disconnecting deletes everything it synced.
+      </p>
+      {error && <p className="mt-2 text-body-s text-light-alert dark:text-dark-alert">{error}</p>}
+      {st.devices.length > 0 && (
+        <ul className="mt-3 grid gap-2">
+          {st.devices.map((d) => (
+            <li key={d.device_id} className="flex min-w-0 items-center gap-3">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-body-s text-light-text-primary dark:text-dark-text-primary">{d.name}</p>
+                <p className="truncate text-caption text-light-text-muted dark:text-dark-text-muted">
+                  {st.messages} messages
+                  {d.last_sync_at ? ` · synced ${relativeTime(d.last_sync_at)}` : ' · waiting for the first sync'}
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void remove(d.device_id)}
+                className="text-caption text-light-text-muted underline-offset-2 hover:underline dark:text-dark-text-muted"
+              >
+                Disconnect
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {code ? (
+        <div className="mt-4 text-body-s text-light-text-secondary dark:text-dark-text-secondary">
+          <p>On your Mac, run the Jarvis helper’s pair command with this code:</p>
+          <p className="mt-2 font-mono text-[22px] tracking-widest text-light-text-primary dark:text-dark-text-primary">
+            {code.code}
+          </p>
+          <p className="mt-1 text-caption text-light-text-muted dark:text-dark-text-muted">
+            Works once, until {absoluteTime(code.expires_at)}.
+          </p>
+        </div>
+      ) : (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void pair()}
+          className="mt-4 rounded-pill bg-light-accent px-5 py-2.5 text-body font-semibold text-white shadow-accent-btn
+                     disabled:opacity-50 dark:bg-dark-accent-fill"
+        >
+          {st.devices.length > 0 ? 'Connect another Mac' : 'Connect a Mac'}
+        </button>
+      )}
+    </div>
+  )
+}
+
 function WebsiteLogins({ onUnauthorized }: { onUnauthorized: () => void }) {
   const [enabled, setEnabled] = useState(false)
   const [logins, setLogins] = useState<WebsiteLogin[]>([])

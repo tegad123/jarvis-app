@@ -32,6 +32,7 @@ import type {
   Task,
   TasksResponse,
   LoginResponse,
+  MacStatus,
   SessionResponse,
   Attachment,
   Thread,
@@ -234,6 +235,18 @@ export function saveWebsiteLogin(site: string, username: string, password: strin
 
 export function deleteWebsiteLogin(site: string): Promise<{ ok: boolean }> {
   return requestOk(`/api/browser/logins/${encodeURIComponent(site)}`, { method: 'DELETE' })
+}
+
+export function getMacStatus(): Promise<MacStatus> {
+  return requestOk('/api/mac/status')
+}
+
+export function newMacCode(): Promise<{ code: string; expires_at: string }> {
+  return requestOk('/api/mac/pair', { method: 'POST' })
+}
+
+export function disconnectMac(deviceId: string): Promise<{ ok: boolean }> {
+  return requestOk(`/api/mac/devices/${encodeURIComponent(deviceId)}`, { method: 'DELETE' })
 }
 
 /* --------------------------------------------------------------------- feed */

@@ -289,6 +289,27 @@ def browser(op: str, args: dict) -> None:
     out(**res)
 
 
+IMESSAGE_SAY = {
+    "no_mac": "Their Mac isn't connected, so you can't read their texts yet. Tell them: in Settings, under iMessage, "
+              "tap Connect a Mac and follow the steps on their Mac. Texts stay on their Mac until then.",
+}
+
+
+def imessage_search(a):
+    payload = {"ref": os.environ.get("JARVIS_ACTOR_MSG", ""),
+               **{k: a[k] for k in ("query", "contact", "days", "limit") if a.get(k) not in (None, "")}}
+    try:
+        r = app_broker.call("imessage", payload, timeout=30)
+    except app_broker.BrokerError as exc:
+        b = exc.body if isinstance(exc.body, dict) else {}
+        if b.get("error") in IMESSAGE_SAY:
+            return out(ok=False, say=IMESSAGE_SAY[b["error"]])
+        return out(ok=False, say="I couldn't read their texts just now. Say so plainly.")
+    msgs = r.get("messages") or []
+    out(ok=True, note=r.get("note"), messages=msgs,
+        say=None if msgs else "Nothing matched in the texts synced from their Mac (the last 30 days).")
+
+
 def browser_open(a):
     browser("open", a)
 
@@ -340,7 +361,7 @@ def connect_google(a):
 ACTIONS = {f.__name__: f for f in (list_tasks, add_task, complete_task, calendar_upcoming, add_calendar_event,
                                    search_email, draft_email, connect_google, browser_open, browser_read,
                                    browser_scroll, browser_back, browser_click, browser_type, browser_press,
-                                   browser_login, browser_request_access)}
+                                   browser_login, browser_request_access, imessage_search)}
 
 if __name__ == "__main__":
     name = sys.argv[1] if len(sys.argv) > 1 else ""
