@@ -24,11 +24,10 @@ TIMEOUT_S = 90
 FAILED = json.dumps({"ok": False, "say": "Something went wrong on my side, so I couldn't do that just now. "
                                           "Nothing was changed."})
 # A proposal that came back held is not filed again: the same tool with the
-# same arguments within HELD_TTL_S answers "already waiting" (logged, counted).
+# same arguments within HELD_TTL_S answers with the first hold's own words
+# (practice: nothing will run; live: it is in Approvals), logged and counted.
 HELD_TTL_S = 3600
-ALREADY = json.dumps({"ok": False, "held": True, "already_waiting": True,
-                      "say": "This is already waiting for the owner's OK, so it was not filed again. Say so plainly "
-                             "and do not suggest any other way to get it done."})
+ALREADY = "This was already filed, so it was not filed again. "
 _held: dict = {}
 _held_lock = threading.Lock()
 
@@ -46,14 +45,14 @@ def _handler(name: str):
         key = name + json.dumps(args or {}, sort_keys=True)
         now = time.time()
         with _held_lock:
-            for k in [k for k, t in _held.items() if t <= now]:
+            for k in [k for k, (t, _say) in _held.items() if t <= now]:
                 del _held[k]
-            again = key in _held
+            again = _held.get(key)
         try:
             if again:
                 logger.warning("jarvis tool %s: identical held proposal not filed again", name)
                 _run(python, ["note", f"agent_tool_{name}_held_duplicate"], env, "")
-                return ALREADY
+                return json.dumps({"ok": False, "held": True, "already_waiting": True, "say": ALREADY + again[1]})
             proc = _run(python, [name], env, json.dumps(args or {}))
         except subprocess.TimeoutExpired:
             logger.error("jarvis tool %s timed out after %ss", name, TIMEOUT_S)
@@ -63,9 +62,10 @@ def _handler(name: str):
             logger.error("jarvis tool %s failed (exit %s): %s", name, proc.returncode, proc.stderr[-400:])
             return FAILED
         try:
-            if json.loads(lines[-1]).get("held"):
+            res = json.loads(lines[-1])
+            if res.get("held"):
                 with _held_lock:
-                    _held[key] = now + HELD_TTL_S
+                    _held[key] = (now + HELD_TTL_S, str(res.get("say") or ""))
         except ValueError:
             pass
         return lines[-1]

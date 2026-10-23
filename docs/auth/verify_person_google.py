@@ -156,10 +156,13 @@ from fastapi.testclient import TestClient
 from app import actor_refs, broker, google_connection
 broker._authorize = lambda request: None
 seen = []
+calls = []
 class _Svc:
-    def __init__(self, creds): self.creds = creds
-    def __getattr__(self, name): return lambda *a, **k: self
-    def execute(self): return {"items": []}
+    def __init__(self, creds, path=()): self.creds, self.path = creds, path
+    def __getattr__(self, name): return lambda *a, **k: _Svc(self.creds, self.path + (name,))
+    def execute(self):
+        calls.append([".".join(self.path), getattr(self.creds, "token", None)])
+        return {"items": [], "id": "fake-1"}
 def fake_build(api, version, credentials=None, **kw):
     seen.append(getattr(credentials, "token", None))
     return _Svc(credentials)
@@ -186,6 +189,51 @@ out["read_omar"] = [r.status_code, (r.json() or {}).get("error")]
 r = c.post("/api/broker/google/person", json={"ref": rd, "api": "gmail", "version": "v1",
            "method": "users.watch", "params": {"userId": "me"}})
 out["watch"] = r.status_code
+import base64
+from email.message import EmailMessage
+from app import approvals, platform_store, sentinel
+def raw_mail(to, subject, text):
+    m = EmailMessage(); m["To"], m["Subject"] = to, subject; m.set_content(text)
+    return base64.urlsafe_b64encode(m.as_bytes()).decode("ascii")
+def post(ref, api, version, method, params):
+    r = c.post("/api/broker/google/person", json={"ref": ref, "api": api, "version": version, "method": method,
+                                                  "params": params})
+    return r.status_code, r.json()
+def sends():
+    return [x for x in calls if x[0] == "users.messages.send"]
+pending0 = approvals.query(status="pending")["count"]
+code, body = post(rd, "gmail", "v1", "users.messages.send",
+                  {"userId": "me", "body": {"raw": raw_mail("client@example.com", "Running late", "Hi Jane,\nTen minutes late.")}})
+aid = body.get("approval_id")
+out["send_filed"] = [code, body.get("error"), bool(aid), len(sends())]
+shown = (approvals.get(aid) or {}).get("display") or {} if aid else {}
+out["send_display"] = {k: shown.get(k) for k in ("to", "subject", "message", "from_account")}
+code, body = post(rd, "calendar", "v3", "events.insert",
+                  {"calendarId": "primary", "body": {"summary": "Meeting with Jane", "start": {"dateTime": "2026-10-30T14:00:00-05:00"},
+                                                      "end": {"dateTime": "2026-10-30T15:00:00-05:00"}}})
+cal_aid = body.get("approval_id")
+out["cal_filed"] = [code, body.get("error"), bool(cal_aid),
+                    len([x for x in calls if x[0] == "events.insert"]), sentinel.DEFAULTS[sentinel.INTERNAL_WRITE]]
+code, body = post(ro, "gmail", "v1", "users.messages.send",
+                  {"userId": "me", "body": {"raw": raw_mail("client@example.com", "x", "y")}})
+out["member_send"] = [code, body.get("error"), approvals.query(status="pending")["count"] - pending0]
+out["scopes_offered"] = sorted(((approvals.query(status="pending", person="dana")["approvals"] or [{}])[0]
+                                .get("callbacks") or {}).get("approve", {}).keys())
+approvals.decide(aid, "approved", "dana")
+out["after_approve"] = [len(sends()), [t == dana_token for _n, t in sends()]]
+try:
+    approvals.decide(aid, "approved", "dana"); out["reapprove"] = "ran again"
+except ValueError as exc:
+    out["reapprove"] = "refused"
+approvals.decide(cal_aid, "rejected", "dana")
+out["after_reject"] = len([x for x in calls if x[0] == "events.insert"])
+code, body = post(rd, "gmail", "v1", "users.messages.send",
+                  {"userId": "me", "body": {"raw": raw_mail("client@example.com", "Again", "z")}})
+aid2 = body.get("approval_id")
+before = len(sends())
+res = broker.execute_approved(platform_store.get_approval(aid2), "always", "dana")
+out["wide_scope"] = [res.get("grant_id"), len(sends()) - before,
+                     len(platform_store.active_grants(broker.OWNER, "gmail", ""))]
 captured = {}
 broker.gate_google = lambda *a, **k: (captured.update(k) or (200, {"action_id": 1}))
 broker.switches.on = lambda name: True
@@ -215,6 +263,7 @@ def child() -> dict:
         "JARVIS_TASKS_DB": str(SB / "tasks.db"), "JARVIS_LEADS_DB": str(SB / "leads.db"),
         "JARVIS_ACTIVITY_FEED": str(SB / "feed.jsonl"), "JARVIS_PG_DSN": (SB / "pg_dsn").read_text().strip(),
         "JARVIS_SWITCH_BROKER": "on", "JARVIS_SWITCH_SENTINEL": "on",
+        "JARVIS_SENTINEL_MODE": "enforce", "JARVIS_ALLOW_WRITES": "1",
     })
     if "--canary" in sys.argv:
         env["CANARY"] = "1"
@@ -292,6 +341,26 @@ def main() -> int:
        f"a tenant one for the mailbox ({res.get('approved_tenant')})",
        res.get("approved_person") == "dana" and res.get("approved_tenant") is None)
     ck("   an ended turn's reference gets nothing", res.get("status_ended", {}).get("why") == "no_turn")
+
+    print("\n── live mode: every personal write waits for the owner's tap ──")
+    ck(f"an email from dana's Gmail files an approval and sends nothing ({res.get('send_filed')})",
+       res.get("send_filed") == [403, "approval_required", True, 0])
+    d = res.get("send_display") or {}
+    ck(f"   the Approvals card reads as an email: to, subject, the whole message, from her own Google ({d})",
+       d.get("to") == "client@example.com" and d.get("subject") == "Running late"
+       and "Ten minutes late." in (d.get("message") or "") and d.get("from_account") == "your own Google")
+    ck(f"a calendar event with no guests also waits, although the default for it is auto ({res.get('cal_filed')})",
+       res.get("cal_filed") == [403, "approval_required", True, 0, "auto"])
+    ck(f"a member's personal email is refused, and files nothing ({res.get('member_send')})",
+       res.get("member_send") == [403, "owner_only", 2])
+    ck(f"   the card offers approve-once only, never a standing grant ({res.get('scopes_offered')})",
+       res.get("scopes_offered") == ["once"])
+    ck(f"approving sends exactly one email, on dana's own credentials ({res.get('after_approve')})",
+       res.get("after_approve") == [1, [True]])
+    ck(f"   approving it again is refused ({res.get('reapprove')})", res.get("reapprove") == "refused")
+    ck(f"a rejected event is never added ({res.get('after_reject')} inserts)", res.get("after_reject") == 0)
+    ck(f"a wider scope asked for a personal action runs it once and makes no grant ({res.get('wide_scope')})",
+       res.get("wide_scope") == [None, 1, 0])
 
     code, _, _ = curl("/api/google/connection/disconnect", omar, "POST")
     ck(f"omar's disconnect leaves dana's row (HTTP {code})", code == 200 and "dana" in rows()["person_google"])

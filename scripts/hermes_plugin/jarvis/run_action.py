@@ -7,11 +7,13 @@ acts for a person goes through skills authz with the app's actor reference
 decides every write. Replies carry a plain `say` for the model and never a
 link: the connect button is the app's to draw.
 """
+import base64
 import json
 import os
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
 
 SKILLS = os.environ.get("JARVIS_SKILLS_ROOT", "")
 AUTHZ = {t["name"]: t["authz"] for t in json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -21,10 +23,15 @@ sys.path.insert(0, os.path.join(SKILLS, "_shared"))
 import app_broker  # noqa: E402
 import authz  # noqa: E402
 
-HOLD_SAY = ("Not done: it needs the owner's OK first. Say so in plain words (\"I'll need your OK before I do "
-            "that\"). Do not suggest any other way to get it done.")
-PRACTICE_SAY = ("Not done, because this assistant is in practice mode. Tell them: \"I'm in practice mode, so "
-                "here's what I'd do instead of doing it\", then show exactly what you would have done.")
+APPROVAL_SAY = ("Not done yet: it is waiting in the Approvals tab, and it runs only when they tap Approve there. "
+                "Say exactly that, show what it will do, and do not suggest any other way to get it done.")
+OWNER_ONLY_SAY = ("Not done: only the account owner can approve actions right now, so this can't go ahead for "
+                  "them. Say so plainly; nothing was changed.")
+REFUSED_SAY = ("Not done, and it won't go ahead: it was refused. Say so plainly; nothing was changed. Do not "
+               "suggest any other way to get it done.")
+PRACTICE_SAY = ("Not done, and it never will be: this assistant is in practice mode, so nothing runs and there is "
+                "nothing to approve. Tell them: \"I'm in practice mode, so here's what I'd do instead of doing "
+                "it\", then show exactly what you would have done.")
 
 
 def out(**kw) -> None:
@@ -88,8 +95,12 @@ def held(exc: "app_broker.BrokerError") -> None:
         out(ok=False, held=True, mode="practice", say=PRACTICE_SAY)
     elif err == "not_connected":
         needs_google()
-    elif err in ("approval_required", "sentinel_denied", "writes_disabled", "recipient_refused"):
-        out(ok=False, held=True, say=HOLD_SAY)
+    elif err == "approval_required":
+        out(ok=False, held=True, approval_id=exc.body.get("approval_id"), say=APPROVAL_SAY)
+    elif err == "owner_only":
+        out(ok=False, held=True, say=OWNER_ONLY_SAY)
+    elif err in ("sentinel_denied", "writes_disabled", "recipient_refused"):
+        out(ok=False, held=True, say=REFUSED_SAY)
     elif err == "not_brokered":
         out(ok=False, held=True, say="Not sent: sending this from the app isn't switched on yet. Say so plainly "
                                      "and show what you would have sent. Do not suggest any other way to send it.")
@@ -170,6 +181,7 @@ def add_calendar_event(a):
         google("calendar", "v3", "events.insert", {"calendarId": "primary", "body": body})
     except app_broker.BrokerError as exc:
         return held(exc)
+    bump("agent_tool_add_calendar_event_unheld")
     out(ok=True, say="Added to the calendar.")
 
 
@@ -197,12 +209,18 @@ def search_email(a):
 def draft_email(a):
     if not actor("draft_email", a["to"]):
         return
+    if not google_connected():
+        return needs_google()
+    msg = EmailMessage()
+    msg["To"], msg["Subject"] = str(a["to"])[:320], str(a["subject"])[:200]
+    msg.set_content(str(a["body"])[:20000])
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
     try:
-        app_broker.outbound("email_send", "email", [a["to"]], f"send an email to {a['to']}",
-                            {"to": a["to"], "subject": a["subject"], "body": a["body"]})
+        google("gmail", "v1", "users.messages.send", {"userId": "me", "body": {"raw": raw}})
     except app_broker.BrokerError as exc:
         return held(exc)
-    out(ok=False, held=True, say=HOLD_SAY)
+    bump("agent_tool_draft_email_unheld")
+    out(ok=True, say="Sent.")
 
 
 def connect_google(a):

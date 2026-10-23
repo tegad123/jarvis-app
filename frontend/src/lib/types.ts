@@ -250,6 +250,8 @@ export interface Approval {
   summary: string
   /** Free-form per producing skill; rendered as a key/value detail list. */
   payload: Record<string, unknown>
+  /** Broker actions: what will happen, in readable fields (to, subject, message; title, starts…). */
+  display?: Record<string, string>
   status: ApprovalStatus
   decided_by?: string
   decided_at?: string

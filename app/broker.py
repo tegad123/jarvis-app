@@ -146,6 +146,42 @@ def _parse_raw(params: Dict[str, Any]):
         raise HTTPException(status_code=400, detail="users.messages.send needs body.raw (base64url MIME).")
 
 
+def approval_display(action: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    """What a pending Google action will do, in readable fields for the owner's
+    Approvals card (the stored proposal is base64 MIME and nested params)."""
+    if not isinstance(action, dict) or action.get("type") != "google":
+        return None
+    api, method, params = action.get("api"), action.get("method"), action.get("params") or {}
+    out: Dict[str, str] = {}
+    if action.get("person"):
+        out["from_account"] = "your own Google"
+    if (api, method) == ("gmail", "users.messages.send"):
+        try:
+            msg = _parse_raw(params)
+        except HTTPException:
+            return {**out, "problem": "this email could not be read"}
+        for k in ("To", "Cc", "Bcc", "Subject"):
+            if msg.get(k):
+                out[k.lower()] = str(msg.get(k))
+        part = next((p for p in msg.walk() if p.get_content_type() == "text/plain"), None)
+        text = part.get_payload(decode=True) if part is not None else b""
+        out["message"] = (text or b"").decode(part.get_content_charset() or "utf-8", "replace")[:5000] if part \
+            else ""
+        return out
+    if (api, method) in (("calendar", "events.insert"), ("calendar", "events.patch")):
+        body = params.get("body") or {}
+        out.update({"title": str(body.get("summary") or ""),
+                    "starts": str((body.get("start") or {}).get("dateTime") or (body.get("start") or {}).get("date")
+                                  or ""),
+                    "ends": str((body.get("end") or {}).get("dateTime") or (body.get("end") or {}).get("date") or ""),
+                    "notes": str(body.get("description") or "")[:2000]})
+        guests = [str(x.get("email")) for x in body.get("attendees") or [] if x.get("email")]
+        if guests:
+            out["guests"] = ", ".join(guests)
+        return out
+    return {**out, "action": f"{api} {method}"}
+
+
 def _boundary(addrs) -> Optional[str]:
     _shared()
     import outbound_boundary  # noqa: PLC0415
@@ -348,7 +384,8 @@ def gate_google(api, version, method, params, ctx, approval: Optional[Dict[str, 
     run = _run(ctx)
     try:
         user_mode, ceiling = store.policy_modes(OWNER, ctx["skill"], cls)
-        grants = store.active_grants(OWNER, api, ctx["skill"])
+        # A person's own Google: every write is the owner's tap, never a standing grant.
+        grants = [] if person else store.active_grants(OWNER, api, ctx["skill"])
         rates = store.rates(now)
         tainted = store.is_tainted(run)
     except platform_db.Unavailable as exc:
@@ -358,7 +395,10 @@ def gate_google(api, version, method, params, ctx, approval: Optional[Dict[str, 
     action = sentinel.Action(connector=api, method=method, cls=cls, destinations=dests, skill=ctx["skill"],
                              user=OWNER, run_id=run, session_id=ctx["session"], task_id=ctx["task"],
                              tainted=tainted, source_kind=source[0], source_id=source[1])
-    decision = sentinel.decide(action, mode=sentinel.effective_mode(cls, user_mode, ceiling), grants=grants,
+    mode = sentinel.effective_mode(cls, user_mode, ceiling)
+    if person and mode == sentinel.AUTO:
+        mode = sentinel.APPROVE
+    decision = sentinel.decide(action, mode=mode, grants=grants,
                                now=now, rates=rates, boundary_refusal=refusal)
     fields = store.fields_from_summary(sentinel.summarize(action, decision))
     fields["sentinel_mode"] = sentinel_mode()
@@ -430,6 +470,11 @@ def execute_approved(item: Dict[str, Any], scope: str, decided_by: str) -> Dict[
            "skill": item.get("skill") or "", "source": f"{item.get('source_kind')}:{item.get('source_id')}"
            if item.get("source_kind") and item.get("source_id") else ""}
     grant_id = None
+    if a.get("person") and scope != sentinel.SCOPE_ONCE:
+        _bump("broker_person_grant_refused")
+        log.warning("broker: approval %s asked for scope %s on a personal action; running it once", item.get("id"),
+                    scope)
+        scope = sentinel.SCOPE_ONCE
     if scope != sentinel.SCOPE_ONCE:
         api, method, params = a["api"], a["method"], a.get("params") or {}
         addrs = _recipients(params)[0] if (api, a["version"], method) in SEND_METHODS else []
@@ -596,9 +641,13 @@ def get_usage(request: Request, days: int = 1):
 
 # What a chat turn may do in the signed-in person's own Google.
 PERSON_METHODS = {
-    ("gmail", "v1"): ("users.messages.list", "users.messages.get", "users.threads.list", "users.threads.get"),
+    ("gmail", "v1"): ("users.messages.list", "users.messages.get", "users.threads.list", "users.threads.get",
+                      "users.messages.send"),
     ("calendar", "v3"): ("events.list", "events.get", "events.insert"),
 }
+# Approvals are the owner's (the Approvals tab is owner-only), so only the
+# owner's own Google takes writes for now.
+PERSON_WRITE_ROLES = ("owner",)
 
 
 def _turn_person(ref: Any) -> Optional[Dict[str, Any]]:
@@ -631,6 +680,10 @@ async def post_google_person(request: Request):
         return JSONResponse(status_code=403, content={"error": "no_turn", "detail": "No running chat turn."})
     person = entry["person_key"]
     ctx = _context(request)
+    thread = str(entry.get("thread_id") or "")
+    if not ctx.get("source") and CONTEXT_VALUE.match(thread):
+        # A chat write acts on the conversation that asked for it.
+        ctx["source"] = f"chat_thread:{thread}"
     from starlette.concurrency import run_in_threadpool  # noqa: PLC0415
     if klass == READ:
         out = await run_in_threadpool(_execute, api, version, method, params, klass, person)
@@ -638,6 +691,12 @@ async def post_google_person(request: Request):
             _bump("broker_google_person_read")
             _note_untrusted(ctx, api, method, out.get("result"))
         return out
+    if entry.get("role") not in PERSON_WRITE_ROLES:
+        _bump("broker_google_person_write_owner_only")
+        log.warning("broker: personal %s %s refused for role %s (approvals are the owner's)", api, method,
+                    entry.get("role"))
+        return JSONResponse(status_code=403, content={"error": "owner_only",
+                                                      "detail": "Only the owner can approve actions."})
     _require_sentinel()
     status, content = await run_in_threadpool(gate_google, api, version, method, params, ctx, None, person)
     return content if status == 200 else JSONResponse(status_code=status, content=content)

@@ -39,6 +39,15 @@ class ConnectionCipherError(Exception):
     """Cipher missing or undecryptable. Never a silent None."""
 
 
+# A person's own Google (chat). Sending runs only after the owner approves each email.
+PERSON_SCOPES = (
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/calendar.events",
+)
+COUNTER_PERSON_SCOPES_SHORT = "person_google_scopes_short"
+
+
 class PersonNotConnected(Exception):
     """This person has no usable Google connection (none, or it needs reconnecting)."""
 
@@ -317,7 +326,13 @@ def person_status(person_key: str) -> Dict[str, Any]:
     row = person_row(person_key)
     if not row or not row.get("token_cipher"):
         return {"status": STATUS_DISCONNECTED, "google_email": None, "connected_at": None, "refreshed_at": None}
-    return {"status": row.get("status") or STATUS_DISCONNECTED, "google_email": row.get("google_email"),
+    status = row.get("status") or STATUS_DISCONNECTED
+    if status == STATUS_CONNECTED and not set(PERSON_SCOPES) <= set((row.get("scopes") or "").split()):
+        # Connected before a permission was added: they reconnect once to grant it.
+        _bump_counter(COUNTER_PERSON_SCOPES_SHORT)
+        log.warning("google_connection: person connection lacks a required permission (needs reconnecting)")
+        status = STATUS_NEEDS_REAUTH
+    return {"status": status, "google_email": row.get("google_email"),
             "connected_at": row.get("connected_at"), "refreshed_at": row.get("refreshed_at")}
 
 

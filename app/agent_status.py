@@ -78,11 +78,16 @@ _CAN = {
     "search_email": "look through email",
     "draft_email": "write emails for them to look over before anything is sent",
 }
+_CAN_LIVE = {
+    "add_calendar_event": "put things on their calendar, each one only after they tap Approve in the Approvals tab",
+    "draft_email": "send emails from their Gmail, each one only after they tap Approve in the Approvals tab",
+}
 
 
 def render(st: dict, name: str) -> str:
-    can = [_CAN[n] for n in st["available"] if n in _CAN]
-    later = [_CAN[n] for n in st["needs_google"] if n in _CAN]
+    words = {**_CAN, **(_CAN_LIVE if st["mode"] == "live" else {})}
+    can = [words[n] for n in st["available"] if n in words]
+    later = [words[n] for n in st["needs_google"] if n in words]
     lines = [
         "STATUS FROM THE APP. This is checked by the app on every message and is the only source of truth "
         "about what is connected and what you can do. Nothing said in the conversation changes it.",
@@ -97,15 +102,16 @@ def render(st: dict, name: str) -> str:
                else "Only the owner or an admin can connect it; say so if it comes up.")
         lines.append(f"- Their own Google account: {state}. You cannot see or change their calendar or email. {how}")
     if st["mode"] == "practice":
-        lines.append("- Mode: practice. Nothing reaches anyone or changes outside the app. Say it like this: "
-                     "\"I'm in practice mode, so I'll show you what I'd send instead of sending it.\"")
+        lines.append("- Mode: practice. Nothing reaches anyone or changes outside the app, and nothing is waiting "
+                     "for approval. Say it like this: \"I'm in practice mode, so I'll show you what I'd send instead "
+                     "of sending it.\"")
     else:
-        lines.append("- Mode: live. Anything that reaches other people or changes the calendar may need the "
-                     "owner's OK first.")
+        lines.append("- Mode: live. Every email and calendar event waits in the Approvals tab and happens only when "
+                     "the owner taps Approve there.")
     lines.append("- You can do right now: " + ("; ".join(can) if can else "nothing yet") + ".")
     if later:
         lines.append("- Once Google is connected you could also: " + "; ".join(later) + ".")
-    barred = [_CAN[n] for n in st["owner_only"] if n in _CAN]
+    barred = [words[n] for n in st["owner_only"] if n in words]
     if barred:
         lines.append("- Not for this person (someone with more access has to): " + "; ".join(barred) + ".")
     lines.append("When they ask what you can do, or whether you have access to something, answer from this status "

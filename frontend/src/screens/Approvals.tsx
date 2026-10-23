@@ -77,7 +77,7 @@ function PayloadDetails({ payload }: { payload: Record<string, unknown> }) {
           <dt className="w-28 shrink-0 font-mono text-label-mono uppercase text-light-text-muted dark:text-dark-text-muted">
             {k.replace(/_/g, ' ')}
           </dt>
-          <dd className="min-w-0 flex-1 break-words text-body-s text-light-text-secondary dark:text-dark-text-secondary">
+          <dd className="min-w-0 flex-1 whitespace-pre-wrap break-words text-body-s text-light-text-secondary dark:text-dark-text-secondary">
             {Array.isArray(v) ? v.join(', ') : String(v)}
           </dd>
         </div>
@@ -141,8 +141,10 @@ function ApprovalCard({
 
       {/* Unknown kinds fall through to the flat list rather than erroring: a
           request from a newer producer must degrade, not break the queue. */}
-      {approval.kind === 'config-change' &&
-      Array.isArray(approval.payload?.changes) ? (
+      {approval.display ? (
+        <PayloadDetails payload={approval.display} />
+      ) : approval.kind === 'config-change' &&
+        Array.isArray(approval.payload?.changes) ? (
         <ConfigDiff changes={approval.payload.changes as ConfigChange[]} />
       ) : (
         <PayloadDetails payload={approval.payload} />

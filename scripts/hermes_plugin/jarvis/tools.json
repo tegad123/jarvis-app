@@ -59,7 +59,7 @@
       "authz": "calendar.add",
       "label": "Putting it on your calendar",
       "needs": ["google"],
-      "description": "Put one event on the Google Calendar of the person you are talking to. Invites nobody. In practice mode it is shown, not added.",
+      "description": "Put one event on the Google Calendar of the person you are talking to. Invites nobody. It waits in the Approvals tab and is added only when they tap Approve; in practice mode it is shown, never added.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -93,7 +93,7 @@
       "authz": "email.send",
       "label": "Writing the email",
       "needs": [],
-      "description": "Propose an email. It always needs the owner's OK before it goes anywhere; in practice mode it is shown, never sent.",
+      "description": "Send one email from the Gmail of the person you are talking to. It waits in the Approvals tab and is sent only when they tap Approve; in practice mode it is shown, never sent.",
       "parameters": {
         "type": "object",
         "properties": {

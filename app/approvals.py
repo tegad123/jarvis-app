@@ -57,6 +57,8 @@ def _scopes_for(row: Dict[str, Any]) -> List[str]:
     if row["origin"] != "broker" or row.get("action_class") in (None, sentinel.LOCKED):
         return [sentinel.SCOPE_ONCE]
     a = row["action_json"] or {}
+    if a.get("person"):
+        return [sentinel.SCOPE_ONCE]
     try:
         from . import broker  # noqa: PLC0415
         params = a.get("params") or {}
@@ -78,6 +80,11 @@ def _view(row: Dict[str, Any], person: Optional[str]) -> Dict[str, Any]:
         "requires_role": row.get("requires_role"), "status": row["status"],
         "expires_at": _iso(row["expires_at"]),
     }
+    if row["origin"] == "broker":
+        from . import broker  # noqa: PLC0415
+        shown = broker.approval_display(row["action_json"] or {})
+        if shown:
+            item["display"] = shown
     if row["status"] != PENDING:
         item.update({"decided_by": row.get("decided_by"), "decided_at": _iso(row.get("decided_at"))})
         for k in ("effect", "send", "execution", "scope", "via"):

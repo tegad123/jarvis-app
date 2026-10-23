@@ -58,13 +58,10 @@ assert all("googleapis.com/auth/" in s for s in CONNECT_SCOPES)
 
 PURPOSE_LOGIN = "login"
 PURPOSE_CONNECT = "connect"
-# A person's own Google, for chat: read and label their mail, their calendar.
-# No send, Sheets or Drive on a personal account (nothing personal uses them).
+# A person's own Google, for chat: their mail (read, and send once they approve
+# each email) and their calendar. No Sheets or Drive on a personal account.
 PURPOSE_CONNECT_PERSON = "connect_person"
-PERSON_SCOPES = (
-    "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/calendar.events",
-)
+PERSON_SCOPES = google_connection.PERSON_SCOPES
 assert set(PERSON_SCOPES) <= set(CONNECT_SCOPES)
 _SCOPES_FOR = {PURPOSE_CONNECT: CONNECT_SCOPES, PURPOSE_CONNECT_PERSON: PERSON_SCOPES}
 _GENERIC = "That PIN is not right."
@@ -796,8 +793,9 @@ def _person_partial_page() -> HTMLResponse:
         "<!doctype html><meta charset=utf-8><title>Google not connected</title>"
         "<body style='font-family:sans-serif;max-width:36em;margin:4em auto'>"
         "<h1>Google wasn't connected</h1>"
-        "<p>Your assistant needs both boxes ticked on Google's screen: your email and your calendar. "
-        "Nothing was stored. Go back and connect again, leaving both ticked.</p>"
+        "<p>Your assistant needs every box ticked on Google's screen: reading your email, sending email "
+        "you approve, and your calendar. Nothing was stored. Go back and connect again, leaving them all "
+        "ticked.</p>"
         "<p><a href='/'>Back</a></p>",
         status_code=403,
     )
