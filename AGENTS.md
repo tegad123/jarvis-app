@@ -89,6 +89,12 @@ emails and texts to real clients. Act accordingly.
   (/api/google/assistant/*). Personal scopes are gmail.modify and
   calendar.events; there is no personal send path, and adding one needs a
   human yes. Proof: docs/auth/verify_person_google.py (and --canary).
+  (Superseded 2026-10-23, human yes: personal email send exists, owner-only,
+  every one waits for the owner's tap in Approvals.)
+- Real writes on a platform tenant need `live_writes: approved` in its
+  manifest (human yes recorded there; https + enforce + two_user only). It
+  arms the app service alone; never arm the gateway or timers, never add
+  JARVIS_ALLOW_WRITES by hand (the preflight refuses it).
 - POSTGRES 16 (cluster 16/main): unix socket only (no TCP listener), peer
   auth only, configured by scripts/setup_postgres.py. Each two-user tenant
   has database jarvis_<slug>; only its app OS user can connect, as

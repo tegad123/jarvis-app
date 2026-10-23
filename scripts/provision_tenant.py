@@ -413,6 +413,19 @@ def posture_rules(manifest: dict) -> Dict[str, Any]:
     https = origin.startswith("https://")
 
     writes_armed = posture == "captured"
+    # Real writes (real recipients) are a human decision recorded in the manifest
+    # (live_writes: approved). They arm the app service only: every write the app
+    # makes goes through Sentinel, and personal writes wait for the owner's tap.
+    # Background jobs and the gateway stay unarmed.
+    live_writes = manifest.get("live_writes")
+    if live_writes not in (None, "approved"):
+        die("live_writes must be absent or 'approved'")
+    app_writes_armed = writes_armed or live_writes == "approved"
+    if live_writes == "approved":
+        if posture != "live":
+            die("live_writes: approved needs writes_posture: live")
+        if manifest.get("isolation") != "two_user" or manifest.get("sentinel_mode") != "enforce":
+            die("live_writes: approved needs isolation: two_user and sentinel_mode: enforce")
     if posture == "captured":
         if not suffixes:
             die("writes_posture=captured requires RFC 2606 outbound_recipient_suffix")
@@ -444,6 +457,8 @@ def posture_rules(manifest: dict) -> Dict[str, Any]:
     return {
         "posture": posture,
         "writes_armed": writes_armed,
+        "app_writes_armed": app_writes_armed,
+        "live_writes": live_writes == "approved",
         "cookie": cookie,
         "loopback": loopback,
         "oauth_template": "oauth.scratch.conf" if posture == "captured" else "oauth.production.conf",
@@ -800,6 +815,7 @@ def common_map(manifest: dict, posture: dict, fernet: str, force: str,
     slug = manifest["slug"]
     opt = f"/opt/{slug}"
     writes = "Environment=JARVIS_ALLOW_WRITES=1" if posture["writes_armed"] else ""
+    app_writes = "Environment=JARVIS_ALLOW_WRITES=1" if posture["app_writes_armed"] else ""
     iso: Dict[str, str] = {}
     if manifest.get("isolation") == "two_user":
         n = isolation_names(slug)
@@ -833,6 +849,8 @@ def common_map(manifest: dict, posture: dict, fernet: str, force: str,
         "GATEWAY_PORT": str(int(manifest["ports"]["gateway"])),
         "HOOKS_PORT": str(int(manifest["ports"]["hooks"])),
         "WRITES_LINE": writes,
+        "APP_WRITES_LINE": app_writes,
+        "LIVE_WRITES": "approved" if posture["live_writes"] else "",
         "GATEWAY_FORCE": force,
         "PUBLIC_ORIGIN": str(manifest["public_origin"]).rstrip("/"),
         "COOKIE_SECURE": posture["cookie"],
@@ -1541,10 +1559,16 @@ def upgrade(manifest_path: Path, restart_approved: bool) -> None:
         die("manifest gateway port differs from the running tenant; ports change only by re-provisioning")
     if any(ln.startswith("JARVIS_ALLOW_WRITES") for ln in env_file.read_text().splitlines()):
         die(f"{env_file} sets JARVIS_ALLOW_WRITES")
+    armed_ok = {f"{slug}-app.service"} if posture["live_writes"] else set()
     for u in (f"{slug}-app.service", f"{slug}-gateway.service"):
-        if unit_env_has(u, "JARVIS_ALLOW_WRITES"):
+        if unit_env_has(u, "JARVIS_ALLOW_WRITES") and u not in armed_ok:
             die(f"{u} has JARVIS_ALLOW_WRITES in its environment")
-    log(f"posture before upgrade: {posture['posture']}; JARVIS_ALLOW_WRITES unset on app, gateway and env file")
+    if posture["live_writes"]:
+        log(f"posture before upgrade: live with live_writes approved; writes armed on the app only "
+            f"(app {'armed' if unit_env_has(f'{slug}-app.service', 'JARVIS_ALLOW_WRITES') else 'not yet armed'}, "
+            "gateway and env file unset)")
+    else:
+        log(f"posture before upgrade: {posture['posture']}; JARVIS_ALLOW_WRITES unset on app, gateway and env file")
     if mailbox_connected(opt) and not restart_approved:
         die(f"STOP gate: {slug} has a Google mailbox connected. Restarting it needs a human yes; "
             "re-run with --restart-approved once you have it.")

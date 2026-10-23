@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory={{JARVIS_APP}}
-ExecStartPre={{PREFLIGHT}}
+ExecStartPre={{PREFLIGHT}} app
 ExecStart={{VENV_PYTHON}} -m app.main
 Restart=on-failure
 RestartSec=5
@@ -30,7 +30,7 @@ Environment=JARVIS_ACCOUNTS_DB={{HERMES_HOME}}/state/jarvis_accounts.db
 Environment=JARVIS_ATTACHMENTS_DIR={{JARVIS_APP}}/data/attachments
 Environment=JARVIS_LEADS_SOURCE=store
 Environment=JARVIS_TASKS_SOURCE=store
-{{WRITES_LINE}}
+{{APP_WRITES_LINE}}
 {{NO_PLATFORM_DB_LINE}}
 
 [Install]

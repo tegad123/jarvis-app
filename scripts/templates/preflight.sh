@@ -6,6 +6,8 @@ set -uo pipefail
 SLUG="{{SLUG}}"
 OPT="{{OPT}}"
 POSTURE="{{POSTURE}}"   # captured | blocked | live
+LIVE_WRITES="{{LIVE_WRITES}}"   # approved: the manifest's human yes to real writes, app service only
+UNIT_ROLE="${1:-}"              # "app" from the app unit; empty for the gateway and timers
 fail() { echo "PREFLIGHT REFUSED: $*" >&2; exit 1; }
 
 echo "PREFLIGHT: slug=$SLUG posture=$POSTURE HERMES_HOME=${HERMES_HOME:-UNSET}"
@@ -74,7 +76,21 @@ if [ "$POSTURE" = "live" ] || [ "$POSTURE" = "blocked" ]; then
 fi
 
 # ── writes vs boundary (dual source: env is the kill switch; posture must match)
-if [ "${JARVIS_ALLOW_WRITES:-0}" = "1" ]; then
+if [ "${JARVIS_ALLOW_WRITES:-0}" = "1" ] && [ "$POSTURE" = "live" ] && [ "$LIVE_WRITES" = "approved" ]; then
+  # Real recipients, by a recorded human decision: the app only, and never a capture suffix.
+  if [ "$UNIT_ROLE" != "app" ]; then
+    fail "live writes are approved for the app service only; this unit must not have JARVIS_ALLOW_WRITES=1"
+  fi
+  LIVE_CHECK=$(JARVIS_RUNTIME_CONFIG="$RUNTIME" python3 -c "
+import sys; sys.path.insert(0,'$SKILLS/_shared')
+import outbound_boundary as ob
+print(','.join(ob.suffixes()))
+" 2>&1) || fail "live writes: the recipient boundary could not be read — $LIVE_CHECK"
+  if echo "$LIVE_CHECK" | grep -qiE '\.example|example\.com'; then
+    fail "live writes but runtime still has an RFC 2606 capture suffix"
+  fi
+  SUFFIX="${LIVE_CHECK:-none (real recipients, live writes approved)}"
+elif [ "${JARVIS_ALLOW_WRITES:-0}" = "1" ]; then
   if [ "$POSTURE" = "live" ] || [ "$POSTURE" = "blocked" ]; then
     fail "JARVIS_ALLOW_WRITES=1 is not a $POSTURE posture — writes-guard must stay on (testco combination refused)"
   fi
