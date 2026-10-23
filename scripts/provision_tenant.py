@@ -58,6 +58,17 @@ SWEEPS = ("stale_email", "task_followup", "quiet_lead")
 SWEEP_BOOT_DEFAULTS = (180, 240, 300)
 
 UNIT_DIR = Path("/etc/systemd/system")
+# The web browser (manifest `browser: enabled`). Chromium is one root-owned
+# copy every tenant's browser user can read (scripts/install_browser_runtime.py);
+# the worker and egress code is copied per tenant, root-owned, outside /opt/<slug>
+# (the browser user is deliberately not in the tenant group, so it cannot read there).
+BROWSER_RUNTIME = Path("/opt/jarvis/browser/chrome-headless-shell-1234")
+BROWSER_BIN = BROWSER_RUNTIME / "chrome-headless-shell"
+BROWSER_CODE_ROOT = Path("/opt/jarvis/browser-code")
+BROWSER_STATE_ROOT = Path("/var/lib/jarvis-browser")
+BROWSER_CODE_FILES = ("browser_worker.py", "browser_egress.py")
+BROWSER_TEST_VARS = ("JARVIS_BROWSER_TEST", "JARVIS_EGRESS_TEST_ALLOW", "JARVIS_BROWSER_LISTEN",
+                     "JARVIS_EGRESS_LISTEN")
 
 
 class Refuse(SystemExit):
@@ -204,7 +215,8 @@ def _unit_env_files() -> List[Path]:
 
 
 def isolation_names(slug: str) -> Dict[str, str]:
-    names = {"app_user": f"jarvis-{slug}", "agent_user": f"jarvis-{slug}-agent", "group": slug}
+    names = {"app_user": f"jarvis-{slug}", "agent_user": f"jarvis-{slug}-agent", "group": slug,
+             "web_user": f"jarvis-{slug}-web"}
     if len(names["agent_user"]) > 32:
         die(f"slug {slug!r} is too long for the two-user layout (user {names['agent_user']} > 32 chars)")
     return names
@@ -235,6 +247,68 @@ def create_identities(slug: str) -> Dict[str, str]:
     run(["useradd", "--system", "--user-group", "--no-create-home", "--shell", nologin,
          "--home-dir", f"/opt/{slug}/hermes", "--groups", n["group"], n["agent_user"]])
     return n
+
+
+def browser_enabled(manifest: dict) -> bool:
+    v = manifest.get("browser")
+    if v in (None, "off"):
+        return False
+    if v != "enabled":
+        die("browser must be enabled | off (absent = off)")
+    return True
+
+
+def browser_unit_names(slug: str) -> List[str]:
+    return [f"{slug}-browser.socket", f"{slug}-browser.service", f"{slug}-egress.socket", f"{slug}-egress.service"]
+
+
+def ensure_web_user(slug: str) -> str:
+    """The browser's own user: not in the tenant group, no home, no shell."""
+    user = isolation_names(slug)["web_user"]
+    if not _getent("passwd", user):
+        run(["useradd", "--system", "--user-group", "--no-create-home", "--shell", "/usr/sbin/nologin",
+             "--home-dir", str(BROWSER_STATE_ROOT / slug), user])
+        log(f"created browser user {user}")
+    groups = subprocess.run(["id", "-nG", user], capture_output=True, text=True).stdout.split()
+    if slug in groups:
+        die(f"{user} is in the tenant group {slug}; the browser must not read the tenant's files")
+    return user
+
+
+def install_browser_code(slug: str, app_tree: Path) -> Path:
+    dest = BROWSER_CODE_ROOT / slug
+    BROWSER_CODE_ROOT.mkdir(mode=0o755, parents=True, exist_ok=True)
+    dest.mkdir(mode=0o755, exist_ok=True)
+    for f in BROWSER_CODE_FILES:
+        shutil.copyfile(app_tree / "app" / f, dest / f)
+        os.chown(dest / f, 0, 0)
+        os.chmod(dest / f, 0o644)
+    os.chown(dest, 0, 0)
+    os.chmod(dest, 0o755)
+    log(f"browser code copied to {dest} (root-owned, read-only to the browser)")
+    return dest
+
+
+def browser_unit_problems(slug: str) -> List[str]:
+    """After a start: no test-only switch in a browser unit, and the worker
+    answers the app user over the socket from inside its private network."""
+    bad = [f"{u} sets {v}" for u in (f"{slug}-browser.service", f"{slug}-egress.service")
+           for v in BROWSER_TEST_VARS if unit_env_has(u, v)]
+    probe = ("import json,socket,sys;s=socket.socket(socket.AF_UNIX);s.settimeout(20);"
+             f"s.connect('/run/jarvis-browser/{slug}.sock');"
+             "s.sendall(b'{\"op\":\"status\",\"person\":\"owner\"}\\n');"
+             "print(s.makefile().readline().strip())")
+    r = subprocess.run(["runuser", "-u", isolation_names(slug)["app_user"], "--", "/usr/bin/python3", "-I", "-c",
+                        probe], capture_output=True, text=True, cwd="/", timeout=60)
+    try:
+        st = json.loads(r.stdout or "{}")
+    except ValueError:
+        st = {}
+    if r.returncode != 0 or "running" not in st:
+        bad.append(f"browser did not answer a status request (rc={r.returncode}); journalctl -u {slug}-browser")
+    else:
+        log(f"browser answers the app user: running={st.get('running')}")
+    return bad
 
 
 def mint_isolated_secrets(slug: str, hermes_home: Path) -> str:
@@ -824,6 +898,15 @@ def common_map(manifest: dict, posture: dict, fernet: str, force: str,
                "SENTINEL_MODE": str(manifest.get("sentinel_mode") or ""),
                "PG_DSN": pg_dsn(slug),
                "DATA_DIRS": " ".join(str(d) for d in skill_data_dirs(Path(opt), shipped))}
+    if iso and browser_enabled(manifest):
+        iso.update({"WEB_USER": n["web_user"], "BROWSER_CODE": str(BROWSER_CODE_ROOT / slug),
+                    "BROWSER_BIN": str(BROWSER_BIN),
+                    "BROWSER_MAX_OPEN": str(int((manifest.get("browser_limits") or {}).get("max_open", 2))),
+                    "BROWSER_MEMORY_MAX": str((manifest.get("browser_limits") or {}).get("memory_max", "1G")),
+                    "BROWSER_LINES": f"Environment=JARVIS_BROWSER=on\n"
+                                     f"Environment=JARVIS_BROWSER_SOCKET=/run/jarvis-browser/{slug}.sock"})
+    elif iso:
+        iso["BROWSER_LINES"] = "Environment=JARVIS_BROWSER=off"
     sw = switch_states(manifest)
     # A tenant without two-user isolation runs as root and has no platform
     # database, so Sentinel is off: writes and approvals refuse (503).
@@ -1029,6 +1112,16 @@ def install_units(manifest: dict, mapping: Dict[str, str]) -> None:
         for unit, tmpl in dropins.items():
             write_file(UNIT_DIR / f"{unit}.d" / "10-isolation.conf", fill(read_template(tmpl), mapping))
         log(f"two-user isolation drop-ins written for {len(dropins)} units")
+    if browser_enabled(manifest):
+        for unit in browser_unit_names(slug):
+            write_file(UNIT_DIR / unit, fill(read_template(unit[len(slug) + 1:]), mapping))
+        log("browser units written: " + ", ".join(browser_unit_names(slug)))
+    else:
+        for unit in browser_unit_names(slug):
+            if (UNIT_DIR / unit).exists():
+                subprocess.run(["systemctl", "disable", "--now", unit], check=False)
+                (UNIT_DIR / unit).unlink()
+                log(f"browser is off: removed {unit}")
 
 
 def print_ingress(slug: str, origin: str) -> None:
@@ -1130,6 +1223,9 @@ def provision(manifest_path: Path) -> None:
         names = create_identities(slug)
         apply_isolation(opt, names, skill_data_dirs(opt, shipped))
         create_platform_db(jarvis, slug, names["app_user"])
+        if browser_enabled(manifest):
+            ensure_web_user(slug)
+            install_browser_code(slug, jarvis)
     print_ingress(slug, manifest["public_origin"])
 
     run(["systemctl", "daemon-reload"])
@@ -1141,6 +1237,11 @@ def provision(manifest_path: Path) -> None:
             die(f"{unit} is {st} after enable --now — preflight/start failed (see journalctl -u {unit})")
     run(["systemctl", "enable", "--now", f"{slug}-backup.timer"])
     log(f"enabled {slug}-app, {slug}-gateway, and {slug}-backup.timer")
+    if isolation == "two_user" and browser_enabled(manifest):
+        run(["systemctl", "enable", "--now", f"{slug}-egress.socket", f"{slug}-browser.socket"])
+        bad = browser_unit_problems(slug)
+        if bad:
+            die(f"browser not right after provision: {bad}")
 
 
 def origin_shas(manifest: dict) -> tuple:
@@ -1240,6 +1341,11 @@ def validate_manifest(manifest: dict) -> tuple:
         if manifest.get("sentinel_mode") not in SENTINEL_MODES:
             die(f"isolation: two_user requires sentinel_mode: {' | '.join(SENTINEL_MODES)}")
         isolation_names(slug)
+    if browser_enabled(manifest):
+        if isolation != "two_user":
+            die("browser: enabled needs isolation: two_user")
+        if not os.access(BROWSER_BIN, os.X_OK):
+            die(f"browser: enabled but {BROWSER_BIN} is missing; run scripts/install_browser_runtime.py")
     log(f"venv=platform: {PLATFORM_VENV} (a copy; pip installs there do not reach live)")
 
     ports = manifest["ports"]
@@ -1300,7 +1406,7 @@ def teardown(slug: str, yes: bool) -> None:
         )
         raise Refuse(1)
     units = sorted(UNIT_DIR.glob(f"{slug}-*"))
-    names = [p.name for p in units if p.suffix in {".service", ".timer"}]
+    names = [p.name for p in units if p.suffix in {".service", ".timer", ".socket"}]
     if names:
         log(f"stopping {names}")
         subprocess.run(["systemctl", "stop", *names], check=False)
@@ -1327,6 +1433,12 @@ def teardown(slug: str, yes: bool) -> None:
         env_file.unlink()
         log(f"removed {env_file}")
     n = isolation_names(slug)
+    for p in (BROWSER_CODE_ROOT / slug, BROWSER_STATE_ROOT / slug):
+        if p.exists():
+            shutil.rmtree(p)
+            log(f"removed {p}")
+    if _getent("passwd", n["web_user"]):
+        run(["userdel", n["web_user"]])
     ours = {n["app_user"], n["agent_user"]}
     grp = _getent("group", n["group"])
     members = {m for m in grp.split(":")[3].split(",") if m} if grp else set()
@@ -1346,7 +1458,7 @@ def teardown(slug: str, yes: bool) -> None:
         tree_hits.append(f"unit path still exists: {p}")
     if env_file.exists():
         tree_hits.append(f"secrets file still exists: {env_file}")
-    for user in (n["app_user"], n["agent_user"]):
+    for user in (n["app_user"], n["agent_user"], n["web_user"]):
         if _getent("passwd", user):
             tree_hits.append(f"user still exists: {user}")
     if tree_hits:
@@ -1435,6 +1547,10 @@ def reconfigure(manifest_path: Path, restart_approved: bool) -> None:
     changed += [soul] if rewrite_keeping_owner(soul, soul_text(manifest)) else []
     changed += install_agent_plugin(hermes, opt / "jarvis-app")
 
+    if browser_enabled(manifest) and not (UNIT_DIR / f"{slug}-browser.service").exists():
+        die("browser: enabled but the browser units are not installed; switching the browser on is an --upgrade")
+    if not browser_enabled(manifest) and (UNIT_DIR / f"{slug}-browser.service").exists():
+        die("browser is off in the manifest but its units are installed; switching it off is an --upgrade")
     shipped = sorted(d.name for d in (opt / "skills" / "openclaw-imports").iterdir() if (d / "data").is_dir())
     mapping = common_map(manifest, posture_rules(manifest), "IN-ENV-FILE", "", shipped)
     cfg = hermes / "config.yaml"
@@ -1463,11 +1579,11 @@ UPGRADE_TIMEOUT = 120
 
 def tenant_unit_paths(slug: str) -> List[Path]:
     """Every unit file, drop-in dir and logrotate file the provisioner owns for slug."""
-    stems = ["app", "gateway", "backup", "task-digest", "metrics-monthly"] + \
+    stems = ["app", "gateway", "backup", "task-digest", "metrics-monthly", "browser", "egress"] + \
             [f"sweep-{s.replace('_', '-')}" for s in SWEEPS]
     out = []
     for stem in stems:
-        for suffix in (".service", ".timer", ".service.d"):
+        for suffix in (".service", ".timer", ".service.d", ".socket"):
             p = UNIT_DIR / f"{slug}-{stem}{suffix}"
             if p.exists():
                 out.append(p)
@@ -1626,7 +1742,10 @@ def upgrade(manifest_path: Path, restart_approved: bool) -> None:
     timers = [p.name for p in tenant_unit_paths(slug) if p.suffix == ".timer"]
     enabled_timers = [t for t in timers if subprocess.run(["systemctl", "is-enabled", t], capture_output=True,
                                                           text=True).stdout.strip() == "enabled"]
-    run(["systemctl", "stop", *timers, *units])
+    browser_old = [u for u in browser_unit_names(slug) if (UNIT_DIR / u).exists()]
+    browser_old_enabled = [u for u in browser_old if u.endswith(".socket") and subprocess.run(
+        ["systemctl", "is-enabled", u], capture_output=True, text=True).stdout.strip() == "enabled"]
+    run(["systemctl", "stop", *timers, *units, *browser_old])
     run(["tar", "--xattrs", "--acls", "-cpf", str(snap / "opt.tar"), "-C", "/opt", slug])
     run(["tar", "--xattrs", "--acls", "-cpf", str(snap / "units.tar"), "-C", "/",
          *[str(p.relative_to("/")) for p in tenant_unit_paths(slug)]])
@@ -1694,6 +1813,9 @@ def upgrade(manifest_path: Path, restart_approved: bool) -> None:
         install_agent_plugin(hermes, jarvis)
         trim_agent_env(hermes)
         apply_isolation(opt, names, skill_data_dirs(opt, shipped), keep_private=True)
+        if browser_enabled(manifest):
+            ensure_web_user(slug)
+            install_browser_code(slug, jarvis)
         if db_existed:
             run([str(PLATFORM_VENV), str(jarvis / "scripts" / "pg_tenant.py"), "migrate", slug])
             log(f"jarvis_{slug}: grants re-applied at schema {db_version}")
@@ -1702,8 +1824,12 @@ def upgrade(manifest_path: Path, restart_approved: bool) -> None:
             created_db = True
 
         run(["systemctl", "daemon-reload"])
+        if browser_enabled(manifest):
+            run(["systemctl", "enable", "--now", f"{slug}-egress.socket", f"{slug}-browser.socket"])
         run(["systemctl", "start", *units])
         bad = wait_healthy(slug, ports)
+        if browser_enabled(manifest):
+            bad += browser_unit_problems(slug)
         for u in units:
             if unit_env_has(u, "JARVIS_ALLOW_WRITES") and u not in armed_ok:
                 bad.append(f"{u} has JARVIS_ALLOW_WRITES after upgrade")
@@ -1715,17 +1841,19 @@ def upgrade(manifest_path: Path, restart_approved: bool) -> None:
             run(["systemctl", "start", *enabled_timers])
     except BaseException as exc:
         log(f"UPGRADE FAILED ({exc!r}); rolling back from {snap}")
-        rollback_upgrade(slug, ports, snap, created_db, units, timers, enabled_timers)
+        rollback_upgrade(slug, ports, snap, created_db, units, timers, enabled_timers, browser_old_enabled)
         raise
     log(f"upgraded {slug} to app {sha_app}, skills {sha_skills}; app and gateway healthy; "
         f"snapshot kept in {snap}")
 
 
 def rollback_upgrade(slug: str, ports: dict, snap: Path, created_db: bool, units: List[str],
-                     timers: List[str], enabled_timers: List[str]) -> None:
+                     timers: List[str], enabled_timers: List[str], browser_enabled_before: List[str] = ()) -> None:
     failed = snap / "failed"
     failed.mkdir(exist_ok=True)
     subprocess.run(["systemctl", "stop", *timers, *units], check=False)
+    subprocess.run(["systemctl", "disable", "--now", *browser_unit_names(slug)], check=False,
+                   capture_output=True)
     if created_db:
         tool = REPO / "scripts" / "pg_tenant.py"
         r = subprocess.run([str(PLATFORM_VENV), str(tool), "dump", slug, str(failed / "platform.dump")], check=False)
@@ -1740,6 +1868,8 @@ def rollback_upgrade(slug: str, ports: dict, snap: Path, created_db: bool, units
         os.rename(p, failed / "units" / p.name)
     run(["tar", "--xattrs", "--acls", "-xpf", str(snap / "units.tar"), "-C", "/"])
     run(["systemctl", "daemon-reload"])
+    if browser_enabled_before:
+        subprocess.run(["systemctl", "enable", "--now", *browser_enabled_before], check=False)
     run(["systemctl", "start", *units])
     bad = wait_healthy(slug, ports)
     if enabled_timers:

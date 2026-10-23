@@ -106,6 +106,114 @@
       }
     },
     {
+      "name": "browser_open",
+      "authz": null,
+      "label": "Opening the website",
+      "needs": ["browser"],
+      "description": "Open a public website in their own web browser and read it. Returns the page as text, with each button, link and box named like e12. Never needs approval.",
+      "parameters": {
+        "type": "object",
+        "properties": {"url": {"type": "string", "description": "Full address, starting with https://"}},
+        "required": ["url"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "browser_read",
+      "authz": null,
+      "label": "Reading the page",
+      "needs": ["browser"],
+      "description": "Read the page that is open in the browser again, with fresh element names.",
+      "parameters": {"type": "object", "properties": {}, "additionalProperties": false}
+    },
+    {
+      "name": "browser_scroll",
+      "authz": null,
+      "label": "Scrolling the page",
+      "needs": ["browser"],
+      "description": "Scroll the open page down (or up) and read it.",
+      "parameters": {
+        "type": "object",
+        "properties": {"direction": {"type": "string", "enum": ["down", "up"]}},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "browser_back",
+      "authz": null,
+      "label": "Going back a page",
+      "needs": ["browser"],
+      "description": "Go back to the previous page and read it.",
+      "parameters": {"type": "object", "properties": {}, "additionalProperties": false}
+    },
+    {
+      "name": "browser_request_access",
+      "authz": null,
+      "label": "Asking to work on this site",
+      "needs": ["browser"],
+      "description": "Ask the owner's go-ahead to click, type and sign in on the site that is open (or the site named). Files one approval in the Approvals tab for the whole task; once approved you can act on that site for 30 minutes. Payments, purchases and deleting anything still get their own approval.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task": {"type": "string", "description": "One plain sentence: what you will do on the site, e.g. 'Sign in and download the October statement'."},
+          "site": {"type": "string", "description": "Optional site address, when the page isn't open yet."}
+        },
+        "required": ["task"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "browser_click",
+      "authz": null,
+      "label": "Clicking",
+      "needs": ["browser"],
+      "description": "Click one element on the open page, by its name from the page text (e.g. e12). Needs the task approved for this site first.",
+      "parameters": {
+        "type": "object",
+        "properties": {"element": {"type": "string", "description": "Element name like e12."}},
+        "required": ["element"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "browser_type",
+      "authz": null,
+      "label": "Typing",
+      "needs": ["browser"],
+      "description": "Type text into one box on the open page (replacing what is there), optionally pressing Enter after. Never for passwords: use browser_login. Needs the task approved for this site first.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "element": {"type": "string", "description": "Element name like e12."},
+          "text": {"type": "string"},
+          "submit": {"type": "boolean", "description": "Press Enter after typing."}
+        },
+        "required": ["element", "text"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "browser_press",
+      "authz": null,
+      "label": "Pressing a key",
+      "needs": ["browser"],
+      "description": "Press one key on the open page. Needs the task approved for this site first.",
+      "parameters": {
+        "type": "object",
+        "properties": {"key": {"type": "string", "enum": ["Enter", "Tab", "Escape", "Backspace", "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "PageDown", "PageUp", "Home", "End", "Space"]}},
+        "required": ["key"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "browser_login",
+      "authz": null,
+      "label": "Signing in",
+      "needs": ["browser"],
+      "description": "Sign in on the open page with the login they saved for this site in Settings. You never see the password. Open the site's sign-in page first. Needs the task approved for this site first.",
+      "parameters": {"type": "object", "properties": {}, "additionalProperties": false}
+    },
+    {
       "name": "connect_google",
       "authz": null,
       "label": "Getting the Google connect button ready",

@@ -1,9 +1,18 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ErrorState } from '../components/States'
 import { canSeeSettings } from '../components/TabBar'
-import { ApiError, Unauthorized, disconnectGoogleConnection, getGoogleConnection } from '../lib/api'
+import {
+  ApiError,
+  Unauthorized,
+  deleteWebsiteLogin,
+  disconnectGoogleConnection,
+  getBrowserStatus,
+  getGoogleConnection,
+  getWebsiteLogins,
+  saveWebsiteLogin,
+} from '../lib/api'
 import { absoluteTime, relativeTime } from '../lib/time'
-import type { GoogleConnectionStatus, Role } from '../lib/types'
+import type { GoogleConnectionStatus, Role, WebsiteLogin } from '../lib/types'
 
 /**
  * Settings — the signed-in person's own Google account. Any person; never the
@@ -198,6 +207,133 @@ export default function Settings({ role, onUnauthorized }: Props) {
           )}
         </div>
       </div>
+
+      {role !== 'operator' && <WebsiteLogins onUnauthorized={onUnauthorized} />}
     </section>
+  )
+}
+
+/** Saved website logins for Jarvis's browser. The API never returns a
+ *  password; the browser types it into the site's own form. */
+function WebsiteLogins({ onUnauthorized }: { onUnauthorized: () => void }) {
+  const [enabled, setEnabled] = useState(false)
+  const [logins, setLogins] = useState<WebsiteLogin[]>([])
+  const [site, setSite] = useState('')
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    try {
+      const st = await getBrowserStatus()
+      setEnabled(st.enabled)
+      if (st.enabled) setLogins((await getWebsiteLogins()).logins)
+    } catch (err) {
+      if (err instanceof Unauthorized) return onUnauthorized()
+      setError(err instanceof ApiError ? err.message : 'Could not read the saved logins.')
+    }
+  }, [onUnauthorized])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  if (!enabled) return null
+
+  async function add(e: React.FormEvent) {
+    e.preventDefault()
+    setBusy(true)
+    setError(null)
+    try {
+      await saveWebsiteLogin(site.trim(), username.trim(), password)
+      setSite('')
+      setUsername('')
+      setPassword('')
+      await load()
+    } catch (err) {
+      if (err instanceof Unauthorized) return onUnauthorized()
+      setError(err instanceof ApiError ? err.message : 'Could not save that login.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function remove(s: string) {
+    setBusy(true)
+    try {
+      await deleteWebsiteLogin(s)
+      await load()
+    } catch (err) {
+      if (err instanceof Unauthorized) return onUnauthorized()
+      setError(err instanceof ApiError ? err.message : 'Could not remove that login.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const field =
+    'min-w-0 rounded-btn border border-light-border bg-transparent px-3 py-2 text-body-s dark:border-dark-border'
+
+  return (
+    <div className="glass-featured mt-5 rounded-card px-4 py-4 lg:px-6 lg:py-5">
+      <h3 className="text-row-title">Website logins</h3>
+      <p className="mt-1 text-body-s text-light-text-secondary dark:text-dark-text-secondary">
+        Jarvis signs in with these when you approve a task on that site. It never sees the password: the browser
+        types it into the site’s own sign-in form.
+      </p>
+      {error && <p className="mt-2 text-body-s text-light-alert dark:text-dark-alert">{error}</p>}
+      {logins.length > 0 && (
+        <ul className="mt-3 grid gap-2">
+          {logins.map((l) => (
+            <li key={l.site} className="flex min-w-0 items-center gap-3">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-body-s text-light-text-primary dark:text-dark-text-primary">{l.site}</p>
+                <p className="truncate text-caption text-light-text-muted dark:text-dark-text-muted">
+                  {l.username}
+                  {l.last_used_at ? ` · last used ${relativeTime(l.last_used_at)}` : ' · not used yet'}
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void remove(l.site)}
+                className="text-caption text-light-text-muted underline-offset-2 hover:underline dark:text-dark-text-muted"
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <form onSubmit={(e) => void add(e)} className="mt-4 grid gap-2 sm:grid-cols-3">
+        <input value={site} onChange={(e) => setSite(e.target.value)} placeholder="Site, e.g. zillow.com" required className={field} />
+        <input
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          placeholder="Email or username"
+          autoComplete="off"
+          required
+          className={field}
+        />
+        <input
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="Password"
+          autoComplete="new-password"
+          required
+          className={field}
+        />
+        <button
+          type="submit"
+          disabled={busy}
+          className="rounded-pill bg-light-accent px-5 py-2.5 text-body font-semibold text-white shadow-accent-btn
+                     disabled:opacity-50 dark:bg-dark-accent-fill sm:col-span-3 sm:justify-self-start"
+        >
+          Save login
+        </button>
+      </form>
+    </div>
   )
 }

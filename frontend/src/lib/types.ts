@@ -253,8 +253,49 @@ export interface Approval {
   /** Broker actions: what will happen, in readable fields (to, subject, message; title, starts…). */
   display?: Record<string, string>
   status: ApprovalStatus
+  /** A browser approval: the person whose browser it is. Only they can approve it. */
+  for_person?: string | null
+  /** What this signed-in person may do with a pending request; the server enforces it. */
+  can_approve?: boolean
+  can_reject?: boolean
   decided_by?: string
   decided_at?: string
+}
+
+export interface BrowserStatus {
+  enabled: boolean
+  running?: boolean
+  url?: string | null
+  title?: string | null
+  taken_over?: boolean
+  /** Sites with an approved task, and when that access ends. */
+  access?: { site: string; until: string | null }[]
+}
+
+export interface BrowserScreen {
+  running: boolean
+  url?: string
+  title?: string
+  jpeg?: string
+  width?: number
+  height?: number
+  taken_over: boolean
+}
+
+export interface BrowserInput {
+  kind: 'click' | 'type' | 'key' | 'open' | 'back' | 'scroll'
+  x?: number
+  y?: number
+  text?: string
+  key?: string
+  url?: string
+}
+
+export interface WebsiteLogin {
+  site: string
+  username: string
+  updated_at: string
+  last_used_at: string | null
 }
 
 export interface ApprovalsResponse {

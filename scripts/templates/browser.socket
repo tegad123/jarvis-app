@@ -1,0 +1,14 @@
+# Only the app user can reach the browser: it is how the app asks for a page,
+# a click or a picture on behalf of a signed-in person.
+[Unit]
+Description={{DISPLAY_NAME}} — web browser (socket)
+
+[Socket]
+ListenStream=/run/jarvis-browser/{{SLUG}}.sock
+SocketUser={{APP_USER}}
+SocketGroup={{APP_USER}}
+SocketMode=0600
+DirectoryMode=0755
+
+[Install]
+WantedBy=sockets.target

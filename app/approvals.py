@@ -54,10 +54,13 @@ def _iso(v) -> Optional[str]:
 def _scopes_for(row: Dict[str, Any]) -> List[str]:
     """A grant binds one connector, one destination and one skill, so a wider
     scope than once is offered only for a broker action with one destination."""
+    a = row["action_json"] or {}
+    if row["origin"] == "broker" and a.get("type") == "browser_task":
+        # The card's one tap is "this site, for the next half hour".
+        return [sentinel.SCOPE_UNTIL]
     if row["origin"] != "broker" or row.get("action_class") in (None, sentinel.LOCKED):
         return [sentinel.SCOPE_ONCE]
-    a = row["action_json"] or {}
-    if a.get("person"):
+    if a.get("type") == "browser" or a.get("person"):
         return [sentinel.SCOPE_ONCE]
     try:
         from . import broker  # noqa: PLC0415
@@ -70,7 +73,36 @@ def _scopes_for(row: Dict[str, Any]) -> List[str]:
     return list(GRANT_SCOPES) if len(dests) == 1 else [sentinel.SCOPE_ONCE]
 
 
-def _view(row: Dict[str, Any], person: Optional[str]) -> Dict[str, Any]:
+def default_scope(request_id: str) -> str:
+    """What a plain Approve tap grants: the request's only scope when it
+    offers one (a browser task), otherwise once."""
+    row = store.get_approval(request_id)
+    scopes = _scopes_for(row) if row else [sentinel.SCOPE_ONCE]
+    return scopes[0] if len(scopes) == 1 else sentinel.SCOPE_ONCE
+
+
+def personal(row: Dict[str, Any]) -> bool:
+    """A browser approval belongs to the person whose browser it is (the row's
+    user_id). Every other approval is the tenant's, and the owner's to decide."""
+    return row["origin"] == "broker" and str((row["action_json"] or {}).get("type") or "").startswith("browser")
+
+
+def may_see(row: Dict[str, Any], person: Optional[str], role: str) -> bool:
+    return role == "owner" or (personal(row) and person is not None and row["user_id"] == person)
+
+
+def may_decide(row: Dict[str, Any], decision: str, person: Optional[str], role: str) -> bool:
+    """Only the person approves their own browser approval, the owner included:
+    nobody says yes on someone else's signed-in accounts. The owner may still
+    reject any of them, and decides everything that is not personal."""
+    if person is None:
+        return False
+    if personal(row):
+        return row["user_id"] == person or (decision == REJECTED and role == "owner")
+    return role == "owner"
+
+
+def _view(row: Dict[str, Any], person: Optional[str], role: str = "owner") -> Dict[str, Any]:
     decision = row.get("decision_json") or {}
     item = {
         "id": row["id"], "ts": _iso(row["created_at"]), "tenant": config.get("JARVIS_TENANT") or "",
@@ -78,6 +110,7 @@ def _view(row: Dict[str, Any], person: Optional[str]) -> Dict[str, Any]:
         "payload": row["action_json"], "action_class": row.get("action_class"), "reason": row.get("reason"),
         "source": ({"kind": row["source_kind"], "id": row["source_id"]} if row.get("source_kind") else None),
         "requires_role": row.get("requires_role"), "status": row["status"],
+        "for_person": row.get("user_id") if personal(row) else None,
         "expires_at": _iso(row["expires_at"]),
     }
     if row["origin"] == "broker":
@@ -91,17 +124,23 @@ def _view(row: Dict[str, Any], person: Optional[str]) -> Dict[str, Any]:
             if decision.get(k) is not None:
                 item[k] = decision[k]
     elif person is not None:
+        item["can_approve"] = may_decide(row, APPROVED, person, role)
+        item["can_reject"] = may_decide(row, REJECTED, person, role)
         exp = row["expires_at"]
         sign = lambda ans, scope: sentinel.sign_callback(  # noqa: E731
             _secret(), approval_id=row["id"], user=person, answer=ans, scope=scope, expires_at=exp)
-        item["callbacks"] = {"reject": sign("reject", sentinel.SCOPE_ONCE),
-                             "approve": {s: sign("approve", s) for s in _scopes_for(row)}}
+        item["callbacks"] = {"reject": sign("reject", sentinel.SCOPE_ONCE) if may_decide(row, REJECTED, person, role)
+                             else None,
+                             "approve": {s: sign("approve", s) for s in _scopes_for(row)}
+                             if may_decide(row, APPROVED, person, role) else {}}
     return item
 
 
-def query(status: Optional[str] = None, person: Optional[str] = None) -> Dict[str, Any]:
+def query(status: Optional[str] = None, person: Optional[str] = None, role: str = "owner") -> Dict[str, Any]:
+    """The queue this person may see: everything for the owner, only their own
+    browser approvals for anyone else."""
     store.expire_due(sentinel.utcnow())
-    items = [_view(r, person) for r in store.list_approvals()]
+    items = [_view(r, person, role) for r in store.list_approvals() if may_see(r, person, role)]
     counts = {s: sum(1 for i in items if i["status"] == s) for s in (PENDING, APPROVED, REJECTED, EXPIRED)}
     if status:
         items = [i for i in items if i["status"] == status]
@@ -123,16 +162,20 @@ def answer_from_callback(request_id: str, token: str, person: str) -> Dict[str, 
 
 
 def decide(request_id: str, decision: str, decided_by: str, scope: str = sentinel.SCOPE_ONCE,
-           via: str = "pwa_session") -> Dict[str, Any]:
+           via: str = "pwa_session", role: str = "owner") -> Dict[str, Any]:
     """Record a decision, once, then carry it out. LookupError for an unknown
-    id; ValueError for a bad decision or one that is no longer pending."""
+    id (or one this person may not see); PermissionError when they may see it
+    but not make this decision; ValueError for a bad decision or one that is
+    no longer pending."""
     decision = (decision or "").strip().lower()
     if decision not in VALID_DECISIONS:
         raise ValueError(f"decision must be one of {VALID_DECISIONS}")
     store.expire_due(sentinel.utcnow())
     row = store.get_approval(request_id)
-    if row is None:
+    if row is None or not may_see(row, decided_by, role):
         raise LookupError(request_id)
+    if not may_decide(row, decision, decided_by, role):
+        raise PermissionError("only the person whose browser it is can approve this")
     if row["status"] != PENDING:
         raise ValueError(f"already {row['status']}")
     if decision == APPROVED and scope not in _scopes_for(row):

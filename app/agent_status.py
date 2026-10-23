@@ -24,6 +24,7 @@ SOUL_PATH = Path(__file__).resolve().parents[1] / "scripts" / "templates" / "SOU
 SPEC = json.loads(SPEC_PATH.read_text())
 TOOLS: Dict[str, dict] = {t["name"]: t for t in SPEC["tools"]}
 ALLOWED = frozenset(TOOLS)
+BROWSER_TOOLS = frozenset(n for n, t in TOOLS.items() if "browser" in t["needs"])
 CONNECT_ROLES = ("owner", "admin", "member")
 CHAT_ACTIONS = ("connect_google",)
 WORKING = "Working on it"
@@ -64,10 +65,24 @@ def permitted(person_key: str) -> List[str]:
 LIVE_NEEDS_GOOGLE = ("draft_email",)
 
 
+def browser_on() -> bool:
+    from . import browser  # noqa: PLC0415
+    return browser.enabled()
+
+
+def allowed_now() -> frozenset:
+    """The tools the model may be offered on this tenant right now: the
+    browser's only where it is switched on."""
+    return ALLOWED if browser_on() else ALLOWED - BROWSER_TOOLS
+
+
 def status(role: str, person_key: str = "") -> dict:
     g = google_state(person_key)
-    mine = permitted(person_key)
     mode = "practice" if practice() else "live"
+    hidden = set() if browser_on() else set(BROWSER_TOOLS)
+    # Each person's browser is their own; someone who is nobody has none.
+    barred = set() if person_key else set(BROWSER_TOOLS) - hidden
+    mine = [n for n in permitted(person_key) if n not in hidden and n not in barred]
 
     def needs(n: str) -> bool:
         return "google" in TOOLS[n]["needs"] or (mode == "live" and n in LIVE_NEEDS_GOOGLE)
@@ -75,7 +90,7 @@ def status(role: str, person_key: str = "") -> dict:
             "can_connect": can_connect(role),
             "available": [n for n in mine if not needs(n) or g == "connected"],
             "needs_google": [n for n in mine if needs(n) and g != "connected"],
-            "owner_only": [n for n in TOOLS if n not in mine]}
+            "owner_only": [n for n in TOOLS if n not in mine and n not in hidden]}
 
 
 _CAN = {
@@ -86,10 +101,15 @@ _CAN = {
     "add_calendar_event": "put things on the calendar",
     "search_email": "look through email",
     "draft_email": "write emails for them to look over before anything is sent",
+    "browser_open": "open and read any public website in their own browser",
+    "browser_click": "show what you would click and type on a website (practice mode: nothing is clicked)",
 }
 _CAN_LIVE = {
     "add_calendar_event": "put things on their calendar, each one only after they tap Approve in the Approvals tab",
     "draft_email": "send emails from their Gmail, each one only after they tap Approve in the Approvals tab",
+    "browser_click": "click, type and sign in on a website once they approve the task for that site in the "
+                     "Approvals tab (30 minutes at a time); payments, purchases and deleting anything always get "
+                     "their own approval",
 }
 
 
@@ -117,6 +137,12 @@ def render(st: dict, name: str) -> str:
     else:
         lines.append("- Mode: live. Every email and calendar event waits in the Approvals tab and happens only when "
                      "the owner taps Approve there.")
+    if "browser_open" in st["available"]:
+        lines.append("- Web browser: you have one, signed in as them where they saved a login. Reading pages needs "
+                     "no approval. Before clicking, typing or signing in on a site, call browser_request_access "
+                     "once with the whole task; it waits in the Approvals tab. Never ask for or type a password: "
+                     "browser_login uses the saved login. For a code or a CAPTCHA, ask them to take over from the "
+                     "Computer tab.")
     lines.append("- You can do right now: " + ("; ".join(can) if can else "nothing yet") + ".")
     if later:
         lines.append("- Once Google is connected you could also: " + "; ".join(later) + ".")
@@ -188,5 +214,6 @@ def strip_disallowed(tools: List[dict]) -> tuple:
     """(kept, stripped names) for an Anthropic request's tools array."""
     kept, stripped = [], []
     for t in tools:
-        (kept if isinstance(t, dict) and t.get("name") in ALLOWED else stripped).append(t)
+        allowed = allowed_now()
+        (kept if isinstance(t, dict) and t.get("name") in allowed else stripped).append(t)
     return kept, [str(t.get("name") if isinstance(t, dict) else t) for t in stripped]

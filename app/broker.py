@@ -149,6 +149,9 @@ def _parse_raw(params: Dict[str, Any]):
 def approval_display(action: Dict[str, Any]) -> Optional[Dict[str, str]]:
     """What a pending Google action will do, in readable fields for the owner's
     Approvals card (the stored proposal is base64 MIME and nested params)."""
+    if isinstance(action, dict) and str(action.get("type") or "").startswith("browser"):
+        from . import browser  # noqa: PLC0415
+        return browser.approval_display(action)
     if not isinstance(action, dict) or action.get("type") != "google":
         return None
     api, method, params = action.get("api"), action.get("method"), action.get("params") or {}
@@ -464,6 +467,9 @@ def execute_approved(item: Dict[str, Any], scope: str, decided_by: str) -> Dict[
         _bump("broker_sentinel_switch_off")
         return {"state": "refused", "reason": "sentinel_off"}
     a = item.get("action_json") or {}
+    if str(a.get("type") or "").startswith("browser"):
+        from . import browser  # noqa: PLC0415
+        return browser.execute_approved(item, scope, decided_by)
     if a.get("type") != "google":
         return {"state": "failed", "reason": "not a broker action"}
     ctx = {"run": item.get("run_id") or "", "session": item.get("session_id") or "", "task": item.get("task_id") or "",

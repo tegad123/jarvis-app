@@ -94,6 +94,11 @@ if SWITCHES["sentinel"]:
 else:
     PLATFORM_DB = None
 app.include_router(broker_mod.router)
+from app import browser as browser_mod  # noqa: E402
+if os.environ.get("JARVIS_BROWSER", "off").strip().lower() not in ("on", "off"):
+    raise SystemExit("REFUSED: JARVIS_BROWSER must be on or off")
+app.include_router(browser_mod.broker_router)
+app.include_router(browser_mod.router)
 from app import model_proxy as model_proxy_mod  # noqa: E402
 app.include_router(model_proxy_mod.router)
 
@@ -631,13 +636,13 @@ def get_approvals(
     sess: dict = Depends(auth.current_session),
     status: Optional[str] = Query(None, pattern="^(pending|approved|rejected|expired)$"),
 ):
-    # OWNER-ONLY (spec W3). A member must not even see the queue: it contains
-    # draft outbound mail and config changes. Break-glass operator is excluded
-    # too — support may READ the tenant's world but must never approve on their
-    # behalf.
-    auth.require_owner(sess)
+    # The tenant's queue is the owner's (spec W3): draft outbound mail and
+    # config changes. Anyone else sees only their own browser approvals
+    # (approvals.may_see). The break-glass operator sees none — support may
+    # READ the tenant's world but must never approve on their behalf.
+    auth.require_person(sess)
     _approvals_on()
-    return approvals_mod.query(status=status, person=auth.person_of(sess) or "owner")
+    return approvals_mod.query(status=status, person=auth.person_of(sess), role=auth.role_of(sess))
 
 
 @app.post("/api/approvals/{request_id}")
@@ -646,13 +651,12 @@ def post_approval(
     body: DecisionRequest,
     sess: dict = Depends(auth.current_session),
 ):
-    # OWNER-ONLY, enforced server-side.
-    auth.require_owner(sess)
+    # Who may decide what is approvals.may_decide, enforced in decide().
+    auth.require_person(sess)
     _approvals_on()
-    # Who decided — now a real person, not "whoever held the shared passphrase".
-    decided_by = auth.person_of(sess) or "owner"
+    decided_by = auth.person_of(sess)
     decision = {"approve": "approved", "reject": "rejected"}.get((body.decision or "").lower(), body.decision)
-    scope, via = "once", "pwa_session"
+    scope, via = approvals_mod.default_scope(request_id), "pwa_session"
     if body.callback:
         try:
             answer = approvals_mod.answer_from_callback(request_id, body.callback, decided_by)
@@ -666,9 +670,13 @@ def post_approval(
         raise HTTPException(status_code=422, detail="Send the card's signed callback or a decision.")
 
     try:
-        updated = approvals_mod.decide(request_id, decision, decided_by, scope=scope, via=via)
+        updated = approvals_mod.decide(request_id, decision, decided_by, scope=scope, via=via,
+                                       role=auth.role_of(sess))
     except LookupError:
         raise HTTPException(status_code=404, detail="No such approval request.")
+    except PermissionError as exc:
+        threads_mod.bump_counter("approvals_decision_refused")
+        raise HTTPException(status_code=403, detail=str(exc))
     except approvals_mod.ConfigChangeRefused as exc:
         # The approval was genuine but the change could not be applied — a
         # forbidden key, or the live value moved since the proposal was written.

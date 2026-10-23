@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 HERE = Path(__file__).resolve().parent
 SPEC = json.loads((HERE / "tools.json").read_text())
 RUNNER = HERE / "run_action.py"
-TIMEOUT_S = 90
+TIMEOUT_S = 150
 FAILED = json.dumps({"ok": False, "say": "Something went wrong on my side, so I couldn't do that just now. "
                                           "Nothing was changed."})
 # A proposal that came back held is not filed again: the same tool with the
@@ -28,6 +28,9 @@ FAILED = json.dumps({"ok": False, "say": "Something went wrong on my side, so I 
 # (practice: nothing will run; live: it is in Approvals), logged and counted.
 HELD_TTL_S = 3600
 ALREADY = "This was already filed, so it was not filed again. "
+# Element names (e12) are reused from page to page, so the same arguments can
+# be a different action; only the browser task request is the same proposal twice.
+NO_DEDUPE = {"browser_open", "browser_click", "browser_type", "browser_press", "browser_login"}
 _held: dict = {}
 _held_lock = threading.Lock()
 
@@ -63,7 +66,7 @@ def _handler(name: str):
             return FAILED
         try:
             res = json.loads(lines[-1])
-            if res.get("held"):
+            if res.get("held") and name not in NO_DEDUPE:
                 with _held_lock:
                     _held[key] = (now + HELD_TTL_S, str(res.get("say") or ""))
         except ValueError:

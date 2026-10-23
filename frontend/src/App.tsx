@@ -4,12 +4,13 @@ import Chrome from './components/Chrome'
 import TabBar, { canSeeSettings, type TabId } from './components/TabBar'
 import Approvals from './screens/Approvals'
 import Ask from './screens/Ask'
+import Computer from './screens/Computer'
 import Feed from './screens/Feed'
 import Leads from './screens/Leads'
 import Login from './screens/Login'
 import Settings from './screens/Settings'
 import Tasks from './screens/Tasks'
-import { Unauthorized, getSession, logout } from './lib/api'
+import { Unauthorized, getBrowserStatus, getSession, logout } from './lib/api'
 import { applyTheme, initialTheme, type Theme } from './lib/theme'
 import type { Role } from './lib/types'
 
@@ -22,6 +23,7 @@ export default function App() {
   const [auth, setAuth] = useState<AuthState>({ status: 'checking' })
   const [tab, setTab] = useState<TabId>('feed')
   const [theme, setTheme] = useState<Theme>(() => initialTheme())
+  const [browserOn, setBrowserOn] = useState(false)
 
   useEffect(() => {
     applyTheme(theme)
@@ -55,6 +57,14 @@ export default function App() {
   useEffect(() => {
     void check()
   }, [check])
+
+  const person = auth.status === 'in' && auth.role !== 'operator'
+  useEffect(() => {
+    if (!person) return setBrowserOn(false)
+    getBrowserStatus()
+      .then((st) => setBrowserOn(st.enabled))
+      .catch(() => setBrowserOn(false))
+  }, [person])
 
   const signOut = useCallback(async () => {
     await logout()
@@ -121,14 +131,15 @@ export default function App() {
           />
         )}
 
-        {/* Owner-only server-side (auth.require_owner). Hiding the screen is
-            a courtesy on top of that enforcement, never instead of it. */}
-        {tab === 'approvals' && auth.role === 'owner' && (
+        {/* The server decides what each person sees (approvals.may_see): the
+            owner the whole queue, anyone else only their own browser
+            approvals. The operator sees none. */}
+        {tab === 'approvals' && auth.role !== 'operator' && (
           <Approvals onUnauthorized={() => setAuth({ status: 'out' })} />
         )}
-        {tab === 'approvals' && auth.role !== 'owner' && (
+        {tab === 'approvals' && auth.role === 'operator' && (
           <p className="py-10 text-center text-body-s text-light-text-muted dark:text-dark-text-muted">
-            Approvals are the account owner’s to make.
+            Approvals are the account’s people to make.
           </p>
         )}
 
@@ -144,6 +155,10 @@ export default function App() {
           <Leads personKey={auth.personKey} onUnauthorized={() => setAuth({ status: 'out' })} />
         )}
 
+        {tab === 'computer' && auth.role !== 'operator' && (
+          <Computer onUnauthorized={() => setAuth({ status: 'out' })} />
+        )}
+
         {tab === 'settings' && canSeeSettings(auth.role) && (
           <Settings
             role={auth.role}
@@ -153,7 +168,7 @@ export default function App() {
        </div>
       </main>
 
-      <TabBar active={tab} onChange={onTab} role={auth.role} />
+      <TabBar active={tab} onChange={onTab} role={auth.role} showComputer={browserOn} />
     </div>
   )
 }

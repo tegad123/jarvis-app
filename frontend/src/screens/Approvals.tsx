@@ -150,6 +150,12 @@ function ApprovalCard({
         <PayloadDetails payload={approval.payload} />
       )}
 
+      {pending && approval.for_person && !approval.can_approve && (
+        <p className="mt-3 text-caption text-light-text-muted dark:text-dark-text-muted">
+          For {approval.for_person}’s browser. Only they can approve it; you can reject it.
+        </p>
+      )}
+
       {pending ? (
         <div className="mt-4 grid grid-cols-2 gap-2">
           <button
@@ -164,17 +170,17 @@ function ApprovalCard({
           </button>
           <button
             type="button"
-            disabled={busy}
+            disabled={busy || approval.can_approve === false}
             onClick={() => onDecide(approval.id, 'approve')}
             className="rounded-btn bg-light-accent px-4 py-3 text-body font-semibold
                        text-white shadow-accent-btn transition-opacity
                        disabled:opacity-50 dark:bg-dark-accent-fill"
           >
-            {busy ? 'Saving…' : 'Approve'}
+            {busy ? 'Saving…' : approval.payload?.type === 'browser_task' ? 'Approve for 30 min' : 'Approve'}
           </button>
           <button
             type="button"
-            disabled={busy}
+            disabled={busy || approval.can_reject === false}
             onClick={() => onDecide(approval.id, 'reject')}
             className="col-span-2 rounded-btn px-4 py-2 text-body-s
                        text-light-text-secondary transition-opacity disabled:opacity-50

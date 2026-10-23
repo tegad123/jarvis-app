@@ -18,6 +18,9 @@
 import type {
   Approval,
   ApprovalsResponse,
+  BrowserInput,
+  BrowserScreen,
+  BrowserStatus,
   ChatHistoryResponse,
   ChatStreamEvent,
   FeedResponse,
@@ -34,6 +37,7 @@ import type {
   Thread,
   ThreadMember,
   ThreadsResponse,
+  WebsiteLogin,
 } from './types'
 import { DIRECT_THREAD } from './types'
 
@@ -193,6 +197,43 @@ export function getGoogleConnection(): Promise<GoogleConnectionStatus> {
 
 export function disconnectGoogleConnection(): Promise<{ ok: boolean; status: string }> {
   return requestOk('/api/google/connection/disconnect', { method: 'POST' })
+}
+
+/* ------------------------------------------------------------------ browser */
+
+export function getBrowserStatus(): Promise<BrowserStatus> {
+  return requestOk<BrowserStatus>('/api/browser/status')
+}
+
+export function getBrowserScreen(): Promise<BrowserScreen> {
+  return requestOk<BrowserScreen>('/api/browser/screen')
+}
+
+export function setBrowserTakeover(on: boolean): Promise<{ taken_over: boolean }> {
+  return requestOk('/api/browser/takeover', { method: 'POST', body: JSON.stringify({ on }) })
+}
+
+export function browserInput(input: BrowserInput): Promise<{ ok: boolean; url?: string; error?: string }> {
+  return requestOk('/api/browser/input', { method: 'POST', body: JSON.stringify(input) })
+}
+
+export function closeBrowser(): Promise<{ running: boolean }> {
+  return requestOk('/api/browser/close', { method: 'POST' })
+}
+
+export function getWebsiteLogins(): Promise<{ logins: WebsiteLogin[] }> {
+  return requestOk('/api/browser/logins')
+}
+
+export function saveWebsiteLogin(site: string, username: string, password: string): Promise<{ site: string }> {
+  return requestOk('/api/browser/logins', {
+    method: 'POST',
+    body: JSON.stringify({ site, username, password }),
+  })
+}
+
+export function deleteWebsiteLogin(site: string): Promise<{ ok: boolean }> {
+  return requestOk(`/api/browser/logins/${encodeURIComponent(site)}`, { method: 'DELETE' })
 }
 
 /* --------------------------------------------------------------------- feed */
