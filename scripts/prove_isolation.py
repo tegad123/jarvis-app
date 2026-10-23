@@ -352,8 +352,9 @@ def main() -> int:
         return [json.loads(x) for x in p.read_text().splitlines() if x.strip()] if p.exists() else []
     f0 = len(feed_lines())
     asks = live_writes and mode == "enforce"
+    # Live writes: the probe names no source record, so Sentinel denies it outright (spec 6).
     refusal_counter = ("broker_sentinel_shadowed" if mode == "shadow" else
-                       "broker_sentinel_ask" if asks else "broker_google_write_refused")
+                       "broker_sentinel_denied" if asks else "broker_google_write_refused")
 
     def pending_ids():
         with psycopg.connect(host="/var/run/postgresql", user="postgres", dbname=f"jarvis_{slug}") as c:
@@ -374,21 +375,13 @@ def main() -> int:
           agent_out.get("send") == want_exc)
     check(f"…counted app-side ({refusal_counter} +1)", counter(refusal_counter) - w0 == 1)
     new = ledger_lines()[l0:]
-    want_outcome = "shadowed" if mode == "shadow" else "approval_required" if asks else "writes_disabled"
+    want_outcome = "shadowed" if mode == "shadow" else "denied" if asks else "writes_disabled"
     check(f"…one audit row, outcome {want_outcome}, class external_send (.invalid is outside the org)",
           [(e["outcome"], e["action_class"]) for e in new] == [(want_outcome, "external_send")])
     check("…the audit row holds no message body",
           all("probe@isolation" not in json.dumps(e["detail"] or {}) for e in new) and new)
     filed = [i for i in pending_ids() if i not in p0]
-    if asks:
-        check(f"…it waits for the owner as one pending approval ({len(filed)})", len(filed) == 1)
-        with psycopg.connect(host="/var/run/postgresql", user="postgres", dbname=f"jarvis_{slug}") as c:
-            n = c.execute("UPDATE approvals SET status='rejected', decided_at=now(), decided_by='prove_isolation', "
-                          "decision_json=%s WHERE id = ANY(%s) AND status='pending'",
-                          (json.dumps({"scope": "once", "via": "prove_isolation"}), filed)).rowcount
-        check(f"…and this proof's own approval is rejected, so it never runs ({n})", n == len(filed) == 1)
-    else:
-        check(f"…and files no approval ({len(filed)})", not filed)
+    check(f"…and files no approval ({len(filed)})", not filed)
     if mode == "shadow":
         check("…and the full proposal is kept in held_actions for the owner", [e["held"] for e in new] == [True])
         wh = [f for f in feed_lines()[f0:] if f.get("kind") == "sentinel.would_have"]

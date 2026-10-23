@@ -177,7 +177,7 @@ def workarounds(text: str) -> list:
 
 def not_connected(text: str) -> bool:
     says_not = re.search(r"(isn'?t|is not|not yet|aren'?t|not) (yet )?connected|haven'?t connected|"
-                         r"(no|don'?t have) access", text, re.I)
+                         r"needs? (to be )?reconnect(ing|ed)?|(no|don'?t have) access", text, re.I)
     claims = re.search(r"\b(I (probably |likely )?do have|I probably do|yes,? I (do|have|can)|I have access)",
                        text, re.I)
     return bool(says_not) and not claims
