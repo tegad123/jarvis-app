@@ -6,7 +6,7 @@ export type TabId = 'feed' | 'ask' | 'approvals' | 'leads' | 'tasks' | 'settings
 /** Settings is owner/admin only. Members see no tab. Operators observe; they
  *  do not connect or disconnect the tenant mailbox. */
 export function canSeeSettings(role: Role): boolean {
-  return role === 'owner' || role === 'admin'
+  return role === 'owner' || role === 'admin' || role === 'member'
 }
 
 /**

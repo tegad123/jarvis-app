@@ -24,7 +24,7 @@ SOUL_PATH = Path(__file__).resolve().parents[1] / "scripts" / "templates" / "SOU
 SPEC = json.loads(SPEC_PATH.read_text())
 TOOLS: Dict[str, dict] = {t["name"]: t for t in SPEC["tools"]}
 ALLOWED = frozenset(TOOLS)
-CONNECT_ROLES = ("owner", "admin")
+CONNECT_ROLES = ("owner", "admin", "member")
 CHAT_ACTIONS = ("connect_google",)
 WORKING = "Working on it"
 
@@ -34,9 +34,11 @@ def label(tool: str) -> str:
     return t["label"] if t else WORKING
 
 
-def google_state() -> str:
-    """connected | needs_reauth | disconnected."""
-    return google_connection.status_public()["status"]
+def google_state(person_key: str) -> str:
+    """This person's own Google: connected | needs_reauth | disconnected."""
+    if not person_key:
+        return google_connection.STATUS_DISCONNECTED
+    return google_connection.person_status(person_key)["status"]
 
 
 def practice() -> bool:
@@ -58,7 +60,7 @@ def permitted(person_key: str) -> List[str]:
 
 
 def status(role: str, person_key: str = "") -> dict:
-    g = google_state()
+    g = google_state(person_key)
     mine = permitted(person_key)
     return {"google": g, "mode": "practice" if practice() else "live", "role": role,
             "can_connect": can_connect(role),
@@ -87,13 +89,13 @@ def render(st: dict, name: str) -> str:
         f"- You are talking with {name} (role: {st['role']}).",
     ]
     if st["google"] == "connected":
-        lines.append("- Google account: connected (calendar and email).")
+        lines.append("- Their own Google account: connected (their calendar and email).")
     else:
         state = "needs reconnecting" if st["google"] == "needs_reauth" else "not connected"
         how = ("If they want help with their calendar or email, say Google isn't connected and offer to connect it: "
                "call connect_google and the app shows its own button." if st["can_connect"]
                else "Only the owner or an admin can connect it; say so if it comes up.")
-        lines.append(f"- Google account: {state}. You cannot see or change their calendar or email. {how}")
+        lines.append(f"- Their own Google account: {state}. You cannot see or change their calendar or email. {how}")
     if st["mode"] == "practice":
         lines.append("- Mode: practice. Nothing reaches anyone or changes outside the app. Say it like this: "
                      "\"I'm in practice mode, so I'll show you what I'd send instead of sending it.\"")
@@ -154,17 +156,17 @@ def shape_prompt(text: str) -> tuple:
 ACTION_LABELS = {"connect_google": "Connect your Google account"}
 
 
-def action_ok(action: str, role: str) -> bool:
+def action_ok(action: str, role: str, person_key: str) -> bool:
     """Whether the app's control would work now for this person; a dead button is not shown."""
     if action == "connect_google":
-        return google_state() != "connected" and can_connect(role)
+        return bool(person_key) and google_state(person_key) != "connected" and can_connect(role)
     return False
 
 
-def live_actions(actions: List[str], role: str) -> List[dict]:
+def live_actions(actions: List[str], role: str, person_key: str) -> List[dict]:
     """Saved controls still worth drawing for this reader, as {action, label}."""
     return [{"action": a, "label": ACTION_LABELS[a]} for a in actions
-            if a in CHAT_ACTIONS and a in ACTION_LABELS and action_ok(a, role)]
+            if a in CHAT_ACTIONS and a in ACTION_LABELS and action_ok(a, role, person_key)]
 
 
 def strip_disallowed(tools: List[dict]) -> tuple:

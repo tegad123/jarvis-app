@@ -1,4 +1,5 @@
-"""Tenant Google mailbox connection: one encrypted row per accounts DB.
+"""Google connections: the tenant's assistant mailbox (one row, background
+jobs) and each person's own Google (person_google, one row per person, chat).
 
 Decrypt happens ONLY inside build_credentials. Status GET never touches the
 cipher. A missing APP_GOOGLE_TOKEN_KEY is a connect-route failure, not a PIN
@@ -36,6 +37,10 @@ class OAuthClientMissing(RuntimeError):
 
 class ConnectionCipherError(Exception):
     """Cipher missing or undecryptable. Never a silent None."""
+
+
+class PersonNotConnected(Exception):
+    """This person has no usable Google connection (none, or it needs reconnecting)."""
 
 
 def _now() -> str:
@@ -250,8 +255,14 @@ def build_credentials():
         log.error("google_connection: decrypted payload had no tokens")
         raise ConnectionCipherError("google connection cipher payload empty")
 
+    return _credentials(payload)
+
+
+def _credentials(payload: Dict[str, Any]):
     from google.oauth2.credentials import Credentials
 
+    refresh = payload.get("refresh_token") or ""
+    access = payload.get("access_token") or ""
     expiry = None
     raw_exp = payload.get("expiry")
     if isinstance(raw_exp, str) and raw_exp:
@@ -279,3 +290,108 @@ def build_credentials():
         scopes=list(scopes) if scopes else None,
         expiry=expiry,
     )
+
+
+# ── each person's own Google ─────────────────────────────────────────────────
+
+COUNTER_PERSON_REFRESHED = "person_google_refreshed"
+COUNTER_PERSON_NEEDS_REAUTH = "person_google_needs_reauth"
+
+
+def person_row(person_key: str) -> Optional[Dict[str, Any]]:
+    if not person_key:
+        return None
+    r = accounts._ensure().execute(
+        "SELECT * FROM person_google WHERE person_key = ?", (person_key,)
+    ).fetchone()
+    return dict(r) if r else None
+
+
+def person_count() -> int:
+    n = accounts._ensure().execute("SELECT COUNT(*) AS n FROM person_google").fetchone()
+    return int(n["n"] or 0)
+
+
+def person_status(person_key: str) -> Dict[str, Any]:
+    """This person's own connection. No token-ish keys, no cipher."""
+    row = person_row(person_key)
+    if not row or not row.get("token_cipher"):
+        return {"status": STATUS_DISCONNECTED, "google_email": None, "connected_at": None, "refreshed_at": None}
+    return {"status": row.get("status") or STATUS_DISCONNECTED, "google_email": row.get("google_email"),
+            "connected_at": row.get("connected_at"), "refreshed_at": row.get("refreshed_at")}
+
+
+def put_person(person_key: str, *, google_email: str, scopes: str, token_cipher: bytes) -> None:
+    if not person_key:
+        raise ValueError("person_key is required")
+    conn = accounts._ensure()
+    conn.execute(
+        """INSERT INTO person_google
+           (person_key, google_email, scopes, token_cipher, status, connected_at, refreshed_at, last_error)
+           VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)
+           ON CONFLICT(person_key) DO UPDATE SET google_email=excluded.google_email,
+             scopes=excluded.scopes, token_cipher=excluded.token_cipher, status=excluded.status,
+             connected_at=excluded.connected_at, refreshed_at=NULL, last_error=NULL""",
+        (person_key, google_email, scopes, token_cipher, STATUS_CONNECTED, _now()),
+    )
+    conn.commit()
+
+
+def clear_person(person_key: str) -> int:
+    conn = accounts._ensure()
+    cur = conn.execute("DELETE FROM person_google WHERE person_key = ?", (person_key,))
+    conn.commit()
+    return cur.rowcount
+
+
+def _mark_person_error(person_key: str, kind: str) -> None:
+    try:
+        conn = accounts._ensure()
+        conn.execute("UPDATE person_google SET last_error=?, status=? WHERE person_key=?",
+                     (kind, STATUS_NEEDS_REAUTH, person_key))
+        conn.commit()
+    except Exception:
+        log.error("google_connection: could not record a person's last_error class")
+
+
+def person_credentials(person_key: str):
+    """THE decrypt site for a person's grant: valid credentials, refreshed and
+    re-encrypted when expired. Raises PersonNotConnected; never another
+    person's grant and never the tenant row."""
+    row = person_row(person_key)
+    if not row or not row.get("token_cipher"):
+        raise PersonNotConnected("not connected")
+    if row.get("status") != STATUS_CONNECTED:
+        raise PersonNotConnected("needs reconnecting")
+    try:
+        payload = _decrypt_tokens(row["token_cipher"])
+    except Exception as exc:
+        _bump_decrypt_failed()
+        _mark_person_error(person_key, "decrypt_failed")
+        log.error("google_connection: a person's grant cannot be decrypted (%s)", type(exc).__name__)
+        raise PersonNotConnected("needs reconnecting") from exc
+    if not (payload.get("refresh_token") or payload.get("access_token")):
+        _mark_person_error(person_key, "empty_payload")
+        raise PersonNotConnected("needs reconnecting")
+    creds = _credentials(payload)
+    if config.oauth_mock() or creds.valid:
+        return creds
+    from google.auth.exceptions import RefreshError
+    from google.auth.transport.requests import Request
+    try:
+        creds.refresh(Request())
+    except RefreshError as exc:
+        _bump_counter(COUNTER_PERSON_NEEDS_REAUTH)
+        _mark_person_error(person_key, "refresh_failed")
+        log.error("google_connection: a person's grant could not be refreshed; marked needs_reauth")
+        raise PersonNotConnected("needs reconnecting") from exc
+    cipher = encrypt_tokens({"refresh_token": creds.refresh_token or payload.get("refresh_token"),
+                             "access_token": creds.token,
+                             "expiry": creds.expiry.isoformat() if creds.expiry else None,
+                             "scopes": payload.get("scopes")})
+    conn = accounts._ensure()
+    conn.execute("UPDATE person_google SET token_cipher=?, refreshed_at=?, last_error=NULL WHERE person_key=?",
+                 (cipher, _now(), person_key))
+    conn.commit()
+    _bump_counter(COUNTER_PERSON_REFRESHED)
+    return creds

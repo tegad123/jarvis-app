@@ -6,11 +6,12 @@ import { absoluteTime, relativeTime } from '../lib/time'
 import type { GoogleConnectionStatus, Role } from '../lib/types'
 
 /**
- * Settings — Connect Google card. Owner and admin only.
+ * Settings — the signed-in person's own Google account. Any person; never the
+ * operator.
  *
- * The API enforces require_admin + require_person. Hiding this screen is a
- * courtesy on top of that, never instead of it. Members and operators do not
- * see the tab and do not render this card.
+ * The API enforces require_person and only ever reads, connects or
+ * disconnects the caller's own row. Hiding this screen from the operator is a
+ * courtesy on top of that, never instead of it.
  *
  * Status GET returns status / google_email / connected_at / refreshed_at only.
  * This page never asks for a token, refresh token, or client secret.
@@ -127,7 +128,7 @@ export default function Settings({ role, onUnauthorized }: Props) {
     <section>
       <h2 className="text-screen-title">Settings</h2>
       <p className="mt-1 text-body-s text-light-text-secondary dark:text-dark-text-secondary">
-        The team’s Google mailbox. Connecting here is the tenant grant, not a staff sign-in.
+        Your own Google account. Your assistant uses it to check your calendar and email; nobody else on the team can.
       </p>
 
       {error && (
@@ -139,7 +140,7 @@ export default function Settings({ role, onUnauthorized }: Props) {
       )}
 
       <div className="glass-featured mt-5 rounded-card px-4 py-4 lg:px-6 lg:py-5">
-        <h3 className="text-row-title">Connect Google</h3>
+        <h3 className="text-row-title">Your Google account</h3>
         <p className="mt-2 text-body-s text-light-text-primary dark:text-dark-text-primary">
           {copy.status}
         </p>

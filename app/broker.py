@@ -245,18 +245,20 @@ def _note_untrusted(ctx: Dict[str, str], api: str, method: str, result: Any) -> 
                 break
 
 
-def _service(api: str, version: str):
+def _service(api: str, version: str, person: Optional[str] = None):
+    """person: that person's own Google (chat); None: the tenant's assistant mailbox."""
     _shared()
     import google_creds  # noqa: PLC0415
     from googleapiclient.discovery import build  # noqa: PLC0415
+    from . import google_connection  # noqa: PLC0415
     opts = None
     endpoint = os.environ.get("JARVIS_GOOGLE_API_ENDPOINT")
     if endpoint:
         if not config.oauth_mock():
             raise HTTPException(status_code=500, detail="JARVIS_GOOGLE_API_ENDPOINT is honoured in mock mode only.")
         opts = {"api_endpoint": endpoint}
-    return build(api, version, credentials=google_creds.credentials(), cache_discovery=False,
-                 client_options=opts)
+    creds = google_connection.person_credentials(person) if person else google_creds.credentials()
+    return build(api, version, credentials=creds, cache_discovery=False, client_options=opts)
 
 
 async def _json_body(request: Request) -> Dict[str, Any]:
@@ -333,10 +335,12 @@ def _feed_held(what: str, cls: str, outcome: str, decision: sentinel.Decision, s
         log.error("broker: would-have feed write failed (%s)", type(exc).__name__)
 
 
-def gate_google(api, version, method, params, ctx, approval: Optional[Dict[str, Any]] = None
-                ) -> Tuple[int, Dict[str, Any]]:
+def gate_google(api, version, method, params, ctx, approval: Optional[Dict[str, Any]] = None,
+                person: Optional[str] = None) -> Tuple[int, Dict[str, Any]]:
     """Decide one Google write and run it if allowed. `approval` is a decided
-    approval row whose callback the owner signed; it answers an `ask`, nothing else."""
+    approval row whose callback the owner signed; it answers an `ask`, nothing else.
+    `person` writes to that person's own Google and is kept in the proposal, so
+    an approval later runs it there and never in the assistant mailbox."""
     addrs, refusal = (_recipients(params) if (api, version, method) in SEND_METHODS else ([], None))
     cls, dests = sentinel.classify_google(api, method, params, _org_domains(), addrs)
     source = _source(api, method, params, ctx)
@@ -362,6 +366,8 @@ def gate_google(api, version, method, params, ctx, approval: Optional[Dict[str, 
         fields["approval_id"] = approval["id"]
     what = _describe_google(api, method, params, cls, dests)
     proposal = {"type": "google", "api": api, "version": version, "method": method, "params": params}
+    if person:
+        proposal["person"] = person
 
     def held(status, error, outcome, counter, detail, keep=False):
         if keep:
@@ -401,7 +407,7 @@ def gate_google(api, version, method, params, ctx, approval: Optional[Dict[str, 
             return held(409, "grant_used", "grant_used", "broker_sentinel_grant_race",
                         "That one-time grant was already used.")
     store.record_action("decision", "allowed", fields)
-    out = _execute(api, version, method, params, WRITE)
+    out = _execute(api, version, method, params, WRITE, person=person)
     ok = isinstance(out, dict)
     store.record_action("decision", "executed" if ok else "failed",
                         {**fields, **({} if ok else {"status_code": getattr(out, "status_code", None)})})
@@ -436,7 +442,8 @@ def execute_approved(item: Dict[str, Any], scope: str, decided_by: str) -> Dict[
             return {"state": "refused", "reason": f"grant refused: {exc}"}
         store.create_grant(grant, approval_id=item["id"], action_class=cls, created_by=decided_by)
         grant_id = grant.id
-    status, content = gate_google(a["api"], a["version"], a["method"], a.get("params") or {}, ctx, approval=item)
+    status, content = gate_google(a["api"], a["version"], a["method"], a.get("params") or {}, ctx, approval=item,
+                                  person=a.get("person") or None)
     state = "executed" if status == 200 else (content.get("error") or "failed")
     out = {"state": state, "status": status, "grant_id": grant_id, "action_id": content.get("action_id")}
     if status != 200:
@@ -444,18 +451,22 @@ def execute_approved(item: Dict[str, Any], scope: str, decided_by: str) -> Dict[
     return out
 
 
-def _execute(api, version, method, params, klass):
+def _execute(api, version, method, params, klass, person: Optional[str] = None):
     _shared()
     import google_creds  # noqa: PLC0415
     from googleapiclient.errors import HttpError  # noqa: PLC0415
+    from . import google_connection  # noqa: PLC0415
     try:
-        node = _service(api, version)
+        node = _service(api, version, person)
         parts = method.split(".")
         for p in parts[:-1]:
             node = getattr(node, p)()
         req = getattr(node, parts[-1])(**params)
         result = req.execute()
     except google_creds.GoogleNotConnected as exc:
+        return JSONResponse(status_code=409, content={"error": "not_connected", "detail": str(exc)})
+    except google_connection.PersonNotConnected as exc:
+        _bump("broker_google_person_not_connected")
         return JSONResponse(status_code=409, content={"error": "not_connected", "detail": str(exc)})
     except HttpError as exc:
         _bump("broker_google_http_error")
@@ -583,6 +594,66 @@ def get_usage(request: Request, days: int = 1):
             "day_boundary": "UTC"}
 
 
+# What a chat turn may do in the signed-in person's own Google.
+PERSON_METHODS = {
+    ("gmail", "v1"): ("users.messages.list", "users.messages.get", "users.threads.list", "users.threads.get"),
+    ("calendar", "v3"): ("events.list", "events.get", "events.insert"),
+}
+
+
+def _turn_person(ref: Any) -> Optional[Dict[str, Any]]:
+    entry, why = actor_refs.resolve(ref) if isinstance(ref, str) and ref.startswith(actor_refs.PREFIX) \
+        else (None, "unknown")
+    if entry is None or entry["ended"] is not None or not entry.get("person_key"):
+        _bump("broker_google_person_no_turn")
+        log.warning("broker: personal Google call without a running turn (%s)", why or "ended")
+        return None
+    return entry
+
+
+@router.post("/google/person")
+async def post_google_person(request: Request):
+    """The signed-in person's own Google, for a running chat turn. The person is
+    the one the app's reference names; never the assistant mailbox, never anyone else."""
+    _authorize(request)
+    body = await _json_body(request)
+    api, version, method = body.get("api"), body.get("version"), body.get("method")
+    params = body.get("params") or {}
+    if not isinstance(params, dict):
+        raise HTTPException(status_code=400, detail="params must be an object.")
+    klass = METHODS.get((api, version), {}).get(method)
+    if klass is None or method not in PERSON_METHODS.get((api, version), ()):
+        _bump("broker_google_person_refused_method")
+        log.error("broker: refused personal %s %s %s (not allowlisted)", api, version, method)
+        raise HTTPException(status_code=403, detail=f"{api} {version} {method} is not allowed on a personal account.")
+    entry = _turn_person(body.get("ref"))
+    if entry is None:
+        return JSONResponse(status_code=403, content={"error": "no_turn", "detail": "No running chat turn."})
+    person = entry["person_key"]
+    ctx = _context(request)
+    from starlette.concurrency import run_in_threadpool  # noqa: PLC0415
+    if klass == READ:
+        out = await run_in_threadpool(_execute, api, version, method, params, klass, person)
+        if isinstance(out, dict):
+            _bump("broker_google_person_read")
+            _note_untrusted(ctx, api, method, out.get("result"))
+        return out
+    _require_sentinel()
+    status, content = await run_in_threadpool(gate_google, api, version, method, params, ctx, None, person)
+    return content if status == 200 else JSONResponse(status_code=status, content=content)
+
+
+@router.post("/google/person/status")
+async def post_google_person_status(request: Request):
+    _authorize(request)
+    from . import google_connection  # noqa: PLC0415
+    body = await _json_body(request)
+    entry = _turn_person(body.get("ref"))
+    if entry is None:
+        return {"status": "unknown", "why": "no_turn"}
+    return {"status": google_connection.person_status(entry["person_key"])["status"]}
+
+
 @router.get("/google/status")
 def get_google_status(request: Request):
     _authorize(request)
@@ -658,7 +729,7 @@ async def post_chat_action(request: Request):
         _bump("broker_chat_action_no_turn")
         log.warning("broker: chat action %s without a running turn (%s)", action, why or "ended")
         return {"shown": False, "why": "no_turn"}
-    if agent_status.google_state() == "connected":
+    if agent_status.google_state(entry["person_key"]) == "connected":
         return {"shown": False, "why": "already_connected"}
     if not agent_status.can_connect(entry["role"]):
         _bump("broker_chat_action_not_allowed")

@@ -330,22 +330,43 @@ def google_connect_start(
     response: Response,
     sess: dict = Depends(auth.current_session),
 ):
-    """Five-scope tenant connect. Owner or admin person session required."""
+    """The signed-in person's own Google (any role; never the operator)."""
+    auth.require_person(sess)
+    return google_oauth.start_connect(request, response, sess, google_oauth.PURPOSE_CONNECT_PERSON)
+
+
+@app.get("/api/google/connection")
+def google_connection_get(sess: dict = Depends(auth.current_session)):
+    """This person's own connection; owner/admin also see the assistant mailbox.
+    Status only. No token, refresh, client_secret, or cipher fields."""
+    auth.require_person(sess)
+    out = google_conn_mod.person_status(auth.person_of(sess))
+    if auth.role_of(sess) in ("owner", "admin"):
+        out["assistant"] = google_conn_mod.status_public()
+    return out
+
+
+@app.post("/api/google/connection/disconnect")
+def google_connection_disconnect(sess: dict = Depends(auth.current_session)):
+    """Disconnects this person's own Google only."""
+    auth.require_person(sess)
+    return google_oauth.disconnect_person(sess)
+
+
+@app.get("/api/google/assistant/connect/start")
+def google_assistant_connect_start(
+    request: Request,
+    response: Response,
+    sess: dict = Depends(auth.current_session),
+):
+    """Five-scope assistant mailbox (background jobs). Owner or admin person session required."""
     auth.require_person(sess)
     auth.require_admin(sess)
     return google_oauth.start_connect(request, response, sess)
 
 
-@app.get("/api/google/connection")
-def google_connection_get(sess: dict = Depends(auth.current_session)):
-    """Status only. No token, refresh, client_secret, or cipher fields."""
-    auth.require_person(sess)
-    auth.require_admin(sess)
-    return google_conn_mod.status_public()
-
-
-@app.post("/api/google/connection/disconnect")
-def google_connection_disconnect(sess: dict = Depends(auth.current_session)):
+@app.post("/api/google/assistant/disconnect")
+def google_assistant_disconnect(sess: dict = Depends(auth.current_session)):
     auth.require_person(sess)
     auth.require_admin(sess)
     return google_oauth.disconnect(sess)
@@ -471,7 +492,7 @@ def get_chat_history(
         ids = m.get("attachments") or []
         m["attachments"] = attachments_mod.public_many(ids) if ids else []
         saved = m.get("actions") or []
-        m["actions"] = agent_status.live_actions(saved, role) if saved else []
+        m["actions"] = agent_status.live_actions(saved, role, auth.person_of(sess) or "") if saved else []
         if len(m["actions"]) < len(saved):
             threads_mod.bump_counter("chat_history_action_hidden")
     return {"thread_id": thread_id, "messages": messages, "count": len(messages)}
@@ -1096,8 +1117,9 @@ def get_health(sess: dict = Depends(auth.current_session)):
     # Connection *status* only — never the cipher or refresh token.
     try:
         report["google_connection"] = google_conn_mod.status_public()
+        report["person_google_connections"] = google_conn_mod.person_count()
     except Exception:
-        pass
+        logging.getLogger("app.health").warning("health: google connection status unavailable", exc_info=True)
     report["switches"] = {k: ("on" if v else "off") for k, v in switches_mod.state().items()}
     report["sentinel_mode"] = broker_mod.sentinel_mode()
     if switches_mod.on("sentinel"):

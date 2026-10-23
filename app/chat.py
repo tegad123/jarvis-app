@@ -621,7 +621,7 @@ async def stream_chat(
     # the app. Re-checked now: a button that would not work is not shown.
     shown: List[str] = []
     if "connect_google" in requested:
-        if agent_status.action_ok("connect_google", role):
+        if agent_status.action_ok("connect_google", role, person_key or ""):
             _bump("chat_action_connect_google_shown")
             shown.append("connect_google")
             yield _ndjson({"type": "action", "action": "connect_google",

@@ -82,7 +82,8 @@ export interface SessionResponse {
  *  it reaches every channel's STRUCTURE and none of its message content. */
 export type Role = 'owner' | 'admin' | 'member' | 'operator'
 
-/** GET /api/google/connection. Exactly these keys — never token/refresh/cipher. */
+/** GET /api/google/connection: the signed-in person's own Google. Exactly these
+ *  keys — never token/refresh/cipher. */
 export type GoogleConnectionStatusName = 'connected' | 'needs_reauth' | 'disconnected'
 
 export interface GoogleConnectionStatus {
@@ -90,6 +91,8 @@ export interface GoogleConnectionStatus {
   google_email: string | null
   connected_at: string | null
   refreshed_at: string | null
+  /** Owner/admin only: the tenant's assistant mailbox, used by background jobs. */
+  assistant?: Omit<GoogleConnectionStatus, 'assistant'>
 }
 
 export interface LoginResponse {

@@ -62,21 +62,24 @@ def needs_google() -> None:
         say = ("Google isn't connected yet, so you can't do this. Say that plainly and tell them the app is "
                "showing a 'Connect your Google account' button below your reply. Do not write a link.")
     elif r.get("why") == "not_allowed":
-        say = "Google isn't connected yet, and only the owner or an admin can connect it. Say so plainly."
+        say = "Their Google account isn't connected yet, and they can't connect it from here. Say so plainly."
     else:
         say = "Google isn't connected yet. Say so plainly; they can connect it in Settings."
     out(ok=False, needs="google", button_shown=bool(r.get("shown")), say=say)
 
 
 def google_connected() -> bool:
+    """The signed-in person's own Google, never the assistant mailbox."""
     try:
-        return app_broker.call("google/status").get("source") == "tenant_connection"
+        return app_broker.call("google/person/status",
+                               {"ref": os.environ.get("JARVIS_ACTOR_MSG", "")}).get("status") == "connected"
     except app_broker.BrokerError:
         return False
 
 
 def google(api, version, method, params):
-    return app_broker.call("google", {"api": api, "version": version, "method": method, "params": params})
+    return app_broker.call("google/person", {"ref": os.environ.get("JARVIS_ACTOR_MSG", ""), "api": api,
+                                             "version": version, "method": method, "params": params})
 
 
 def held(exc: "app_broker.BrokerError") -> None:

@@ -385,7 +385,7 @@ def sheets_check(health):
 
 
 def mock_connect_flow(jar, email, grant="full"):
-    code, _, heads = curl("/api/google/connect/start", jar)
+    code, _, heads = curl("/api/google/assistant/connect/start", jar)
     loc = location(heads)
     if code != 302 or not loc:
         return code, None, heads, loc
@@ -411,7 +411,7 @@ ck("dana PIN login for live cutover",
    code == 200 and d.get("person_key") == "dana" and d.get("role") == "owner",
    f"HTTP {code}")
 
-curl("/api/google/connection/disconnect", jar, "POST")
+curl("/api/google/assistant/disconnect", jar, "POST")
 code, cb, _, _ = mock_connect_flow(jar, MAILBOX, grant="full")
 ck("full mock authorize redirects to callback",
    code == 302 and cb and "/oauth/callback" in (cb or ""), f"HTTP {code}")
@@ -419,6 +419,7 @@ code, _, _ = curl(cb, jar)
 ck("full connect callback redirects home", code == 302, f"HTTP {code}")
 
 code, status_body, _ = curl("/api/google/connection", jar)
+status_body = status_body.get("assistant") if isinstance(status_body, dict) else status_body
 ck("status GET includes refreshed_at (field only, no secrets)",
    code == 200 and isinstance(status_body, dict)
    and "refreshed_at" in status_body
@@ -436,7 +437,7 @@ ck("tenant health did not increment the not-connected counter",
    f"{c_tenant}→{live_counter(COUNTER_NC)}")
 
 c_before = live_counter(COUNTER_NC)
-code, d, _ = curl("/api/google/connection/disconnect", jar, "POST")
+code, d, _ = curl("/api/google/assistant/disconnect", jar, "POST")
 ck("disconnect before not-connected health",
    code == 200 and isinstance(d, dict) and d.get("ok") is True,
    f"HTTP {code}")

@@ -58,6 +58,15 @@ assert all("googleapis.com/auth/" in s for s in CONNECT_SCOPES)
 
 PURPOSE_LOGIN = "login"
 PURPOSE_CONNECT = "connect"
+# A person's own Google, for chat: read and label their mail, their calendar.
+# No send, Sheets or Drive on a personal account (nothing personal uses them).
+PURPOSE_CONNECT_PERSON = "connect_person"
+PERSON_SCOPES = (
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/calendar.events",
+)
+assert set(PERSON_SCOPES) <= set(CONNECT_SCOPES)
+_SCOPES_FOR = {PURPOSE_CONNECT: CONNECT_SCOPES, PURPOSE_CONNECT_PERSON: PERSON_SCOPES}
 _GENERIC = "That PIN is not right."
 _STATE_SALT = "jarvis-oauth-state-v1"
 _PARTIAL_MSG = "all five permissions are required"
@@ -254,8 +263,10 @@ def _sign_state_cookie(
     purpose: str,
     expires_at: int,
     code_verifier: Optional[str] = None,
+    person: Optional[str] = None,
 ) -> str:
-    """Signed state cookie. code_verifier is PKCE, never logged."""
+    """Signed state cookie. code_verifier is PKCE, never logged. person binds a
+    personal connect to whoever started it."""
     payload: Dict[str, Any] = {
         "nonce": nonce,
         "purpose": purpose,
@@ -263,6 +274,8 @@ def _sign_state_cookie(
     }
     if code_verifier:
         payload["code_verifier"] = code_verifier
+    if person:
+        payload["person"] = person
     return _state_serializer().dumps(payload)
 
 
@@ -311,8 +324,10 @@ def start_login(request: Request, response: Response):
     return redir
 
 
-def start_connect(request: Request, response: Response, sess: dict):
-    """Five-scope tenant connect. Caller already required owner/admin person."""
+def start_connect(request: Request, response: Response, sess: dict, purpose: str = PURPOSE_CONNECT):
+    """PURPOSE_CONNECT: five-scope assistant mailbox (caller required owner/admin).
+    PURPOSE_CONNECT_PERSON: the signed-in person's own Google (caller required a person)."""
+    scopes = _SCOPES_FOR[purpose]
     origin = _origin_or_page()
     if not origin:
         return _missing_origin_page()
@@ -322,19 +337,19 @@ def start_connect(request: Request, response: Response, sess: dict):
     if not mock and config.oauth_client_path() is None:
         return _missing_client_page()
 
-    nonce, expires_at = _begin_state(PURPOSE_CONNECT)
+    nonce, expires_at = _begin_state(purpose)
     redirect_uri = f"{origin}/oauth/callback"
     verifier = None
     if mock:
         loc = (
             f"{origin}/api/auth/google/mock/authorize?"
-            + urlencode({"state": nonce, "purpose": PURPOSE_CONNECT})
+            + urlencode({"state": nonce, "purpose": purpose})
         )
     else:
         from google_auth_oauthlib.flow import Flow
         flow = Flow.from_client_secrets_file(
             str(config.oauth_client_path()),
-            scopes=list(CONNECT_SCOPES),
+            scopes=list(scopes),
             redirect_uri=redirect_uri,
         )
         loc, _ = flow.authorization_url(
@@ -346,7 +361,8 @@ def start_connect(request: Request, response: Response, sess: dict):
         verifier = flow.code_verifier
         if not verifier:
             log.error("google connect: Flow produced no code_verifier")
-    token = _sign_state_cookie(nonce, PURPOSE_CONNECT, expires_at, verifier)
+    token = _sign_state_cookie(nonce, purpose, expires_at, verifier,
+                               person=auth.person_of(sess) if purpose == PURPOSE_CONNECT_PERSON else None)
     redir = RedirectResponse(loc, status_code=302)
     _set_state_cookie(redir, token)
     return redir
@@ -373,13 +389,11 @@ def mock_authorize(
     if not addr or not state:
         raise HTTPException(status_code=400, detail=_GENERIC)
     purpose = (purpose or PURPOSE_LOGIN).strip() or PURPOSE_LOGIN
-    if purpose not in (PURPOSE_LOGIN, PURPOSE_CONNECT):
+    if purpose not in (PURPOSE_LOGIN, PURPOSE_CONNECT, PURPOSE_CONNECT_PERSON):
         raise HTTPException(status_code=400, detail=_GENERIC)
-    if purpose == PURPOSE_CONNECT:
-        if (grant or "full").strip().lower() == "partial":
-            scopes = CONNECT_SCOPES[:-1]  # 4 of 5; drop drive.file
-        else:
-            scopes = CONNECT_SCOPES
+    if purpose in _SCOPES_FOR:
+        want = _SCOPES_FOR[purpose]
+        scopes = want[:-1] if (grant or "full").strip().lower() == "partial" else want
     else:
         scopes = LOGIN_SCOPES
     code = secrets.token_urlsafe(24)
@@ -391,7 +405,7 @@ def mock_authorize(
         "refresh_token": "mock-refresh-" + secrets.token_urlsafe(16),
         "access_token": access_token,
     }
-    if purpose == PURPOSE_CONNECT:
+    if purpose in _SCOPES_FOR:
         # Same JSON shape as GET .../gmail/v1/users/me/profile. No id_token.
         _mock_gmail_profiles[access_token] = {"emailAddress": addr}
     else:
@@ -514,7 +528,7 @@ def _gmail_profile_email(access_token: str) -> str:
 
 
 def _exchange_google_connect(
-    code: str, origin: str, code_verifier: Optional[str] = None,
+    code: str, origin: str, code_verifier: Optional[str] = None, scopes: tuple = CONNECT_SCOPES,
 ) -> Dict[str, Any]:
     """Token exchange then Gmail profile. Never takes email from an id_token."""
     if config.oauth_mock():
@@ -530,7 +544,7 @@ def _exchange_google_connect(
         _relax_token_scope()
         flow = Flow.from_client_secrets_file(
             str(config.oauth_client_path()),
-            scopes=list(CONNECT_SCOPES),
+            scopes=list(scopes),
             redirect_uri=redirect_uri,
         )
         if code_verifier:
@@ -575,8 +589,12 @@ def _scope_set(raw: str) -> set:
 
 
 def granted_all_five(granted: str) -> bool:
+    return granted_all(granted, CONNECT_SCOPES)
+
+
+def granted_all(granted: str, scopes: tuple) -> bool:
     have = _scope_set(granted)
-    return all(s in have for s in CONNECT_SCOPES)
+    return all(s in have for s in scopes)
 
 
 def callback(request: Request, response: Response):
@@ -603,6 +621,8 @@ def callback(request: Request, response: Response):
         return _callback_login(request, code, q_state, origin, cookie)
     if purpose == PURPOSE_CONNECT:
         return _callback_connect(request, code, q_state, origin, cookie)
+    if purpose == PURPOSE_CONNECT_PERSON:
+        return _callback_connect_person(request, code, q_state, origin, cookie)
     return _fail_response(request, status_code=400)
 
 
@@ -771,6 +791,93 @@ def _callback_connect(
     return redir
 
 
+def _person_partial_page() -> HTMLResponse:
+    return HTMLResponse(
+        "<!doctype html><meta charset=utf-8><title>Google not connected</title>"
+        "<body style='font-family:sans-serif;max-width:36em;margin:4em auto'>"
+        "<h1>Google wasn't connected</h1>"
+        "<p>Your assistant needs both boxes ticked on Google's screen: your email and your calendar. "
+        "Nothing was stored. Go back and connect again, leaving both ticked.</p>"
+        "<p><a href='/'>Back</a></p>",
+        status_code=403,
+    )
+
+
+def _callback_connect_person(
+    request: Request, code: str, q_state: str, origin: str, cookie: dict,
+):
+    """The signed-in person's own Google. Stored only for the person who started it."""
+    if not accounts.consume_oauth_state(q_state, PURPOSE_CONNECT_PERSON):
+        return _fail_response(request, status_code=401)
+    raw = request.cookies.get(config.COOKIE_NAME)
+    if not raw:
+        resp = _signin_again_page(401)
+        _clear_state_cookie(resp)
+        return resp
+    try:
+        sess = auth.current_session(jarvis_session=raw)
+        auth.require_person(sess)
+    except HTTPException as exc:
+        resp = _signin_again_page(exc.status_code if exc.status_code in (401, 403) else 401)
+        _clear_state_cookie(resp)
+        return resp
+    person = auth.person_of(sess)
+    if not person or person != cookie.get("person"):
+        log.warning("google connect (person): the session that came back is not the person who started it")
+        _log_connect_refusal("person_mismatch", outcome="person_mismatch")
+        resp = _signin_again_page(403)
+        _clear_state_cookie(resp)
+        return resp
+    if config.google_token_key_list() is None:
+        resp = _missing_token_key_page()
+        _clear_state_cookie(resp)
+        return resp
+    if not code:
+        return _fail_response(request, status_code=400)
+    verifier = (cookie.get("code_verifier") or "").strip() or None
+    try:
+        payload = _exchange_google_connect(code, origin, code_verifier=verifier, scopes=PERSON_SCOPES)
+    except GmailProfileError as exc:
+        _log_connect_refusal("no_email", outcome=type(exc).__name__)
+        resp = _mailbox_unidentified_page()
+        _clear_state_cookie(resp)
+        return resp
+    except Exception as exc:
+        _log_exchange_failure("google connect (person)", exc)
+        _log_connect_refusal("exchange", outcome=type(exc).__name__)
+        return _fail_response(request, status_code=401)
+    email = (payload.get("email") or "").strip()
+    granted = (payload.get("scopes") or "").strip()
+    if not granted_all(granted, PERSON_SCOPES):
+        _log_connect_refusal("partial_grant", google_email=email, granted=granted, outcome="partial_grant")
+        resp = _person_partial_page()
+        _clear_state_cookie(resp)
+        return resp
+    if not email:
+        _log_connect_refusal("no_email", granted=granted, outcome="no_email")
+        resp = _no_email_page()
+        _clear_state_cookie(resp)
+        return resp
+    try:
+        cipher = google_connection.encrypt_tokens({
+            "refresh_token": payload.get("refresh_token"),
+            "access_token": payload.get("access_token"),
+            "expiry": payload.get("expiry"),
+            "scopes": granted,
+        })
+        google_connection.put_person(person, google_email=email, scopes=granted, token_cipher=cipher)
+    except Exception as exc:
+        log.exception("google connect (person): encrypt/store failed (%s: %s)",
+                      type(exc).__name__, _safe_exc_text(exc))
+        _log_connect_refusal("store", google_email=email, granted=granted, outcome=type(exc).__name__)
+        return _fail_response(request, status_code=401)
+    log.info("google connect (person): person=%s google_email=%s granted=%s outcome=connected",
+             person, email, granted)
+    redir = RedirectResponse("/", status_code=302)
+    _clear_state_cookie(redir)
+    return redir
+
+
 def _revoke_at_google(token: str) -> None:
     """Revoke. Mock skips the network. HTTP errors are logged as status only."""
     if config.oauth_mock():
@@ -807,6 +914,23 @@ def disconnect(sess: dict) -> dict:
     if token:
         _revoke_at_google(token)
     google_connection.clear()
+    return {"ok": True, "status": google_connection.STATUS_DISCONNECTED}
+
+
+def disconnect_person(sess: dict) -> dict:
+    """The signed-in person's own Google: revoke (best-effort), then delete their row only."""
+    person = auth.person_of(sess)
+    token = None
+    try:
+        creds = google_connection.person_credentials(person)
+        token = creds.refresh_token or creds.token
+    except google_connection.PersonNotConnected:
+        log.info("google disconnect (person): no usable token, skipping revoke")
+    except Exception:
+        log.info("google disconnect (person): no usable token, skipping revoke")
+    if token:
+        _revoke_at_google(token)
+    google_connection.clear_person(person)
     return {"ok": True, "status": google_connection.STATUS_DISCONNECTED}
 
 

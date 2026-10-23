@@ -137,6 +137,20 @@ def init() -> None:
                 refreshed_at  TEXT,
                 last_error    TEXT
             );
+
+            -- Each person's own Google (chat: their calendar and email). One
+            -- row per person_key; the tenant row above stays the assistant
+            -- mailbox for background jobs. Same cipher and key as above.
+            CREATE TABLE IF NOT EXISTS person_google (
+                person_key    TEXT PRIMARY KEY,
+                google_email  TEXT,
+                scopes        TEXT,
+                token_cipher  BLOB,
+                status        TEXT NOT NULL,
+                connected_at  TEXT,
+                refreshed_at  TEXT,
+                last_error    TEXT
+            );
             """
         )
         conn.commit()

@@ -82,6 +82,13 @@ emails and texts to real clients. Act accordingly.
 - Two-user tenants run the agent in broker mode: Google calls, counters and
   channel creation go through the app's loopback /api/broker; the threads and
   accounts databases are in app-private and the agent cannot open them.
+- Chat Google is the signed-in person's own (accounts table person_google,
+  routes /api/google/connect/start and /api/google/connection; broker
+  /api/broker/google/person resolves the person from the turn's app
+  reference). Background jobs keep the tenant's assistant mailbox
+  (/api/google/assistant/*). Personal scopes are gmail.modify and
+  calendar.events; there is no personal send path, and adding one needs a
+  human yes. Proof: docs/auth/verify_person_google.py (and --canary).
 - POSTGRES 16 (cluster 16/main): unix socket only (no TCP listener), peer
   auth only, configured by scripts/setup_postgres.py. Each two-user tenant
   has database jarvis_<slug>; only its app OS user can connect, as

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Slice 4 — tenant Google connection canaries.
+"""Slice 4 — tenant Google connection canaries (the assistant mailbox: /api/google/assistant/*;
+GET /api/google/connection carries it under "assistant" for owner/admin).
 
 Default AUTH_BASE is the verify sandbox (:8711, docs/tasks/tasks_sandbox.sh:
 MOCK=1, throwaway token key, APP_PUBLIC_ORIGIN loopback). Override
@@ -406,7 +407,7 @@ def fn_body(name):
 
 
 def mock_connect_flow(jar, email, grant="full"):
-    code, _, heads = curl("/api/google/connect/start", jar)
+    code, _, heads = curl("/api/google/assistant/connect/start", jar)
     loc = location(heads)
     if code != 302 or not loc:
         return code, None, heads, loc, ""
@@ -529,7 +530,7 @@ ck("google_connection table exists",
    "google_connection" in tables, "present" if "google_connection" in tables else "missing")
 
 # Leave any leftover row from a prior run at 0.
-code, _, _ = curl("/api/google/connection/disconnect", jar_pin, "POST")
+code, _, _ = curl("/api/google/assistant/disconnect", jar_pin, "POST")
 tables, n_clean, _ = snap_connection()
 print(f"  ledger after cleanup disconnect: rows={n_clean} (was {n0})")
 ck("cleanup leaves google_connection empty",
@@ -554,7 +555,7 @@ ck("google_creds_not_connected moved on the refused health read",
    c1 >= c0 + 1, f"{c0}→{c1}")
 
 print("\n── presence: connect start role gates ───────────────────")
-code, _, heads = curl("/api/google/connect/start", jar_pin)
+code, _, heads = curl("/api/google/assistant/connect/start", jar_pin)
 loc = location(heads)
 ck("connect start as dana (owner) is 302",
    code == 302, f"HTTP {code}")
@@ -568,15 +569,15 @@ jar_omar = str(SCR / "omar.jar")
 pathlib.Path(jar_omar).unlink(missing_ok=True)
 code, _, _ = curl("/api/login", jar_omar, "POST",
                   {"person_key": "omar", "pin": PINS["omar"]})
-code, d, _ = curl("/api/google/connect/start", jar_omar)
+code, d, _ = curl("/api/google/assistant/connect/start", jar_omar)
 ck("connect start as omar (member) is 403",
    code == 403, f"HTTP {code}")
 
-code, d, _ = curl("/api/google/connect/start", jar_op)
+code, d, _ = curl("/api/google/assistant/connect/start", jar_op)
 ck("connect start as operator is 403",
    code == 403, f"HTTP {code}")
 
-code, d, _ = curl("/api/google/connect/start")
+code, d, _ = curl("/api/google/assistant/connect/start")
 ck("connect start logged-out is 401",
    code == 401, f"HTTP {code}")
 
@@ -707,6 +708,7 @@ ck("row status=connected and google_email is set",
 
 print("\n── presence: status JSON has no secrets ─────────────────")
 code, status_body, _ = curl("/api/google/connection", jar_g)
+status_body = status_body.get("assistant") if isinstance(status_body, dict) else status_body
 ck("GET /api/google/connection as dana is 200 connected",
    code == 200 and isinstance(status_body, dict)
    and status_body.get("status") == "connected"
@@ -763,7 +765,7 @@ ck("replay did not add a google_connection row",
 
 print("\n── presence: disconnect 1→0 ─────────────────────────────")
 _, n_pre_disc, _ = snap_connection()
-code, d, _ = curl("/api/google/connection/disconnect", jar_g, "POST")
+code, d, _ = curl("/api/google/assistant/disconnect", jar_g, "POST")
 _, n_post_disc, public_disc = snap_connection()
 ck("disconnect returns ok",
    code == 200 and isinstance(d, dict) and d.get("ok") is True,
@@ -772,6 +774,7 @@ ck("disconnect google_connection row count 1→0",
    n_pre_disc == 1 and n_post_disc == 0,
    f"{n_pre_disc}→{n_post_disc}")
 code, st, _ = curl("/api/google/connection", jar_g)
+st = st.get("assistant") if isinstance(st, dict) else st
 ck("status after disconnect is disconnected",
    code == 200 and isinstance(st, dict) and st.get("status") == "disconnected"
    and st.get("google_email") is None,
