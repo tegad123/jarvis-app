@@ -196,6 +196,11 @@ def healthy(port: int) -> bool:
 
 def handle(conn, su: dict) -> None:
     sid, slug = su["id"], su["slug"]
+    if not store.SLUG_RE.fullmatch(slug):
+        store.set_status(conn, sid, "failed", f"account name {slug!r} is not letters and digits; nothing was made")
+        store.bump(conn, "signup_bad_slug")
+        log.error("sign-up %s refused before provisioning: bad account name %r", sid, slug)
+        return
     why = room(conn)
     if why:
         store.set_status(conn, sid, "full", why)

@@ -22,7 +22,8 @@ RESERVED = frozenset({
     "signup", "account", "accounts", "support", "help", "status", "static", "cdn", "assets", "jarvis",
     "rehearsal", "rehearsal-gw", "rehearsal-hooks", "testco", "root", "live", "34dev", "operator",
 })
-SLUG_RE = re.compile(r"[a-z][a-z0-9-]{2,15}")
+# Also a Postgres role, a system user and a unit prefix (scripts/pg_tenant.py), so no hyphens.
+SLUG_RE = re.compile(r"[a-z][a-z0-9]{2,15}")
 STATUSES = ("queued", "provisioning", "ready", "failed", "full")
 
 
@@ -108,16 +109,17 @@ def slug_taken(conn: sqlite3.Connection, slug: str) -> bool:
 
 def suggest_slug(conn: sqlite3.Connection, *names: str) -> str:
     for name in names:
-        base = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")
-        base = re.sub(r"^[^a-z]+", "", base)[:14].strip("-")
+        base = re.sub(r"[^a-z0-9]+", "", (name or "").lower())
+        lead = re.match(r"^[0-9]*", base).group(0)
+        base = (base[len(lead):] + lead)[:14]
         if len(base) < 3:
             continue
         for n in range(0, 50):
-            cand = base if n == 0 else f"{base[:13 - len(str(n))].rstrip('-')}-{n}"
+            cand = base if n == 0 else f"{base[:14 - len(str(n))]}{n}"
             if SLUG_RE.fullmatch(cand) and not slug_taken(conn, cand):
                 return cand
     for _ in range(20):
-        cand = "jv-" + secrets.token_hex(3)
+        cand = "jv" + secrets.token_hex(3)
         if not slug_taken(conn, cand):
             return cand
     raise RuntimeError("no free account name")

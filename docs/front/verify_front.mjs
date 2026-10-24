@@ -299,7 +299,18 @@ print(json.dumps({"modes": out, "server": z.read("Jarvis.app/Contents/Resources/
   const su = sqlite(FRONT_DB, 'SELECT id, slug, status, email FROM signups ORDER BY created_at DESC LIMIT 1')[0] || []
   ck('one sign-up is queued in the ledger', sqlite(FRONT_DB, 'SELECT count(*) FROM signups')[0][0] === signups0 + 1 && su[2] === 'queued', `status=${su[2]}`)
   ck('   for the Google address, not a typed one', su[3] === 'riley@fixture.example')
-  ck('   with an address made from the business name', su[1] === 'ravenscourt-fi', su[1])
+  ck('   with an address made from the business name', su[1] === 'ravenscourtfix', su[1])
+  const PG_SLUG = /^[a-z][a-z0-9]{0,18}$/ // scripts/pg_tenant.py SLUG, the strictest consumer
+  const names = ['34 Dev', 'Dev 34', 'Smith & Co. Realty', "O'Neil Homes", '123', 'ab', 'Ravenscourt Fixture Realty']
+  const made = JSON.parse(execFileSync(PY, ['-c', `
+import json, sqlite3, sys
+from front import store
+c = sqlite3.connect(":memory:"); c.row_factory = sqlite3.Row
+c.executescript("CREATE TABLE routes (slug TEXT); CREATE TABLE signups (slug TEXT);")
+print(json.dumps([store.suggest_slug(c, n) for n in json.loads(sys.argv[1])]))`, JSON.stringify(names)], { cwd: REPO, env }).toString())
+  ck('every suggested address is one the database setup accepts', made.every((s) => PG_SLUG.test(s)), made.join(' '))
+  ck('   "34 Dev" becomes dev34', made[0] === 'dev34', made[0])
+  ck('   presence twin: the database rule does refuse a hyphen', !PG_SLUG.test('dev-34'))
   ck('the waiting page shows that address', (await p3.getByText(`http://${su[1]}.front.test:${PORT}/`).count()) === 1)
   await p3.screenshot({ path: join(HERE, 'shots', 'signup-wait.png') })
   ck('the invite is now used', sqlite(FRONT_DB, 'SELECT used_at IS NOT NULL FROM invites WHERE signup_id=?', [su[0]])[0]?.[0] === 1)
@@ -314,6 +325,17 @@ print(json.dumps({"modes": out, "server": z.read("Jarvis.app/Contents/Resources/
   const after = sqlite(FRONT_DB, 'SELECT status FROM signups WHERE id=?', [su[0]])[0][0]
   ck('with no room, the worker makes nothing and the sign-up waits as full', w.status === 0 && after === 'full' && !opt0 && !existsSync(`/opt/${su[1]}`), `rc=${w.status} status=${after}`)
   ck('   counted', frontCounter('signup_full') >= 1)
+  execFileSync(PY, ['-c', `
+import sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+c.execute("INSERT INTO signups (id, invite_hash, email, owner_name, business_name, slug, status, created_at, updated_at) "
+          "VALUES ('su_badslug', 'h-badslug', 'bad@fixture.example', 'Bad', 'Bad', 'bad-slug', 'queued', '2000-01-01', '2000-01-01')")
+c.commit()`, FRONT_DB])
+  const bad0 = frontCounter('signup_bad_slug')
+  const wb = spawnSync(PY, [join(REPO, 'scripts/signup_worker.py'), '--once'], { cwd: REPO, env: { ...env, SIGNUP_MAX_ACCOUNTS: '0' } })
+  const badRow = sqlite(FRONT_DB, "SELECT status FROM signups WHERE id='su_badslug'")[0]?.[0]
+  ck('a hyphenated account name is refused before anything is made', wb.status === 0 && badRow === 'failed' && !existsSync('/opt/bad-slug'), `rc=${wb.status} status=${badRow}`)
+  ck('   counted (+1)', frontCounter('signup_bad_slug') === bad0 + 1, `${bad0} -> ${frontCounter('signup_bad_slug')}`)
   await p3.goto(`${JOIN}/signup/${su[0]}`)
   await p3.waitForTimeout(1500)
   ck('   and the page says so in words', (await p3.getByText("We're full right now.", { exact: false }).count()) === 1)
