@@ -105,8 +105,15 @@ def _q(s: str) -> str:
     return json.dumps(s, ensure_ascii=False)
 
 
+def manifest_ports(path: Path) -> dict:
+    text = path.read_text()
+    return {k: int(re.search(rf"^  {k}:\s*(\d+)", text, re.M).group(1)) for k in ("app", "gateway", "hooks")}
+
+
 def write_manifest(su: dict) -> Path:
-    p, ports = pins(), pick_ports()
+    # A retry keeps the ports it was first given: its own manifest is in ports_in_use().
+    prior = STATE / "manifests" / f"{su['slug']}.yaml"
+    p, ports = pins(), manifest_ports(prior) if prior.exists() else pick_ports()
     owner = su["owner_name"].strip() or "Owner"
     agent = f"{owner.split()[0]}'s Assistant"
     values = {
