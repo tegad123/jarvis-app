@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Composer · Jarvis Mono</title>
+<link rel="stylesheet" href="../../fonts/fonts.css">
+<link rel="stylesheet" href="../../tokens/tokens.css">
+<link rel="stylesheet" href="../../build/jarvis-mono.css">
+<script src="../../previews/kit.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="../../build/jarvis-mono.js"></script>
+</head>
+<body class="bg-jm-bg font-jm text-jm-fg antialiased">
+<div id="root" class="grid gap-jm-4 p-jm-6"></div>
+<script>
+  var J = window.JarvisMono, h = React.createElement;
+  var photo = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 160 160'><rect width='160' height='160' fill='#d9d9d9'/>" +
+    "<path d='M0 118 52 70l34 30 22-18 52 40v38H0Z' fill='#b3b3b3'/><circle cx='118' cy='44' r='14' fill='#f2f2f2'/></svg>");
+  function Live() {
+    var a = React.useState([
+      { id: 'a1', name: 'kitchen.jpg', isImage: true, src: photo, size: '280 KB' },
+      { id: 'a2', name: 'offer-terms.pdf', size: '84 KB', readable: false }
+    ]), atts = a[0], setAtts = a[1];
+    var v = React.useState({ phase: 'idle' }), voice = v[0], setVoice = v[1];
+    React.useEffect(function () {
+      if (voice.phase !== 'recording') return;
+      var t = setInterval(function () { setVoice(function (cur) { return cur.phase === 'recording' ? { phase: 'recording', seconds: cur.seconds + 0.2, level: Math.random() } : cur; }); }, 200);
+      return function () { clearInterval(t); };
+    }, [voice.phase]);
+    return h(J.Composer, {
+      attachments: atts,
+      onRemoveAttachment: function (x) { setAtts(atts.filter(function (y) { return y.id !== x.id; })); },
+      onAttach: function () {},
+      voice: voice,
+      onMic: function () {
+        if (voice.phase === 'recording') {
+          setVoice({ phase: 'transcribing' });
+          setTimeout(function () { setVoice({ phase: 'idle' }); }, 1200);
+        } else setVoice({ phase: 'recording', seconds: 0, level: 0 });
+      },
+      onSubmit: function () {}
+    });
+  }
+  function L(t) { return h('p', { className: 'm-0 text-jm-caption text-jm-fg-secondary' }, t); }
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { className: 'grid max-w-jm-chat gap-jm-4' },
+    L('Empty'),
+    h(J.Composer, { onAttach: function () {}, onMic: function () {} }),
+    L('With attachments (tap the mic to record)'),
+    h(Live),
+    L('While Jarvis answers'),
+    h(J.Composer, { value: '', streaming: true, onStop: function () {}, onAttach: function () {}, onMic: function () {} }),
+    L('Microphone blocked'),
+    h(J.Composer, { value: 'Remind me to call the appraiser', voice: { phase: 'denied' }, onDismissVoice: function () {}, onAttach: function () {}, onMic: function () {} })
+  ));
+</script>
+</body>
+</html>

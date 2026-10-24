@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SystemLine · Jarvis Mono</title>
+<link rel="stylesheet" href="../../fonts/fonts.css">
+<link rel="stylesheet" href="../../tokens/tokens.css">
+<link rel="stylesheet" href="../../build/jarvis-mono.css">
+<script src="../../previews/kit.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="../../build/jarvis-mono.js"></script>
+</head>
+<body class="bg-jm-bg font-jm text-jm-fg antialiased">
+<div id="root" class="grid gap-jm-4 p-jm-6"></div>
+<script>
+  var J = window.JarvisMono, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { className: 'grid max-w-jm-chat gap-jm-4' },
+    h(J.SystemLine, { tone: 'done' }, 'Saved to Tasks: Call Dana about the counter, due Friday.'),
+    h(J.SystemLine, null, 'inspection-request.pdf is saved, not readable yet. Jarvis didn’t read it.'),
+    h(J.SystemLine, { tone: 'action', action: { label: 'Open the browser' } }, 'Jarvis needs you to finish signing in on the listing site.'),
+    h(J.SystemLine, { tone: 'error', detail: 'The reply said a task was saved; none was written.' }, 'That task was not saved.'),
+    h(J.SystemLine, { tone: 'error' }, 'Can’t reach Jarvis right now.')
+  ));
+</script>
+</body>
+</html>

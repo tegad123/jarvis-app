@@ -1,0 +1,489 @@
+{
+  "name": "Jarvis Mono",
+  "version": 1,
+  "color": {
+    "note": "Black and white, with one blue. Blue marks you and what you can do: your own messages, the primary action, what is selected, what needs you, what is done, keyboard focus. One red, for real errors only, always as the alert icon. No other colours, gradients or glows. Dark is the primary theme; light is its inverse.",
+    "themes": [
+      {
+        "id": "dark",
+        "name": "Dark"
+      },
+      {
+        "id": "light",
+        "name": "Light"
+      }
+    ],
+    "tokens": [
+      {
+        "name": "bg",
+        "value": {
+          "dark": "#0a0a0a",
+          "light": "#ffffff"
+        },
+        "usage": "Page and chat ground. The sidebar sits on it too, separated by a border hairline."
+      },
+      {
+        "name": "panel",
+        "value": {
+          "dark": "#161616",
+          "light": "#f5f5f5"
+        },
+        "usage": "One step up from bg: the assistant bubble, the composer, cards (ComputerCard, ApprovalCard, SettingsSection, lists of tasks and leads), sheets, row hover."
+      },
+      {
+        "name": "panel-raised",
+        "value": {
+          "dark": "#1f1f1f",
+          "light": "#ebebeb"
+        },
+        "usage": "Two steps up: secondary buttons, menus, the avatar disc. Never a third step, and no blue text on it in the light theme (4.3:1)."
+      },
+      {
+        "name": "border",
+        "value": {
+          "dark": "#262626",
+          "light": "#e5e5e5"
+        },
+        "usage": "Hairlines: dividers, card and chip edges, the sidebar edge. Decorative (about 1.3:1 on bg), so never the only thing that marks a control."
+      },
+      {
+        "name": "border-strong",
+        "value": {
+          "dark": "#666666",
+          "light": "#8a8a8a"
+        },
+        "usage": "Edges that carry meaning: text fields, selects, pairing-code cells, the waiting ring in StepList, empty temperature bars. 3.1:1 or more on bg and panel in both themes; not on panel-raised."
+      },
+      {
+        "name": "fg",
+        "value": {
+          "dark": "#ffffff",
+          "light": "#0a0a0a"
+        },
+        "usage": "Primary text and icons: 16:1 or more on bg, panel and panel-raised, 15:1 or more on accent-soft, in both themes. Also error sentences (the red is only the icon beside them), the unread dot and filled temperature bars."
+      },
+      {
+        "name": "fg-secondary",
+        "value": {
+          "dark": "#8a8a8a",
+          "light": "#666666"
+        },
+        "usage": "Secondary text: previews, timestamps, metadata, descriptions, placeholders, idle icons. On bg 5.7:1, panel 5.2:1, panel-raised 4.8:1 in both themes; on accent-soft 4.8:1 or more where the tint sits on bg (not where it sits on panel in light, 4.5:1)."
+      },
+      {
+        "name": "on-fg",
+        "value": {
+          "dark": "#0a0a0a",
+          "light": "#ffffff"
+        },
+        "usage": "Icons on an fg fill: the remove dot on an attachment."
+      },
+      {
+        "name": "accent",
+        "value": {
+          "dark": "#2563eb",
+          "light": "#2563eb"
+        },
+        "usage": "The one blue, as a fill: your own message bubbles, primary pill buttons (Approve, Allow for 30 min, Send, Connect a Mac, Save), the selected conversation's left marker, the Approvals count badge, the edge of a card that needs you, the focus ring. With on-accent text (5.2:1). As an edge or mark, 3.2:1 or more on every dark surface and 4.3:1 or more on every light one."
+      },
+      {
+        "name": "accent-hover",
+        "value": {
+          "dark": "#1d4ed8",
+          "light": "#1d4ed8"
+        },
+        "usage": "Hover and pressed fill for anything drawn in accent (6.7:1 with on-accent)."
+      },
+      {
+        "name": "on-accent",
+        "value": {
+          "dark": "#ffffff",
+          "light": "#ffffff"
+        },
+        "usage": "Text and icons on an accent or accent-hover fill."
+      },
+      {
+        "name": "accent-text",
+        "value": {
+          "dark": "#60a5fa",
+          "light": "#2563eb"
+        },
+        "usage": "Blue text, links and blue icons (the done check) on bg and panel: dark 7.8:1 on bg, 7.1:1 on panel, 6.5:1 on panel-raised; light 5.2:1 on bg, 4.7:1 on panel. Not on panel-raised in light."
+      },
+      {
+        "name": "accent-soft",
+        "value": {
+          "dark": "rgba(37, 99, 235, 0.14)",
+          "light": "rgba(37, 99, 235, 0.12)"
+        },
+        "usage": "The subtle blue tint (#2563eb at 14% in dark, 12% in light): selected rows, the selected filter chip, the chosen person at sign-in, and the Action needed pill. Text on it is fg or accent-soft-text."
+      },
+      {
+        "name": "accent-soft-text",
+        "value": {
+          "dark": "#60a5fa",
+          "light": "#1d4ed8"
+        },
+        "usage": "Blue text on accent-soft: Action needed, a selected chip, the current nav item. Dark 6.3:1 or more; light uses the deeper #1d4ed8 because #2563eb on the tint is only 4.0–4.4:1 (5.1:1 or more)."
+      },
+      {
+        "name": "error",
+        "value": {
+          "dark": "#ef4444",
+          "light": "#ef4444"
+        },
+        "usage": "Real errors only, and only as a mark: the alert icon, a failed step, the edge of an error card. Never text: the sentence beside it is fg. As a mark 4.4:1 or more on dark surfaces and 3.2:1 or more on light ones (as text it would fail in light, 3.8:1 on bg)."
+      },
+      {
+        "name": "scrim",
+        "value": {
+          "dark": "rgba(0, 0, 0, 0.6)",
+          "light": "rgba(10, 10, 10, 0.32)"
+        },
+        "usage": "Behind sheets and dialogs (new channel, members, the phone sidebar)."
+      },
+      {
+        "name": "bubble-assistant",
+        "value": "{panel}",
+        "usage": "Assistant bubble fill: dark grey on the left (light grey in the light theme)."
+      },
+      {
+        "name": "bubble-user",
+        "value": "{accent}",
+        "usage": "Your own bubble fill: blue on the right, in both themes."
+      },
+      {
+        "name": "on-bubble-user",
+        "value": "{on-accent}",
+        "usage": "Text inside your bubble: white on blue (5.2:1)."
+      }
+    ]
+  },
+  "type": {
+    "fonts": [],
+    "families": {
+      "sans": "Geist, ui-sans-serif, system-ui, -apple-system, \"Segoe UI\", sans-serif"
+    },
+    "groups": [
+      {
+        "name": "Text",
+        "family": "sans",
+        "note": "One sans-serif, Geist (Google Fonts, 400/500/600). Weight and grey carry hierarchy; size steps are few.",
+        "styles": [
+          {
+            "name": "display",
+            "fontSize": "28px",
+            "lineHeight": "34px",
+            "fontWeight": 600,
+            "letterSpacing": "-0.02em",
+            "sample": "Ask Jarvis anything about your leads, email, or schedule.",
+            "usage": "The empty-chat greeting and the sign-in title. Nothing else."
+          },
+          {
+            "name": "title",
+            "fontSize": "20px",
+            "lineHeight": "26px",
+            "fontWeight": 600,
+            "letterSpacing": "-0.01em",
+            "sample": "Approvals",
+            "usage": "Screen, conversation and sheet titles."
+          },
+          {
+            "name": "heading",
+            "fontSize": "16px",
+            "lineHeight": "22px",
+            "fontWeight": 600,
+            "letterSpacing": "-0.005em",
+            "sample": "Send the counter to the listing agent",
+            "usage": "Card titles: an approval's summary, a settings section. Also the Jarvis wordmark."
+          },
+          {
+            "name": "body",
+            "fontSize": "15px",
+            "lineHeight": "22px",
+            "fontWeight": 400,
+            "sample": "The inspection is booked for Friday at 10. I’ll remind the buyer the day before.",
+            "usage": "What you read in the chat: both bubbles and the composer field."
+          },
+          {
+            "name": "body-sm",
+            "fontSize": "14px",
+            "lineHeight": "20px",
+            "fontWeight": 400,
+            "sample": "Jarvis: Counter sent to the listing agent",
+            "usage": "Everything around the chat: previews, step labels, SystemLines, descriptions, field text."
+          },
+          {
+            "name": "label",
+            "fontSize": "14px",
+            "lineHeight": "20px",
+            "fontWeight": 500,
+            "sample": "Allow for 30 min",
+            "usage": "Anything you can press or select: buttons, nav items, conversation names."
+          },
+          {
+            "name": "caption",
+            "fontSize": "12px",
+            "lineHeight": "16px",
+            "fontWeight": 400,
+            "sample": "Quiet · 3d",
+            "usage": "Timestamps, metadata, helper lines, tags."
+          },
+          {
+            "name": "pairing",
+            "fontSize": "28px",
+            "lineHeight": "36px",
+            "fontWeight": 500,
+            "letterSpacing": "0.04em",
+            "sample": "7Q4M-K2XD",
+            "usage": "PairingCode characters only, with tabular figures."
+          }
+        ]
+      }
+    ]
+  },
+  "spacing": {
+    "note": "4px grid.",
+    "tokens": [
+      {
+        "name": "space-1",
+        "value": "4px",
+        "usage": "Icon to text inside a tag; tight meta rows."
+      },
+      {
+        "name": "space-2",
+        "value": "8px",
+        "usage": "Between buttons; attachment to its bubble; inside the composer box."
+      },
+      {
+        "name": "space-3",
+        "value": "12px",
+        "usage": "Card internal rhythm; row padding inline; between steps."
+      },
+      {
+        "name": "space-4",
+        "value": "16px",
+        "usage": "Card padding; between chat turns; phone gutters; bubble padding inline."
+      },
+      {
+        "name": "space-5",
+        "value": "20px",
+        "usage": "SettingsSection padding."
+      },
+      {
+        "name": "space-6",
+        "value": "24px",
+        "usage": "Desktop chat gutters; between sidebar groups and cards in a list."
+      },
+      {
+        "name": "space-8",
+        "value": "32px",
+        "usage": "Between the empty-chat greeting and its example prompts."
+      },
+      {
+        "name": "space-12",
+        "value": "48px",
+        "usage": "Top margin of the empty chat; space above and below the sign-in column."
+      }
+    ]
+  },
+  "radius": {
+    "note": "Soft: 14 to 18px on everything you see as a surface, pills on everything you press.",
+    "tokens": [
+      {
+        "name": "radius-tail",
+        "value": "6px",
+        "usage": "The one tight corner of a bubble: bottom-left on the assistant, bottom-right on the user."
+      },
+      {
+        "name": "radius-sm",
+        "value": "10px",
+        "usage": "Inside a card: the browser screenshot, image thumbnails."
+      },
+      {
+        "name": "radius-md",
+        "value": "14px",
+        "usage": "Rows, nav items, menus, document chips, pairing-code cells, diff boxes, the people picker."
+      },
+      {
+        "name": "radius-lg",
+        "value": "16px",
+        "usage": "Cards: ComputerCard, ApprovalCard, SettingsSection, StepList, ErrorState, task and lead lists, the today summary, the voice strip."
+      },
+      {
+        "name": "radius-xl",
+        "value": "18px",
+        "usage": "Message bubbles and sheets."
+      },
+      {
+        "name": "radius-pill",
+        "value": "999px",
+        "usage": "Every button, tag, filter chip, select and text field."
+      }
+    ]
+  },
+  "shadow": {
+    "note": "Flat. Cards in the flow have no shadow; only what floats over the chat does.",
+    "tokens": [
+      {
+        "name": "shadow-float",
+        "value": {
+          "dark": "0 12px 32px rgba(0, 0, 0, 0.6)",
+          "light": "0 12px 32px rgba(10, 10, 10, 0.12)"
+        },
+        "usage": "Menus, the ComputerCard while docked over the transcript, sheets."
+      },
+      {
+        "name": "focus-ring",
+        "value": {
+          "dark": "0 0 0 2px #0a0a0a, 0 0 0 4px #2563eb",
+          "light": "0 0 0 2px #ffffff, 0 0 0 4px #2563eb"
+        },
+        "usage": "Keyboard focus on everything focusable: a 2px bg gap, then 2px of solid accent blue (3.2:1 or more on every surface in both themes). Box-shadow, so it follows the radius."
+      }
+    ]
+  },
+  "size": {
+    "note": "Fixed measures the layout is built from.",
+    "tokens": [
+      {
+        "name": "size-sidebar",
+        "value": "272px",
+        "usage": "Sidebar width on desktop."
+      },
+      {
+        "name": "size-chat",
+        "value": "720px",
+        "usage": "Maximum width of the chat column."
+      },
+      {
+        "name": "size-bubble",
+        "value": "80%",
+        "usage": "Maximum width of a bubble, a StepList and a SystemLine, of the chat column."
+      },
+      {
+        "name": "size-composer",
+        "value": "52px",
+        "usage": "Composer height at one line; its corner radius is half of this."
+      },
+      {
+        "name": "size-control",
+        "value": "36px",
+        "usage": "Buttons, icon buttons, send and mic, text fields."
+      },
+      {
+        "name": "size-control-sm",
+        "value": "28px",
+        "usage": "Small buttons inside cards and rows (keys, read aloud, row menus)."
+      },
+      {
+        "name": "size-touch",
+        "value": "44px",
+        "usage": "Minimum row height on touch screens."
+      },
+      {
+        "name": "size-thumb",
+        "value": "80px",
+        "usage": "Image attachment thumbnails."
+      },
+      {
+        "name": "size-computer-sm",
+        "value": "280px",
+        "usage": "ComputerCard docked and small."
+      },
+      {
+        "name": "size-computer-lg",
+        "value": "560px",
+        "usage": "ComputerCard opened."
+      },
+      {
+        "name": "size-sheet",
+        "value": "480px",
+        "usage": "Maximum width of a sheet or dialog; full width on a phone."
+      },
+      {
+        "name": "size-signin",
+        "value": "360px",
+        "usage": "Width of the sign-in column."
+      }
+    ]
+  },
+  "duration": {
+    "note": "Motion says something is happening; it never decorates. Every entry here has a reduce-motion fallback (README, Motion).",
+    "tokens": [
+      {
+        "name": "dur-press",
+        "value": "100ms",
+        "usage": "Hover and press colour and opacity changes."
+      },
+      {
+        "name": "dur-tick",
+        "value": "180ms",
+        "usage": "The blue done check drawing itself when a step finishes."
+      },
+      {
+        "name": "dur-step",
+        "value": "180ms",
+        "usage": "A new StepList row rising 4px and fading in."
+      },
+      {
+        "name": "dur-word",
+        "value": "160ms",
+        "usage": "Each streamed word fading in."
+      },
+      {
+        "name": "dur-word-stagger",
+        "value": "28ms",
+        "usage": "Delay between words that arrive in one chunk (capped at 12 words)."
+      },
+      {
+        "name": "dur-dots",
+        "value": "1200ms",
+        "usage": "One cycle of the typing dots."
+      },
+      {
+        "name": "dur-dots-offset",
+        "value": "160ms",
+        "usage": "How far each typing dot runs behind the one before."
+      },
+      {
+        "name": "dur-live",
+        "value": "2000ms",
+        "usage": "The live dot breathing while the browser is in use or the mic records."
+      },
+      {
+        "name": "dur-sheet",
+        "value": "240ms",
+        "usage": "Sheets (new channel, members), menus and the phone sidebar sliding in."
+      }
+    ]
+  },
+  "easing": {
+    "tokens": [
+      {
+        "name": "ease-out",
+        "value": "cubic-bezier(0.2, 0, 0, 1)",
+        "usage": "Everything that arrives: words, steps, ticks, sheets."
+      },
+      {
+        "name": "ease-in-out",
+        "value": "cubic-bezier(0.4, 0, 0.2, 1)",
+        "usage": "Loops: typing dots, the live dot."
+      },
+      {
+        "name": "ease-exit",
+        "value": "cubic-bezier(0.4, 0, 1, 1)",
+        "usage": "Things leaving: sheets and menus closing."
+      }
+    ]
+  },
+  "opacity": {
+    "tokens": [
+      {
+        "name": "opacity-disabled",
+        "value": "0.35",
+        "usage": "Disabled controls. The only change a disabled control makes."
+      }
+    ]
+  }
+}

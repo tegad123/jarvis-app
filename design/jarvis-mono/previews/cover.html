@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../fonts/fonts.css">
+<link rel="stylesheet" href="../tokens/tokens.css">
+<script src="./kit.js"></script>
+<title>Jarvis Mono</title>
+<style>
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--jm-bg); color: var(--jm-fg); font-family: var(--jm-font-sans); overflow: hidden; }
+  .cover { position: relative; height: 320px; overflow: hidden; }
+  .art { position: absolute; top: 0; left: 480px; width: 480px; height: 320px; overflow: hidden; }
+  .art svg { display: block; width: 480px; height: 320px; }
+  .ink { fill: var(--jm-fg); }
+  .grey { fill: var(--jm-fg-secondary); }
+  .cut { fill: var(--jm-bg); }
+  .blue { fill: var(--jm-accent); }
+  .on { fill: var(--jm-on-accent); }
+  .tint { fill: var(--jm-accent-soft); }
+  .bubble { rx: var(--jm-radius-xl); }
+  .word { rx: var(--jm-space-1); }
+  .words { position: absolute; left: var(--jm-space-6); bottom: var(--jm-space-6); max-width: 440px; }
+  .name { margin: 0; font-size: 112px; line-height: 0.95; font-weight: 600; letter-spacing: -0.035em; color: var(--jm-fg); }
+  .tag { margin: var(--jm-space-3) 0 0 4px; font-size: 14px; line-height: 20px; color: var(--jm-fg-secondary); }
+</style>
+</head>
+<body>
+<div class="cover">
+<div class="art" aria-hidden="true">
+<svg viewBox="0 0 480 320" width="480" height="320">
+<!--
+  blocks      fg 304x136 bled off the top (Jarvis's turn in the base white; panel would vanish on bg) · accent 336x88 bled off the right (your own turn: the one blue, the biggest block) · fg-secondary 168x64 (a turn still typing) · accent-soft 112x24 pill (Action needed) and an accent 24x24 disc (the count badge), small because they are signals. About a quarter of 960x320.
+  arrangement a staggered stack read top to bottom like a transcript: Jarvis left, you right, Jarvis left again, the two signals beside the last turn on one line
+  pattern     pills, from "pills on everything you press" and word-by-word streaming: space-2-tall word pills (cut out in bg on the white and grey, on-accent on the blue), three equal ones as the typing dots at a space-4 pitch
+  scales      bubble corners radius-xl, word pills rx space-1 (half of space-2), signals radius-pill; gutters space-4 and space-6; row pitch space-6
+-->
+<rect class="ink bubble" x="24" y="-24" width="304" height="136" rx="18"/>
+<rect class="cut word" x="48" y="36" width="64" height="8" rx="4"/>
+<rect class="cut word" x="120" y="36" width="40" height="8" rx="4"/>
+<rect class="cut word" x="168" y="36" width="88" height="8" rx="4"/>
+<rect class="cut word" x="264" y="36" width="32" height="8" rx="4"/>
+<rect class="cut word" x="48" y="60" width="40" height="8" rx="4"/>
+<rect class="cut word" x="96" y="60" width="72" height="8" rx="4"/>
+<rect class="cut word" x="176" y="60" width="56" height="8" rx="4"/>
+<rect class="cut word" x="240" y="60" width="24" height="8" rx="4"/>
+<rect class="cut word" x="48" y="84" width="96" height="8" rx="4"/>
+<rect class="cut word" x="152" y="84" width="40" height="8" rx="4"/>
+<rect class="blue bubble" x="168" y="128" width="336" height="88" rx="18"/>
+<rect class="on word" x="192" y="156" width="56" height="8" rx="4"/>
+<rect class="on word" x="256" y="156" width="96" height="8" rx="4"/>
+<rect class="on word" x="360" y="156" width="40" height="8" rx="4"/>
+<rect class="on word" x="408" y="156" width="48" height="8" rx="4"/>
+<rect class="on word" x="192" y="180" width="72" height="8" rx="4"/>
+<rect class="on word" x="272" y="180" width="32" height="8" rx="4"/>
+<rect class="grey bubble" x="24" y="232" width="168" height="64" rx="18"/>
+<rect class="cut word" x="88" y="260" width="8" height="8" rx="4"/>
+<rect class="cut word" x="104" y="260" width="8" height="8" rx="4"/>
+<rect class="cut word" x="120" y="260" width="8" height="8" rx="4"/>
+<rect class="tint" x="208" y="252" width="112" height="24" rx="12"/>
+<rect class="blue" x="336" y="252" width="24" height="24" rx="12"/>
+</svg>
+</div>
+<div class="words">
+<h1 class="name">Jarvis<br>Mono</h1>
+<p class="tag">Chat first. Black and white, with one blue that means you.</p>
+</div>
+</div>
+</body>
+</html>

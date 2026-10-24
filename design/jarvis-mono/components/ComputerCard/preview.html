@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ComputerCard · Jarvis Mono</title>
+<link rel="stylesheet" href="../../fonts/fonts.css">
+<link rel="stylesheet" href="../../tokens/tokens.css">
+<link rel="stylesheet" href="../../build/jarvis-mono.css">
+<script src="../../previews/kit.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="../../build/jarvis-mono.js"></script>
+</head>
+<body class="bg-jm-bg font-jm text-jm-fg antialiased">
+<div id="root" class="grid gap-jm-4 p-jm-6"></div>
+<script>
+  var J = window.JarvisMono, h = React.createElement;
+  /* A stand-in for the browser's still picture: a plain wireframe web page. */
+  function page(kind) {
+    var s = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1280 800'><rect width='1280' height='800' fill='#ffffff'/>" +
+      "<rect width='1280' height='72' fill='#f3f3f3'/><rect x='48' y='26' width='132' height='20' rx='4' fill='#c4c4c4'/>" +
+      "<rect x='1000' y='22' width='104' height='28' rx='14' fill='#dddddd'/><rect x='1120' y='22' width='112' height='28' rx='14' fill='#222222'/>";
+    if (kind === 'signin') {
+      s += "<rect x='440' y='150' width='400' height='470' rx='16' fill='#ffffff' stroke='#e2e2e2' stroke-width='2'/>" +
+        "<rect x='490' y='200' width='200' height='26' rx='4' fill='#cfcfcf'/><rect x='490' y='240' width='280' height='14' rx='4' fill='#e6e6e6'/>" +
+        "<rect x='490' y='300' width='300' height='52' rx='10' fill='#f6f6f6' stroke='#d6d6d6' stroke-width='2'/>" +
+        "<rect x='490' y='372' width='300' height='52' rx='10' fill='#f6f6f6' stroke='#d6d6d6' stroke-width='2'/>" +
+        "<rect x='490' y='454' width='300' height='52' rx='26' fill='#222222'/><rect x='560' y='540' width='160' height='14' rx='4' fill='#e0e0e0'/>";
+    } else {
+      s += "<rect x='48' y='112' width='760' height='440' rx='10' fill='#e4e4e4'/>" +
+        "<rect x='48' y='580' width='420' height='30' rx='4' fill='#cdcdcd'/><rect x='48' y='626' width='240' height='22' rx='4' fill='#dcdcdc'/>" +
+        "<rect x='48' y='672' width='660' height='14' rx='4' fill='#ececec'/><rect x='48' y='700' width='600' height='14' rx='4' fill='#ececec'/>" +
+        "<rect x='848' y='112' width='384' height='300' rx='10' fill='#f6f6f6' stroke='#e2e2e2' stroke-width='2'/>" +
+        "<rect x='880' y='148' width='180' height='22' rx='4' fill='#cfcfcf'/><rect x='880' y='196' width='320' height='44' rx='8' fill='#ffffff' stroke='#dddddd' stroke-width='2'/>" +
+        "<rect x='880' y='256' width='320' height='44' rx='8' fill='#ffffff' stroke='#dddddd' stroke-width='2'/><rect x='880' y='336' width='320' height='44' rx='22' fill='#222222'/>";
+    }
+    return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(s + '</svg>');
+  }
+  function Yours() {
+    var s = React.useState(true), big = s[0], setBig = s[1];
+    return h(J.ComputerCard, {
+      state: 'yours', expanded: big, onToggleExpand: function () { setBig(!big); }, onHide: function () {},
+      title: 'Sign in · Listing portal', url: 'https://portal.listing.example/sign-in',
+      screenshot: page('signin'), onDone: function () {}, onClose: function () {}, onInput: function () {}
+    });
+  }
+  function L(t) { return h('p', { className: 'm-0 text-jm-caption text-jm-fg-secondary' }, t); }
+  ReactDOM.createRoot(document.getElementById('root')).render(h(React.Fragment, null,
+    h('div', { className: 'flex flex-wrap items-start gap-jm-4' },
+      h('div', { style: { display: 'grid', gap: '8px' } }, L('Jarvis is using it'),
+        h(J.ComputerCard, { state: 'working', title: '128 Alder Ave · Listing', url: 'https://homes.example/128-alder', screenshot: page('listing'), onToggleExpand: function () {}, onHide: function () {}, onTakeOver: function () {} })),
+      h('div', { style: { display: 'grid', gap: '8px' } }, L('It needs you to allow a task'),
+        h(J.ComputerCard, { state: 'needs-you', title: 'Listing portal', screenshot: page('listing'), onToggleExpand: function () {}, onHide: function () {},
+          asks: [{ id: 'ap1', kind: 'task', summary: 'Download the seller’s disclosure from the listing portal.' }] })),
+      h('div', { style: { display: 'grid', gap: '8px' } }, L('It needs you to sign in'),
+        h(J.ComputerCard, { state: 'needs-you', title: 'Sign in · Listing portal', screenshot: page('signin'), reason: 'The site wants a one-time code. Take over, enter it, then hand the browser back.', onToggleExpand: function () {}, onHide: function () {}, onTakeOver: function () {} }))),
+    L('You have the browser, opened'),
+    h(Yours)
+  ));
+</script>
+</body>
+</html>

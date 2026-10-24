@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PairingCode · Jarvis Mono</title>
+<link rel="stylesheet" href="../../fonts/fonts.css">
+<link rel="stylesheet" href="../../tokens/tokens.css">
+<link rel="stylesheet" href="../../build/jarvis-mono.css">
+<script src="../../previews/kit.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="../../build/jarvis-mono.js"></script>
+</head>
+<body class="bg-jm-bg font-jm text-jm-fg antialiased">
+<div id="root" class="grid gap-jm-4 p-jm-6" style="max-width:640px"></div>
+<script>
+  var J = window.JarvisMono, h = React.createElement;
+  function Live() {
+    var s = React.useState(false), paired = s[0], set = s[1];
+    React.useEffect(function () {
+      var t = setTimeout(function () { set(!paired); }, paired ? 2500 : 4500);
+      return function () { clearTimeout(t); };
+    }, [paired]);
+    return h(J.PairingCode, { code: '7Q4M-K2XD', expires: '3:42 PM', paired: paired, deviceName: 'Dana’s MacBook Air' });
+  }
+  ReactDOM.createRoot(document.getElementById('root')).render(h(React.Fragment, null,
+    h(J.SettingsSection, { title: 'iMessage', description: 'A small helper on your Mac lets Jarvis read your texts. Reading only: Jarvis can’t send a text.' },
+      h(Live))
+  ));
+</script>
+</body>
+</html>

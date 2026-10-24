@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sidebar · Jarvis Mono</title>
+<link rel="stylesheet" href="../../fonts/fonts.css">
+<link rel="stylesheet" href="../../tokens/tokens.css">
+<link rel="stylesheet" href="../../build/jarvis-mono.css">
+<script src="../../previews/kit.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="../../build/jarvis-mono.js"></script>
+</head>
+<body class="bg-jm-bg font-jm text-jm-fg antialiased">
+<div id="root" style="height:640px;display:flex"></div>
+<script>
+  var J = window.JarvisMono, h = React.createElement;
+  function Demo() {
+    var s = React.useState('t-alder'), active = s[0], setActive = s[1];
+    var t = React.useState('dark'), theme = t[0], setTheme = t[1];
+    return h(J.Sidebar, {
+      active: active,
+      onSelect: setActive,
+      onNewChat: function () {},
+      nav: [
+        { id: 'activity', label: 'Activity', icon: 'activity' },
+        { id: 'approvals', label: 'Approvals', icon: 'approvals', count: 2, attention: true },
+        { id: 'tasks', label: 'Tasks', icon: 'tasks', count: 5 },
+        { id: 'leads', label: 'Leads', icon: 'leads' },
+        { id: 'settings', label: 'Settings', icon: 'settings' }
+      ],
+      direct: { id: 'direct', name: 'Jarvis', preview: 'Three emails need you today. The inspection moved to Friday.', previewRole: 'assistant', time: '9:41' },
+      channels: [
+        { id: 't-alder', name: '128 Alder Ave', byJarvis: true, preview: 'Counter sent to the listing agent.', previewRole: 'assistant', time: '12m', unread: true,
+          menu: [{ label: 'Rename' }, { label: 'Archive' }] },
+        { id: 't-birch', name: '44 Birch Ln', byJarvis: true, preview: 'Can we move the showing to Friday?', previewRole: 'user', time: '2h',
+          menu: [{ label: 'Rename' }, { label: 'Archive' }] },
+        { id: 't-open', name: 'Westside open house', menu: [{ label: 'Rename' }, { label: 'Archive' }] },
+        { id: 't-cedar', name: '9 Cedar Ct', byJarvis: true, preview: 'Waiting on the appraisal.', previewRole: 'assistant', time: '3d', quiet: true,
+          menu: [{ label: 'Rename' }, { label: 'Archive' }] }
+      ],
+      person: { name: 'Dana Reyes', role: 'Owner' },
+      theme: theme,
+      onToggleTheme: function () {
+        var next = theme === 'light' ? 'dark' : 'light';
+        document.documentElement.setAttribute('data-theme', next);
+        setTheme(next);
+      },
+      onSignOut: function () {}
+    });
+  }
+  ReactDOM.createRoot(document.getElementById('root')).render(h(Demo));
+</script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ErrorState · Jarvis Mono</title>
+<link rel="stylesheet" href="../../fonts/fonts.css">
+<link rel="stylesheet" href="../../tokens/tokens.css">
+<link rel="stylesheet" href="../../build/jarvis-mono.css">
+<script src="../../previews/kit.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="../../build/jarvis-mono.js"></script>
+</head>
+<body class="bg-jm-bg font-jm text-jm-fg antialiased">
+<div id="root" class="grid gap-jm-4 p-jm-6" style="max-width:640px"></div>
+<script>
+  var J = window.JarvisMono, h = React.createElement;
+  function Retry() {
+    var b = React.useState(false), busy = b[0], set = b[1];
+    return h(J.ErrorState, { label: 'Leads unavailable', message: 'Jarvis could not read the open-house tracker.', detail: 'HTTP 503 · sheet unreachable',
+      busy: busy, onRetry: function () { set(true); setTimeout(function () { set(false); }, 1200); } });
+  }
+  ReactDOM.createRoot(document.getElementById('root')).render(h(React.Fragment, null,
+    h(Retry),
+    h(J.ErrorState, { stale: true, label: 'Feed unavailable', message: 'Can’t reach Jarvis right now.', onRetry: function () {} })
+  ));
+</script>
+</body>
+</html>

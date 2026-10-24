@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ConversationRow · Jarvis Mono</title>
+<link rel="stylesheet" href="../../fonts/fonts.css">
+<link rel="stylesheet" href="../../tokens/tokens.css">
+<link rel="stylesheet" href="../../build/jarvis-mono.css">
+<script src="../../previews/kit.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="../../build/jarvis-mono.js"></script>
+</head>
+<body class="bg-jm-bg font-jm text-jm-fg antialiased">
+<div id="root" class="grid gap-jm-4 p-jm-6" style="max-width:300px"></div>
+<script>
+  var J = window.JarvisMono, h = React.createElement;
+  var menu = [{ label: 'Rename' }, { label: 'Archive' }];
+  function L(t) { return h('p', { className: 'm-0 text-jm-caption text-jm-fg-secondary', style: { margin: '8px 12px 0' } }, t); }
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { style: { display: 'grid', gap: '2px' } },
+    L('Direct line'),
+    h(J.ConversationRow, { direct: true, name: 'Jarvis', preview: 'Three emails need you today.', previewRole: 'assistant', time: '9:41' }),
+    L('Selected, unread, opened by Jarvis'),
+    h(J.ConversationRow, { name: '128 Alder Ave', byJarvis: true, active: true, unread: true, preview: 'Counter sent to the listing agent.', previewRole: 'assistant', time: '12m', menu: menu }),
+    L('Your last message'),
+    h(J.ConversationRow, { name: '44 Birch Ln', byJarvis: true, preview: 'Can we move the showing to Friday?', previewRole: 'user', time: '2h', menu: menu }),
+    L('Gone quiet'),
+    h(J.ConversationRow, { name: '9 Cedar Ct', byJarvis: true, preview: 'Waiting on the appraisal.', previewRole: 'assistant', time: '3d', quiet: true, menu: menu }),
+    L('Empty, menu open'),
+    h(J.ConversationRow, { name: 'Westside open house', menu: menu, menuOpen: true, onMenuOpenChange: function () {} }),
+    h('div', { style: { height: '72px' } }),
+    L('Operator access'),
+    h(J.ConversationRow, { name: '128 Alder Ave', byJarvis: true, bodiesHidden: true, time: '12m' })
+  ));
+</script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FilterChips · Jarvis Mono</title>
+<link rel="stylesheet" href="../../fonts/fonts.css">
+<link rel="stylesheet" href="../../tokens/tokens.css">
+<link rel="stylesheet" href="../../build/jarvis-mono.css">
+<script src="../../previews/kit.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="../../build/jarvis-mono.js"></script>
+</head>
+<body class="bg-jm-bg font-jm text-jm-fg antialiased">
+<div id="root" class="grid gap-jm-4 p-jm-6" style="max-width:760px"></div>
+<script>
+  var J = window.JarvisMono, h = React.createElement;
+  var LABEL = { open: 'Open', in_progress: 'In progress', done: 'Done', high: 'High', medium: 'Medium', low: 'Low' };
+  function Row(props, start) {
+    var s = React.useState(start === undefined ? null : start), v = s[0], set = s[1];
+    return h(J.FilterChips, Object.assign({ active: v, onChange: set }, props));
+  }
+  function Demo() {
+    return h(React.Fragment, null,
+      Row({ label: 'Show', options: ['open', 'in_progress', 'done'], format: function (k) { return LABEL[k]; } }, 'open'),
+      Row({ label: 'Level', options: ['high', 'medium', 'low'], format: function (k) { return LABEL[k]; } }),
+      Row({ label: 'Who', options: [{ value: 'dana', label: 'Dana Reyes' }, { value: 'marco', label: 'Marco Lin' }, { value: 'priya', label: 'Priya Shah' }] }),
+      Row({ label: 'Skill', options: ['email-triage', 'tasks', 'calendar', 'browser', 'digest', 'leads', 'email-drafts'] })
+    );
+  }
+  ReactDOM.createRoot(document.getElementById('root')).render(h(Demo));
+</script>
+</body>
+</html>

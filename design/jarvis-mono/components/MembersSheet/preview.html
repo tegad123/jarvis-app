@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MembersSheet · Jarvis Mono</title>
+<link rel="stylesheet" href="../../fonts/fonts.css">
+<link rel="stylesheet" href="../../tokens/tokens.css">
+<link rel="stylesheet" href="../../build/jarvis-mono.css">
+<script src="../../previews/kit.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="../../build/jarvis-mono.js"></script>
+</head>
+<body class="bg-jm-bg font-jm text-jm-fg antialiased">
+<div id="root" class="grid gap-jm-4 p-jm-6" style="max-width:640px"></div>
+<script>
+  var J = window.JarvisMono, h = React.createElement;
+  var people = [
+    { id: 'dana', name: 'Dana Reyes', title: 'Owner' },
+    { id: 'marco', name: 'Marco Lin', title: 'Agent' },
+    { id: 'priya', name: 'Priya Shah', title: 'Transaction coordinator' },
+    { id: 'sam', name: 'Sam Ortiz', title: 'Agent' }
+  ];
+  function Manage() {
+    var m = React.useState(['dana', 'marco']), members = m[0], set = m[1];
+    return h(J.MembersSheet, {
+      inline: true, channelName: '128 Alder Ave', members: members, people: people, personKey: 'dana',
+      canManage: true, defaultAdding: true, onClose: function () {},
+      onAdd: function (k) { set(members.concat([k])); },
+      onRemove: function (k) { set(members.filter(function (x) { return x !== k; })); }
+    });
+  }
+  function L(t) { return h('p', { className: 'm-0 text-jm-caption text-jm-fg-secondary' }, t); }
+  ReactDOM.createRoot(document.getElementById('root')).render(h(React.Fragment, null,
+    L('Owner, adding someone'),
+    h(Manage),
+    L('Member: read-only'),
+    h(J.MembersSheet, { inline: true, channelName: '44 Birch Ln', members: ['dana', 'marco', 'priya'], people: people, personKey: 'marco', canManage: false, onClose: function () {} })
+  ));
+</script>
+</body>
+</html>

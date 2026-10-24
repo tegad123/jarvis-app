@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ActivityRow · Jarvis Mono</title>
+<link rel="stylesheet" href="../../fonts/fonts.css">
+<link rel="stylesheet" href="../../tokens/tokens.css">
+<link rel="stylesheet" href="../../build/jarvis-mono.css">
+<script src="../../previews/kit.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="../../build/jarvis-mono.js"></script>
+</head>
+<body class="bg-jm-bg font-jm text-jm-fg antialiased">
+<div id="root" class="grid gap-jm-4 p-jm-6" style="max-width:760px"></div>
+<script>
+  var J = window.JarvisMono, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h(J.Rows, null,
+    h(J.ActivityRow, { tone: 'needs-you', kind: 'Needs reply', skill: 'email-triage', time: '4m', timeTitle: 'Thu, Oct 23, 3:12 PM',
+      headline: 'Priya asked whether the buyer can close a week early.' }),
+    h(J.ActivityRow, { tone: 'done', kind: 'Done', skill: 'tasks', time: '18m',
+      headline: 'Marco finished “Send the disclosure packet”.' }),
+    h(J.ActivityRow, { kind: 'Email filed', skill: 'email-triage', time: '1h',
+      headline: 'Filed the appraisal confirmation under 128 Alder Ave.',
+      detail: 'Thread 18c2f… moved to Deals/128 Alder Ave · matched on the property address in the subject.', defaultOpen: true,
+      attachments: ['Appraisal scheduled', '128 Alder Ave'] }),
+    h(J.ActivityRow, { kind: 'Task created', skill: 'tasks', time: '2h',
+      headline: 'Call Dana about the counter, due Friday.', detail: 'From the chat in 128 Alder Ave.' }),
+    h(J.ActivityRow, { tone: 'error', kind: 'Couldn’t file', skill: 'email-triage', time: '3h',
+      headline: 'One email could not be filed: the mailbox asked to sign in again.' })
+  ));
+</script>
+</body>
+</html>

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OutboxRow · Jarvis Mono</title>
+<link rel="stylesheet" href="../../fonts/fonts.css">
+<link rel="stylesheet" href="../../tokens/tokens.css">
+<link rel="stylesheet" href="../../build/jarvis-mono.css">
+<script src="../../previews/kit.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="../../build/jarvis-mono.js"></script>
+</head>
+<body class="bg-jm-bg font-jm text-jm-fg antialiased">
+<div id="root" class="grid gap-jm-4 p-jm-6" style="max-width:760px"></div>
+<script>
+  var J = window.JarvisMono, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h(React.Fragment, null,
+    h('header', { style: { display: 'flex', alignItems: 'baseline', gap: '12px' } },
+      h('h2', { className: 'text-jm-heading', style: { margin: 0 } }, 'Outbox'),
+      h('span', { className: 'text-jm-caption', style: { color: 'var(--jm-fg-secondary)' } }, 'Captured, not sent · 3')),
+    h(J.Rows, null,
+      h(J.OutboxRow, { to: ['priya@listing.example'], cc: ['dana@brokerage.example'], subject: 'Re: 128 Alder Ave · counter at $612,000', time: '4m', timeTitle: 'Thu, Oct 23, 3:12 PM',
+        body: 'Hi Priya,\n\nMy buyer is countering at $612,000 with the same closing date. Can you confirm by Friday noon?\n\nDana', defaultOpen: true }),
+      h(J.OutboxRow, { to: ['jordan@buyer.example'], subject: 'Showing moved to Friday', time: '1h', body: 'Hi Jordan, the showing at 44 Birch Ln is now Friday at 4.' }),
+      h(J.OutboxRow, { to: ['appraiser@valuation.example'], subject: 'Access instructions for 9 Cedar Ct', time: 'Mon', body: 'The lockbox code is in the listing notes.' }))
+  ));
+</script>
+</body>
+</html>

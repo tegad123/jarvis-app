@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ApprovalCard · Jarvis Mono</title>
+<link rel="stylesheet" href="../../fonts/fonts.css">
+<link rel="stylesheet" href="../../tokens/tokens.css">
+<link rel="stylesheet" href="../../build/jarvis-mono.css">
+<script src="../../previews/kit.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="../../build/jarvis-mono.js"></script>
+</head>
+<body class="bg-jm-bg font-jm text-jm-fg antialiased">
+<div id="root" class="grid gap-jm-4 p-jm-6"></div>
+<script>
+  var J = window.JarvisMono, h = React.createElement;
+  function Pending() {
+    var s = React.useState('pending'), st = s[0], set = s[1];
+    var b = React.useState(false), busy = b[0], setBusy = b[1];
+    function decide(next) { setBusy(true); setTimeout(function () { setBusy(false); set(next); }, 700); }
+    return h(J.ApprovalCard, {
+      status: st, busy: busy, skill: 'email-drafts', time: '4m ago',
+      summary: 'Send the counter to the listing agent',
+      fields: { to: 'Priya Shah', subject: 'Re: 128 Alder Ave · counter at $612,000', message: 'Hi Priya,\nMy buyer is countering at $612,000 with the same closing date. Can you confirm by Friday noon?\nDana' },
+      decidedBy: 'Dana', decidedAt: 'just now',
+      onApprove: function () { decide('approved'); }, onReject: function () { decide('rejected'); }
+    });
+  }
+  function col(kids) { return h('div', { style: { display: 'grid', gap: '16px', flex: '1 1 340px', minWidth: 0, maxWidth: '480px' } }, kids); }
+  function L(t, k) { return h('p', { key: k, className: 'm-0 text-jm-caption text-jm-fg-secondary' }, t); }
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { className: 'flex flex-wrap items-start gap-jm-4' },
+    col([
+      L('Can approve', 'l1'),
+      h(Pending, { key: 'p' }),
+      L('Can only reject', 'l2'),
+      h(J.ApprovalCard, {
+        key: 'r', skill: 'browser', time: '12m ago', approveLabel: 'Approve for 30 min',
+        summary: 'Use the listing portal for 30 minutes',
+        fields: { site: 'portal.listing.example', task: 'Download the seller’s disclosure for 128 Alder Ave' },
+        forPerson: 'Marco', canApprove: false, canReject: true
+      })
+    ]),
+    col([
+      L('A settings change', 'l3'),
+      h(J.ApprovalCard, {
+        key: 'c', skill: 'digest', time: '1h ago', summary: 'Change when the daily digest goes out',
+        changes: [{ key: 'digest_times', label: 'Digest times', current: ['5AM', '3PM'], proposed: ['8AM'] }]
+      }),
+      L('Decided', 'l4'),
+      h(J.ApprovalCard, { key: 'a', status: 'approved', skill: 'calendar', time: 'Yesterday', summary: 'Add the inspection to your calendar', decidedBy: 'Dana', decidedAt: 'yesterday' }),
+      h(J.ApprovalCard, { key: 'x', status: 'rejected', skill: 'email-drafts', time: 'Mon', summary: 'Reply to the appraiser', decidedBy: 'Marco', decidedAt: 'Mon' })
+    ])
+  ));
+</script>
+</body>
+</html>

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LeadRow · Jarvis Mono</title>
+<link rel="stylesheet" href="../../fonts/fonts.css">
+<link rel="stylesheet" href="../../tokens/tokens.css">
+<link rel="stylesheet" href="../../build/jarvis-mono.css">
+<script src="../../previews/kit.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="../../build/jarvis-mono.js"></script>
+</head>
+<body class="bg-jm-bg font-jm text-jm-fg antialiased">
+<div id="root" class="grid gap-jm-4 p-jm-6" style="max-width:760px"></div>
+<script>
+  var J = window.JarvisMono, h = React.createElement;
+  function Live() {
+    var s = React.useState({ temperature: 'Hot', status: 'No Response' }), lead = s[0], set = s[1];
+    return h(J.LeadRow, Object.assign({
+      name: 'Jordan Ellis', property: '44 Birch Ln', price: '$585,000', activity: 'Emailed 10/20', agent: 'Marco', date: '10/18',
+      canEdit: true, byJarvis: true, onChange: function (f) { set(Object.assign({}, lead, f)); }
+    }, lead));
+  }
+  function L(t) { return h('p', { className: 'm-0 text-jm-caption text-jm-fg-secondary' }, t); }
+  ReactDOM.createRoot(document.getElementById('root')).render(h(React.Fragment, null,
+    L('Editable (app-native leads): tap the bars or the status'),
+    h(J.List, null,
+      h(Live),
+      h(J.LeadRow, { name: 'Sam Okafor', property: '128 Alder Ave', price: '$612,000', temperature: 'Warm', status: 'Responded', activity: 'Called on 10/21', agent: 'Dana', date: '10/15', canEdit: true }),
+      h(J.LeadRow, { name: 'Lee Moreno', property: '9 Cedar Ct', temperature: 'Cold', status: 'Not Interested', activity: 'Nudged 10/02', agent: 'Marco', date: '09/28', canEdit: true }),
+      h(J.LeadRow, { name: 'Ari Novak', temperature: '', status: 'New', agent: 'Dana', date: '10/22', canEdit: true, byJarvis: true })),
+    L('Sheet-backed: read-only, the sheet stays the place you edit'),
+    h(J.List, null,
+      h(J.LeadRow, { name: 'Jordan Ellis', property: '44 Birch Ln', price: '$585,000', temperature: 'Hot', status: 'No Response', activity: 'Emailed 10/20', agent: 'Marco', date: '10/18' }))
+  ));
+</script>
+</body>
+</html>

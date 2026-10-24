@@ -1,0 +1,129 @@
+/* Jarvis Mono tokens: generated from design-tokens.json by scripts/build-tokens.mjs. Do not edit by hand. */
+
+:root,
+[data-theme="dark"],
+.dark {
+  color-scheme: dark;
+  --jm-bg: #0a0a0a;
+  --jm-panel: #161616;
+  --jm-panel-raised: #1f1f1f;
+  --jm-border: #262626;
+  --jm-border-strong: #666666;
+  --jm-fg: #ffffff;
+  --jm-fg-secondary: #8a8a8a;
+  --jm-on-fg: #0a0a0a;
+  --jm-accent: #2563eb;
+  --jm-accent-hover: #1d4ed8;
+  --jm-on-accent: #ffffff;
+  --jm-accent-text: #60a5fa;
+  --jm-accent-soft: rgba(37, 99, 235, 0.14);
+  --jm-accent-soft-text: #60a5fa;
+  --jm-error: #ef4444;
+  --jm-scrim: rgba(0, 0, 0, 0.6);
+  --jm-bubble-assistant: var(--jm-panel);
+  --jm-bubble-user: var(--jm-accent);
+  --jm-on-bubble-user: var(--jm-on-accent);
+  --jm-shadow-float: 0 12px 32px rgba(0, 0, 0, 0.6);
+  --jm-focus-ring: 0 0 0 2px #0a0a0a, 0 0 0 4px #2563eb;
+}
+
+[data-theme="light"],
+.light {
+  color-scheme: light;
+  --jm-bg: #ffffff;
+  --jm-panel: #f5f5f5;
+  --jm-panel-raised: #ebebeb;
+  --jm-border: #e5e5e5;
+  --jm-border-strong: #8a8a8a;
+  --jm-fg: #0a0a0a;
+  --jm-fg-secondary: #666666;
+  --jm-on-fg: #ffffff;
+  --jm-accent: #2563eb;
+  --jm-accent-hover: #1d4ed8;
+  --jm-on-accent: #ffffff;
+  --jm-accent-text: #2563eb;
+  --jm-accent-soft: rgba(37, 99, 235, 0.12);
+  --jm-accent-soft-text: #1d4ed8;
+  --jm-error: #ef4444;
+  --jm-scrim: rgba(10, 10, 10, 0.32);
+  --jm-bubble-assistant: var(--jm-panel);
+  --jm-bubble-user: var(--jm-accent);
+  --jm-on-bubble-user: var(--jm-on-accent);
+  --jm-shadow-float: 0 12px 32px rgba(10, 10, 10, 0.12);
+  --jm-focus-ring: 0 0 0 2px #ffffff, 0 0 0 4px #2563eb;
+}
+
+:root {
+  --jm-font-sans: Geist, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --jm-type-display-size: 28px;
+  --jm-type-display-line: 34px;
+  --jm-type-display-weight: 600;
+  --jm-type-display-tracking: -0.02em;
+  --jm-type-title-size: 20px;
+  --jm-type-title-line: 26px;
+  --jm-type-title-weight: 600;
+  --jm-type-title-tracking: -0.01em;
+  --jm-type-heading-size: 16px;
+  --jm-type-heading-line: 22px;
+  --jm-type-heading-weight: 600;
+  --jm-type-heading-tracking: -0.005em;
+  --jm-type-body-size: 15px;
+  --jm-type-body-line: 22px;
+  --jm-type-body-weight: 400;
+  --jm-type-body-tracking: 0;
+  --jm-type-body-sm-size: 14px;
+  --jm-type-body-sm-line: 20px;
+  --jm-type-body-sm-weight: 400;
+  --jm-type-body-sm-tracking: 0;
+  --jm-type-label-size: 14px;
+  --jm-type-label-line: 20px;
+  --jm-type-label-weight: 500;
+  --jm-type-label-tracking: 0;
+  --jm-type-caption-size: 12px;
+  --jm-type-caption-line: 16px;
+  --jm-type-caption-weight: 400;
+  --jm-type-caption-tracking: 0;
+  --jm-type-pairing-size: 28px;
+  --jm-type-pairing-line: 36px;
+  --jm-type-pairing-weight: 500;
+  --jm-type-pairing-tracking: 0.04em;
+  --jm-space-1: 4px;
+  --jm-space-2: 8px;
+  --jm-space-3: 12px;
+  --jm-space-4: 16px;
+  --jm-space-5: 20px;
+  --jm-space-6: 24px;
+  --jm-space-8: 32px;
+  --jm-space-12: 48px;
+  --jm-radius-tail: 6px;
+  --jm-radius-sm: 10px;
+  --jm-radius-md: 14px;
+  --jm-radius-lg: 16px;
+  --jm-radius-xl: 18px;
+  --jm-radius-pill: 999px;
+  --jm-size-sidebar: 272px;
+  --jm-size-chat: 720px;
+  --jm-size-bubble: 80%;
+  --jm-size-composer: 52px;
+  --jm-size-control: 36px;
+  --jm-size-control-sm: 28px;
+  --jm-size-touch: 44px;
+  --jm-size-thumb: 80px;
+  --jm-size-computer-sm: 280px;
+  --jm-size-computer-lg: 560px;
+  --jm-size-sheet: 480px;
+  --jm-size-signin: 360px;
+  --jm-dur-press: 100ms;
+  --jm-dur-tick: 180ms;
+  --jm-dur-step: 180ms;
+  --jm-dur-word: 160ms;
+  --jm-dur-word-stagger: 28ms;
+  --jm-dur-dots: 1200ms;
+  --jm-dur-dots-offset: 160ms;
+  --jm-dur-live: 2000ms;
+  --jm-dur-sheet: 240ms;
+  --jm-ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --jm-ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --jm-ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --jm-opacity-disabled: 0.35;
+}

@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jarvis Mono</title>
+<link rel="stylesheet" href="../fonts/fonts.css">
+<link rel="stylesheet" href="../tokens/tokens.css">
+<link rel="stylesheet" href="../build/jarvis-mono.css">
+</head>
+<body class="bg-jm-bg font-jm text-jm-fg antialiased">
+<main class="mx-auto grid max-w-[1080px] gap-jm-12 px-jm-6 py-jm-8">
+  <header class="grid gap-jm-4">
+    <div class="flex flex-wrap items-center gap-jm-3">
+      <h1 class="m-0 text-jm-display text-jm-fg">Jarvis Mono</h1>
+      <button id="theme" type="button" class="ml-auto inline-flex min-h-jm-control cursor-pointer items-center rounded-jm-pill border border-jm-border bg-jm-panel-raised px-jm-4 font-jm text-jm-label text-jm-fg hover:border-jm-border-strong focus-visible:outline-none focus-visible:shadow-jm-focus">Light theme</button>
+    </div>
+    <p class="m-0 max-w-[720px] text-jm-body-sm text-jm-fg-secondary">Chat first. Black and white, with one blue that means you. Every component below is the React and Tailwind source in <code>components/</code>, rendered from <code>build/</code>. The brand book is <code>brand-book.md</code>.</p>
+    <nav class="flex flex-wrap gap-jm-2" aria-label="Components">
+      <a class="rounded-jm-pill border border-jm-border px-jm-3 py-0.5 text-jm-caption text-jm-fg-secondary no-underline hover:border-jm-border-strong hover:text-jm-fg focus-visible:outline-none focus-visible:shadow-jm-focus" href="#Button">Button</a>
+      <a class="rounded-jm-pill border border-jm-border px-jm-3 py-0.5 text-jm-caption text-jm-fg-secondary no-underline hover:border-jm-border-strong hover:text-jm-fg focus-visible:outline-none focus-visible:shadow-jm-focus" href="#Sidebar">Sidebar</a>
+      <a class="rounded-jm-pill border border-jm-border px-jm-3 py-0.5 text-jm-caption text-jm-fg-secondary no-underline hover:border-jm-border-strong hover:text-jm-fg focus-visible:outline-none focus-visible:shadow-jm-focus" href="#ConversationRow">ConversationRow</a>
+      <a class="rounded-jm-pill border border-jm-border px-jm-3 py-0.5 text-jm-caption text-jm-fg-secondary no-underline hover:border-jm-border-strong hover:text-jm-fg focus-visible:outline-none focus-visible:shadow-jm-focus" href="#MessageBubble">MessageBubble</a>
+      <a class="rounded-jm-pill border border-jm-border px-jm-3 py-0.5 text-jm-caption text-jm-fg-secondary no-underline hover:border-jm-border-strong hover:text-jm-fg focus-visible:outline-none focus-visible:shadow-jm-focus" href="#SystemLine">SystemLine</a>
+      <a class="rounded-jm-pill border border-jm-border px-jm-3 py-0.5 text-jm-caption text-jm-fg-secondary no-underline hover:border-jm-border-strong hover:text-jm-fg focus-visible:outline-none focus-visible:shadow-jm-focus" href="#StepList">StepList</a>
+      <a class="rounded-jm-pill border border-jm-border px-jm-3 py-0.5 text-jm-caption text-jm-fg-secondary no-underline hover:border-jm-border-strong hover:text-jm-fg focus-visible:outline-none focus-visible:shadow-jm-focus" href="#Composer">Composer</a>
+      <a class="rounded-jm-pill border border-jm-border px-jm-3 py-0.5 text-jm-caption text-jm-fg-secondary no-underline hover:border-jm-border-strong hover:text-jm-fg focus-visible:outline-none focus-visible:shadow-jm-focus" href="#ComputerCard">ComputerCard</a>
+      <a class="rounded-jm-pill border border-jm-border px-jm-3 py-0.5 text-jm-caption text-jm-fg-secondary no-underline hover:border-jm-border-strong hover:text-jm-fg focus-visible:outline-none focus-visible:shadow-jm-focus" href="#ApprovalCard">ApprovalCard</a>
+      <a class="rounded-jm-pill border border-jm-border px-jm-3 py-0.5 text-jm-caption text-jm-fg-secondary no-underline hover:border-jm-border-strong hover:text-jm-fg focus-visible:outline-none focus-visible:shadow-jm-focus" href="#SettingsSection">SettingsSection</a>
+      <a class="rounded-jm-pill border border-jm-border px-jm-3 py-0.5 text-jm-caption text-jm-fg-secondary no-underline hover:border-jm-border-strong hover:text-jm-fg focus-visible:outline-none focus-visible:shadow-jm-focus" href="#PairingCode">PairingCode</a>
+      <a class="rounded-jm-pill border border-jm-border px-jm-3 py-0.5 text-jm-caption text-jm-fg-secondary no-underline hover:border-jm-border-strong hover:text-jm-fg focus-visible:outline-none focus-visible:shadow-jm-focus" href="#SignIn">SignIn</a>
+      <a class="rounded-jm-pill border border-jm-border px-jm-3 py-0.5 text-jm-caption text-jm-fg-secondary no-underline hover:border-jm-border-strong hover:text-jm-fg focus-visible:outline-none focus-visible:shadow-jm-focus" href="#TodaySummary">TodaySummary</a>
+      <a class="rounded-jm-pill border border-jm-border px-jm-3 py-0.5 text-jm-caption text-jm-fg-secondary no-underline hover:border-jm-border-strong hover:text-jm-fg focus-visible:outline-none focus-visible:shadow-jm-focus" href="#ActivityRow">ActivityRow</a>
+      <a class="rounded-jm-pill border border-jm-border px-jm-3 py-0.5 text-jm-caption text-jm-fg-secondary no-underline hover:border-jm-border-strong hover:text-jm-fg focus-visible:outline-none focus-visible:shadow-jm-focus" href="#TaskRow">TaskRow</a>
+      <a class="rounded-jm-pill border border-jm-border px-jm-3 py-0.5 text-jm-caption text-jm-fg-secondary no-underline hover:border-jm-border-strong hover:text-jm-fg focus-visible:outline-none focus-visible:shadow-jm-focus" href="#LeadRow">LeadRow</a>
+      <a class="rounded-jm-pill border border-jm-border px-jm-3 py-0.5 text-jm-caption text-jm-fg-secondary no-underline hover:border-jm-border-strong hover:text-jm-fg focus-visible:outline-none focus-visible:shadow-jm-focus" href="#FilterChips">FilterChips</a>
+      <a class="rounded-jm-pill border border-jm-border px-jm-3 py-0.5 text-jm-caption text-jm-fg-secondary no-underline hover:border-jm-border-strong hover:text-jm-fg focus-visible:outline-none focus-visible:shadow-jm-focus" href="#OutboxRow">OutboxRow</a>
+      <a class="rounded-jm-pill border border-jm-border px-jm-3 py-0.5 text-jm-caption text-jm-fg-secondary no-underline hover:border-jm-border-strong hover:text-jm-fg focus-visible:outline-none focus-visible:shadow-jm-focus" href="#NewChannelSheet">NewChannelSheet</a>
+      <a class="rounded-jm-pill border border-jm-border px-jm-3 py-0.5 text-jm-caption text-jm-fg-secondary no-underline hover:border-jm-border-strong hover:text-jm-fg focus-visible:outline-none focus-visible:shadow-jm-focus" href="#MembersSheet">MembersSheet</a>
+      <a class="rounded-jm-pill border border-jm-border px-jm-3 py-0.5 text-jm-caption text-jm-fg-secondary no-underline hover:border-jm-border-strong hover:text-jm-fg focus-visible:outline-none focus-visible:shadow-jm-focus" href="#EmptyState">EmptyState</a>
+      <a class="rounded-jm-pill border border-jm-border px-jm-3 py-0.5 text-jm-caption text-jm-fg-secondary no-underline hover:border-jm-border-strong hover:text-jm-fg focus-visible:outline-none focus-visible:shadow-jm-focus" href="#ErrorState">ErrorState</a>
+    </nav>
+    <iframe class="h-[320px] w-full rounded-jm-lg border border-jm-border bg-jm-bg" title="Cover" data-src="./cover.html"></iframe>
+  </header>
+  <section class="grid gap-jm-3" id="Button">
+    <header class="flex flex-wrap items-baseline gap-x-jm-3 gap-y-jm-1">
+      <h2 class="m-0 text-jm-title text-jm-fg">Button</h2>
+      <span class="text-jm-caption text-jm-fg-secondary">Actions</span>
+      <a class="ml-auto rounded-jm-sm text-jm-label text-jm-accent-text underline-offset-[3px] hover:underline focus-visible:outline-none focus-visible:shadow-jm-focus" href="../components/Button/preview.html">Open on its own</a>
+    </header>
+    <p class="m-0 max-w-[720px] text-jm-body-sm text-jm-fg-secondary">The pill every action in Jarvis Mono is drawn with: primary (the blue accent fill with white text, accent-hover when hovered or pressed), secondary (panel-raised with a hairline) and ghost (text only).</p>
+    <iframe class="w-full rounded-jm-lg border border-jm-border bg-jm-bg" title="Button preview" loading="lazy" style="height:190px" data-src="../components/Button/preview.html"></iframe>
+  </section>
+  <section class="grid gap-jm-3" id="Sidebar">
+    <header class="flex flex-wrap items-baseline gap-x-jm-3 gap-y-jm-1">
+      <h2 class="m-0 text-jm-title text-jm-fg">Sidebar</h2>
+      <span class="text-jm-caption text-jm-fg-secondary">Navigation</span>
+      <a class="ml-auto rounded-jm-sm text-jm-label text-jm-accent-text underline-offset-[3px] hover:underline focus-visible:outline-none focus-visible:shadow-jm-focus" href="../components/Sidebar/preview.html">Open on its own</a>
+    </header>
+    <p class="m-0 max-w-[720px] text-jm-body-sm text-jm-fg-secondary">The left column that holds the whole app: the wordmark, a new-channel button, the destinations, the direct line, every channel, and who is signed in.</p>
+    <iframe class="w-full rounded-jm-lg border border-jm-border bg-jm-bg" title="Sidebar preview" loading="lazy" style="height:680px" data-src="../components/Sidebar/preview.html"></iframe>
+  </section>
+  <section class="grid gap-jm-3" id="ConversationRow">
+    <header class="flex flex-wrap items-baseline gap-x-jm-3 gap-y-jm-1">
+      <h2 class="m-0 text-jm-title text-jm-fg">ConversationRow</h2>
+      <span class="text-jm-caption text-jm-fg-secondary">Navigation</span>
+      <a class="ml-auto rounded-jm-sm text-jm-label text-jm-accent-text underline-offset-[3px] hover:underline focus-visible:outline-none focus-visible:shadow-jm-focus" href="../components/ConversationRow/preview.html">Open on its own</a>
+    </header>
+    <p class="m-0 max-w-[720px] text-jm-body-sm text-jm-fg-secondary">One conversation in the sidebar: its name, who spoke last and what they said, when, and whether it&#x27;s unread or has gone quiet.</p>
+    <iframe class="w-full rounded-jm-lg border border-jm-border bg-jm-bg" title="ConversationRow preview" loading="lazy" style="height:560px" data-src="../components/ConversationRow/preview.html"></iframe>
+  </section>
+  <section class="grid gap-jm-3" id="MessageBubble">
+    <header class="flex flex-wrap items-baseline gap-x-jm-3 gap-y-jm-1">
+      <h2 class="m-0 text-jm-title text-jm-fg">MessageBubble</h2>
+      <span class="text-jm-caption text-jm-fg-secondary">Chat</span>
+      <a class="ml-auto rounded-jm-sm text-jm-label text-jm-accent-text underline-offset-[3px] hover:underline focus-visible:outline-none focus-visible:shadow-jm-focus" href="../components/MessageBubble/preview.html">Open on its own</a>
+    </header>
+    <p class="m-0 max-w-[720px] text-jm-body-sm text-jm-fg-secondary">One turn in the chat: yours in a blue bubble (accent, white text) on the right, Jarvis&#x27;s in a dark panel bubble on the left, with attachments, the app&#x27;s buttons and the read-aloud control around it.</p>
+    <iframe class="w-full rounded-jm-lg border border-jm-border bg-jm-bg" title="MessageBubble preview" loading="lazy" style="height:800px" data-src="../components/MessageBubble/preview.html"></iframe>
+  </section>
+  <section class="grid gap-jm-3" id="SystemLine">
+    <header class="flex flex-wrap items-baseline gap-x-jm-3 gap-y-jm-1">
+      <h2 class="m-0 text-jm-title text-jm-fg">SystemLine</h2>
+      <span class="text-jm-caption text-jm-fg-secondary">Chat</span>
+      <a class="ml-auto rounded-jm-sm text-jm-label text-jm-accent-text underline-offset-[3px] hover:underline focus-visible:outline-none focus-visible:shadow-jm-focus" href="../components/SystemLine/preview.html">Open on its own</a>
+    </header>
+    <p class="m-0 max-w-[720px] text-jm-body-sm text-jm-fg-secondary">A single line from the app itself, outside any bubble: a receipt, a notice, a request for action, or an error.</p>
+    <iframe class="w-full rounded-jm-lg border border-jm-border bg-jm-bg" title="SystemLine preview" loading="lazy" style="height:340px" data-src="../components/SystemLine/preview.html"></iframe>
+  </section>
+  <section class="grid gap-jm-3" id="StepList">
+    <header class="flex flex-wrap items-baseline gap-x-jm-3 gap-y-jm-1">
+      <h2 class="m-0 text-jm-title text-jm-fg">StepList</h2>
+      <span class="text-jm-caption text-jm-fg-secondary">Chat</span>
+      <a class="ml-auto rounded-jm-sm text-jm-label text-jm-accent-text underline-offset-[3px] hover:underline focus-visible:outline-none focus-visible:shadow-jm-focus" href="../components/StepList/preview.html">Open on its own</a>
+    </header>
+    <p class="m-0 max-w-[720px] text-jm-body-sm text-jm-fg-secondary">What Jarvis is doing right now, one step per tool call, each one checking off as it finishes.</p>
+    <iframe class="w-full rounded-jm-lg border border-jm-border bg-jm-bg" title="StepList preview" loading="lazy" style="height:420px" data-src="../components/StepList/preview.html"></iframe>
+  </section>
+  <section class="grid gap-jm-3" id="Composer">
+    <header class="flex flex-wrap items-baseline gap-x-jm-3 gap-y-jm-1">
+      <h2 class="m-0 text-jm-title text-jm-fg">Composer</h2>
+      <span class="text-jm-caption text-jm-fg-secondary">Chat</span>
+      <a class="ml-auto rounded-jm-sm text-jm-label text-jm-accent-text underline-offset-[3px] hover:underline focus-visible:outline-none focus-visible:shadow-jm-focus" href="../components/Composer/preview.html">Open on its own</a>
+    </header>
+    <p class="m-0 max-w-[720px] text-jm-body-sm text-jm-fg-secondary">Where a person talks to Jarvis: a pill with + (attach), the text field, the mic, and send. It grows to hold attachments, and a strip above it reports the voice note&#x27;s state.</p>
+    <iframe class="w-full rounded-jm-lg border border-jm-border bg-jm-bg" title="Composer preview" loading="lazy" style="height:600px" data-src="../components/Composer/preview.html"></iframe>
+  </section>
+  <section class="grid gap-jm-3" id="ComputerCard">
+    <header class="flex flex-wrap items-baseline gap-x-jm-3 gap-y-jm-1">
+      <h2 class="m-0 text-jm-title text-jm-fg">ComputerCard</h2>
+      <span class="text-jm-caption text-jm-fg-secondary">Agent</span>
+      <a class="ml-auto rounded-jm-sm text-jm-label text-jm-accent-text underline-offset-[3px] hover:underline focus-visible:outline-none focus-visible:shadow-jm-focus" href="../components/ComputerCard/preview.html">Open on its own</a>
+    </header>
+    <p class="m-0 max-w-[720px] text-jm-body-sm text-jm-fg-secondary">Jarvis&#x27;s own web browser inside the chat: a live still of the page, what state it&#x27;s in, and the controls to let Jarvis continue, take over, or hand it back.</p>
+    <iframe class="w-full rounded-jm-lg border border-jm-border bg-jm-bg" title="ComputerCard preview" loading="lazy" style="height:940px" data-src="../components/ComputerCard/preview.html"></iframe>
+  </section>
+  <section class="grid gap-jm-3" id="ApprovalCard">
+    <header class="flex flex-wrap items-baseline gap-x-jm-3 gap-y-jm-1">
+      <h2 class="m-0 text-jm-title text-jm-fg">ApprovalCard</h2>
+      <span class="text-jm-caption text-jm-fg-secondary">Agent</span>
+      <a class="ml-auto rounded-jm-sm text-jm-label text-jm-accent-text underline-offset-[3px] hover:underline focus-visible:outline-none focus-visible:shadow-jm-focus" href="../components/ApprovalCard/preview.html">Open on its own</a>
+    </header>
+    <p class="m-0 max-w-[720px] text-jm-body-sm text-jm-fg-secondary">A request Jarvis can&#x27;t act on without a person: what it will do, in readable fields or as a before-and-after, and the decision this person is allowed to make.</p>
+    <iframe class="w-full rounded-jm-lg border border-jm-border bg-jm-bg" title="ApprovalCard preview" loading="lazy" style="height:1080px" data-src="../components/ApprovalCard/preview.html"></iframe>
+  </section>
+  <section class="grid gap-jm-3" id="SettingsSection">
+    <header class="flex flex-wrap items-baseline gap-x-jm-3 gap-y-jm-1">
+      <h2 class="m-0 text-jm-title text-jm-fg">SettingsSection</h2>
+      <span class="text-jm-caption text-jm-fg-secondary">Settings</span>
+      <a class="ml-auto rounded-jm-sm text-jm-label text-jm-accent-text underline-offset-[3px] hover:underline focus-visible:outline-none focus-visible:shadow-jm-focus" href="../components/SettingsSection/preview.html">Open on its own</a>
+    </header>
+    <p class="m-0 max-w-[720px] text-jm-body-sm text-jm-fg-secondary">One card on the Settings screen: a title, one plain sentence about what it does and who can see it, its current status, its rows, and its actions.</p>
+    <iframe class="w-full rounded-jm-lg border border-jm-border bg-jm-bg" title="SettingsSection preview" loading="lazy" style="height:1020px" data-src="../components/SettingsSection/preview.html"></iframe>
+  </section>
+  <section class="grid gap-jm-3" id="PairingCode">
+    <header class="flex flex-wrap items-baseline gap-x-jm-3 gap-y-jm-1">
+      <h2 class="m-0 text-jm-title text-jm-fg">PairingCode</h2>
+      <span class="text-jm-caption text-jm-fg-secondary">Settings</span>
+      <a class="ml-auto rounded-jm-sm text-jm-label text-jm-accent-text underline-offset-[3px] hover:underline focus-visible:outline-none focus-visible:shadow-jm-focus" href="../components/PairingCode/preview.html">Open on its own</a>
+    </header>
+    <p class="m-0 max-w-[720px] text-jm-body-sm text-jm-fg-secondary">A one-time code a person types on their Mac to connect the iMessage helper, shown large and copyable, with its expiry and a live &quot;Waiting for your Mac…&quot; until the device appears.</p>
+    <iframe class="w-full rounded-jm-lg border border-jm-border bg-jm-bg" title="PairingCode preview" loading="lazy" style="height:380px" data-src="../components/PairingCode/preview.html"></iframe>
+  </section>
+  <section class="grid gap-jm-3" id="SignIn">
+    <header class="flex flex-wrap items-baseline gap-x-jm-3 gap-y-jm-1">
+      <h2 class="m-0 text-jm-title text-jm-fg">SignIn</h2>
+      <span class="text-jm-caption text-jm-fg-secondary">Access</span>
+      <a class="ml-auto rounded-jm-sm text-jm-label text-jm-accent-text underline-offset-[3px] hover:underline focus-visible:outline-none focus-visible:shadow-jm-focus" href="../components/SignIn/preview.html">Open on its own</a>
+    </header>
+    <p class="m-0 max-w-[720px] text-jm-body-sm text-jm-fg-secondary">The sign-in screen: Continue with Google first, a PIN for people on the team&#x27;s roster, and operator access tucked away at the bottom for support.</p>
+    <iframe class="w-full rounded-jm-lg border border-jm-border bg-jm-bg" title="SignIn preview" loading="lazy" style="height:1280px" data-src="../components/SignIn/preview.html"></iframe>
+  </section>
+  <section class="grid gap-jm-3" id="TodaySummary">
+    <header class="flex flex-wrap items-baseline gap-x-jm-3 gap-y-jm-1">
+      <h2 class="m-0 text-jm-title text-jm-fg">TodaySummary</h2>
+      <span class="text-jm-caption text-jm-fg-secondary">Lists</span>
+      <a class="ml-auto rounded-jm-sm text-jm-label text-jm-accent-text underline-offset-[3px] hover:underline focus-visible:outline-none focus-visible:shadow-jm-focus" href="../components/TodaySummary/preview.html">Open on its own</a>
+    </header>
+    <p class="m-0 max-w-[720px] text-jm-body-sm text-jm-fg-secondary">One line above the Activity feed that says what Jarvis did today and whether anything needs you.</p>
+    <iframe class="w-full rounded-jm-lg border border-jm-border bg-jm-bg" title="TodaySummary preview" loading="lazy" style="height:370px" data-src="../components/TodaySummary/preview.html"></iframe>
+  </section>
+  <section class="grid gap-jm-3" id="ActivityRow">
+    <header class="flex flex-wrap items-baseline gap-x-jm-3 gap-y-jm-1">
+      <h2 class="m-0 text-jm-title text-jm-fg">ActivityRow</h2>
+      <span class="text-jm-caption text-jm-fg-secondary">Lists</span>
+      <a class="ml-auto rounded-jm-sm text-jm-label text-jm-accent-text underline-offset-[3px] hover:underline focus-visible:outline-none focus-visible:shadow-jm-focus" href="../components/ActivityRow/preview.html">Open on its own</a>
+    </header>
+    <p class="m-0 max-w-[720px] text-jm-body-sm text-jm-fg-secondary">One event in the Activity feed: what kind of thing happened, which skill did it, when, and one plain sentence about it, with technical details behind a chevron.</p>
+    <iframe class="w-full rounded-jm-lg border border-jm-border bg-jm-bg" title="ActivityRow preview" loading="lazy" style="height:600px" data-src="../components/ActivityRow/preview.html"></iframe>
+  </section>
+  <section class="grid gap-jm-3" id="TaskRow">
+    <header class="flex flex-wrap items-baseline gap-x-jm-3 gap-y-jm-1">
+      <h2 class="m-0 text-jm-title text-jm-fg">TaskRow</h2>
+      <span class="text-jm-caption text-jm-fg-secondary">Lists</span>
+      <a class="ml-auto rounded-jm-sm text-jm-label text-jm-accent-text underline-offset-[3px] hover:underline focus-visible:outline-none focus-visible:shadow-jm-focus" href="../components/TaskRow/preview.html">Open on its own</a>
+    </header>
+    <p class="m-0 max-w-[720px] text-jm-body-sm text-jm-fg-secondary">One task on the shared list: its status (tap to move it along), title, details, who has it, when it&#x27;s due, how long it&#x27;s been open, and the owner&#x27;s tools.</p>
+    <iframe class="w-full rounded-jm-lg border border-jm-border bg-jm-bg" title="TaskRow preview" loading="lazy" style="height:600px" data-src="../components/TaskRow/preview.html"></iframe>
+  </section>
+  <section class="grid gap-jm-3" id="LeadRow">
+    <header class="flex flex-wrap items-baseline gap-x-jm-3 gap-y-jm-1">
+      <h2 class="m-0 text-jm-title text-jm-fg">LeadRow</h2>
+      <span class="text-jm-caption text-jm-fg-secondary">Lists</span>
+      <a class="ml-auto rounded-jm-sm text-jm-label text-jm-accent-text underline-offset-[3px] hover:underline focus-visible:outline-none focus-visible:shadow-jm-focus" href="../components/LeadRow/preview.html">Open on its own</a>
+    </header>
+    <p class="m-0 max-w-[720px] text-jm-body-sm text-jm-fg-secondary">One lead from the open-house tracker: how warm they are, their status, the property and price, and the last thing that happened.</p>
+    <iframe class="w-full rounded-jm-lg border border-jm-border bg-jm-bg" title="LeadRow preview" loading="lazy" style="height:640px" data-src="../components/LeadRow/preview.html"></iframe>
+  </section>
+  <section class="grid gap-jm-3" id="FilterChips">
+    <header class="flex flex-wrap items-baseline gap-x-jm-3 gap-y-jm-1">
+      <h2 class="m-0 text-jm-title text-jm-fg">FilterChips</h2>
+      <span class="text-jm-caption text-jm-fg-secondary">Lists</span>
+      <a class="ml-auto rounded-jm-sm text-jm-label text-jm-accent-text underline-offset-[3px] hover:underline focus-visible:outline-none focus-visible:shadow-jm-focus" href="../components/FilterChips/preview.html">Open on its own</a>
+    </header>
+    <p class="m-0 max-w-[720px] text-jm-body-sm text-jm-fg-secondary">A labelled row of pill chips that narrows a list. &quot;All&quot; comes first, and one chip is selected at a time.</p>
+    <iframe class="w-full rounded-jm-lg border border-jm-border bg-jm-bg" title="FilterChips preview" loading="lazy" style="height:270px" data-src="../components/FilterChips/preview.html"></iframe>
+  </section>
+  <section class="grid gap-jm-3" id="OutboxRow">
+    <header class="flex flex-wrap items-baseline gap-x-jm-3 gap-y-jm-1">
+      <h2 class="m-0 text-jm-title text-jm-fg">OutboxRow</h2>
+      <span class="text-jm-caption text-jm-fg-secondary">Lists</span>
+      <a class="ml-auto rounded-jm-sm text-jm-label text-jm-accent-text underline-offset-[3px] hover:underline focus-visible:outline-none focus-visible:shadow-jm-focus" href="../components/OutboxRow/preview.html">Open on its own</a>
+    </header>
+    <p class="m-0 max-w-[720px] text-jm-body-sm text-jm-fg-secondary">One mail the outbound boundary caught instead of sending, shown to the operator: who it was addressed to, the subject, when, and the body behind a chevron.</p>
+    <iframe class="w-full rounded-jm-lg border border-jm-border bg-jm-bg" title="OutboxRow preview" loading="lazy" style="height:560px" data-src="../components/OutboxRow/preview.html"></iframe>
+  </section>
+  <section class="grid gap-jm-3" id="NewChannelSheet">
+    <header class="flex flex-wrap items-baseline gap-x-jm-3 gap-y-jm-1">
+      <h2 class="m-0 text-jm-title text-jm-fg">NewChannelSheet</h2>
+      <span class="text-jm-caption text-jm-fg-secondary">Sheets</span>
+      <a class="ml-auto rounded-jm-sm text-jm-label text-jm-accent-text underline-offset-[3px] hover:underline focus-visible:outline-none focus-visible:shadow-jm-focus" href="../components/NewChannelSheet/preview.html">Open on its own</a>
+    </header>
+    <p class="m-0 max-w-[720px] text-jm-body-sm text-jm-fg-secondary">The sheet for naming a new channel or renaming one: one field, one button.</p>
+    <iframe class="w-full rounded-jm-lg border border-jm-border bg-jm-bg" title="NewChannelSheet preview" loading="lazy" style="height:940px" data-src="../components/NewChannelSheet/preview.html"></iframe>
+  </section>
+  <section class="grid gap-jm-3" id="MembersSheet">
+    <header class="flex flex-wrap items-baseline gap-x-jm-3 gap-y-jm-1">
+      <h2 class="m-0 text-jm-title text-jm-fg">MembersSheet</h2>
+      <span class="text-jm-caption text-jm-fg-secondary">Sheets</span>
+      <a class="ml-auto rounded-jm-sm text-jm-label text-jm-accent-text underline-offset-[3px] hover:underline focus-visible:outline-none focus-visible:shadow-jm-focus" href="../components/MembersSheet/preview.html">Open on its own</a>
+    </header>
+    <p class="m-0 max-w-[720px] text-jm-body-sm text-jm-fg-secondary">Who is in a channel and, for an owner or admin, who else could be. The roster is the input, never a typed name.</p>
+    <iframe class="w-full rounded-jm-lg border border-jm-border bg-jm-bg" title="MembersSheet preview" loading="lazy" style="height:1160px" data-src="../components/MembersSheet/preview.html"></iframe>
+  </section>
+  <section class="grid gap-jm-3" id="EmptyState">
+    <header class="flex flex-wrap items-baseline gap-x-jm-3 gap-y-jm-1">
+      <h2 class="m-0 text-jm-title text-jm-fg">EmptyState</h2>
+      <span class="text-jm-caption text-jm-fg-secondary">States</span>
+      <a class="ml-auto rounded-jm-sm text-jm-label text-jm-accent-text underline-offset-[3px] hover:underline focus-visible:outline-none focus-visible:shadow-jm-focus" href="../components/EmptyState/preview.html">Open on its own</a>
+    </header>
+    <p class="m-0 max-w-[720px] text-jm-body-sm text-jm-fg-secondary">What a screen shows when there is genuinely nothing there: a quiet icon and one sentence about what normally lives in this place.</p>
+    <iframe class="w-full rounded-jm-lg border border-jm-border bg-jm-bg" title="EmptyState preview" loading="lazy" style="height:460px" data-src="../components/EmptyState/preview.html"></iframe>
+  </section>
+  <section class="grid gap-jm-3" id="ErrorState">
+    <header class="flex flex-wrap items-baseline gap-x-jm-3 gap-y-jm-1">
+      <h2 class="m-0 text-jm-title text-jm-fg">ErrorState</h2>
+      <span class="text-jm-caption text-jm-fg-secondary">States</span>
+      <a class="ml-auto rounded-jm-sm text-jm-label text-jm-accent-text underline-offset-[3px] hover:underline focus-visible:outline-none focus-visible:shadow-jm-focus" href="../components/ErrorState/preview.html">Open on its own</a>
+    </header>
+    <p class="m-0 max-w-[720px] text-jm-body-sm text-jm-fg-secondary">What a screen shows when it couldn&#x27;t load: which thing is unavailable, the plain reason, the technical detail for whoever is helping, and Try again.</p>
+    <iframe class="w-full rounded-jm-lg border border-jm-border bg-jm-bg" title="ErrorState preview" loading="lazy" style="height:460px" data-src="../components/ErrorState/preview.html"></iframe>
+  </section>
+</main>
+<script>
+  /* One theme for the gallery and every frame in it: ?theme= is passed down. */
+  (function () {
+    var html = document.documentElement
+    var KEY = 'jm-preview-theme'
+    var theme = new URLSearchParams(location.search).get('theme')
+    if (theme !== 'light' && theme !== 'dark') { try { theme = localStorage.getItem(KEY) } catch (e) {} }
+    if (theme !== 'light') theme = 'dark'
+    var button = document.getElementById('theme')
+    var frames = Array.prototype.slice.call(document.querySelectorAll('iframe[data-src]'))
+    function apply() {
+      html.setAttribute('data-theme', theme)
+      button.textContent = theme === 'light' ? 'Dark theme' : 'Light theme'
+      frames.forEach(function (f) { f.src = f.getAttribute('data-src') + '?theme=' + theme })
+    }
+    button.addEventListener('click', function () {
+      theme = theme === 'light' ? 'dark' : 'light'
+      try { localStorage.setItem(KEY, theme) } catch (e) {}
+      apply()
+    })
+    apply()
+  })()
+</script>
+</body>
+</html>

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StepList · Jarvis Mono</title>
+<link rel="stylesheet" href="../../fonts/fonts.css">
+<link rel="stylesheet" href="../../tokens/tokens.css">
+<link rel="stylesheet" href="../../build/jarvis-mono.css">
+<script src="../../previews/kit.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="../../build/jarvis-mono.js"></script>
+</head>
+<body class="bg-jm-bg font-jm text-jm-fg antialiased">
+<div id="root" class="grid gap-jm-4 p-jm-6"></div>
+<script>
+  var J = window.JarvisMono, h = React.createElement;
+  var PLAN = [
+    { label: 'Searching email', detail: 'from:listing agent · 128 Alder' },
+    { label: 'Checking the calendar', detail: 'Friday, Oct 25' },
+    { label: 'Drafting the reply' },
+    { label: 'Asking you to approve the send' }
+  ];
+  /* Loops: each step runs, then ticks; the next one appears. */
+  function Live() {
+    var s = React.useState(0), i = s[0], set = s[1];
+    React.useEffect(function () {
+      var t = setTimeout(function () { set(i >= PLAN.length + 3 ? 0 : i + 1); }, i >= PLAN.length ? 900 : 1100);
+      return function () { clearTimeout(t); };
+    }, [i]);
+    var steps = PLAN.slice(0, Math.min(i + 1, PLAN.length)).map(function (p, k) {
+      return Object.assign({ id: String(k), status: k < i ? 'done' : 'running' }, p);
+    });
+    return h(J.StepList, { key: i === 0 ? 'a' : 'b', steps: steps });
+  }
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { className: 'grid max-w-jm-chat gap-jm-4' },
+    h(Live),
+    h(J.StepList, { open: false, steps: [{ label: 'Searching email', status: 'done' }, { label: 'Checking the calendar', status: 'done' }, { label: 'Filing the task', status: 'done' }] }),
+    h(J.StepList, { steps: [{ label: 'Opening the browser', status: 'done' }, { label: 'Signing in', status: 'error', detail: 'The site asked for a code.' }, { label: 'Downloading the disclosure', status: 'waiting' }] })
+  ));
+</script>
+</body>
+</html>

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SettingsSection · Jarvis Mono</title>
+<link rel="stylesheet" href="../../fonts/fonts.css">
+<link rel="stylesheet" href="../../tokens/tokens.css">
+<link rel="stylesheet" href="../../build/jarvis-mono.css">
+<script src="../../previews/kit.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="../../build/jarvis-mono.js"></script>
+</head>
+<body class="bg-jm-bg font-jm text-jm-fg antialiased">
+<div id="root" class="grid gap-jm-4 p-jm-6" style="max-width:640px"></div>
+<script>
+  var J = window.JarvisMono, h = React.createElement;
+  function Google() {
+    var c = React.useState(false), confirm = c[0], setConfirm = c[1];
+    return h(J.SettingsSection, {
+      title: 'Your Google account',
+      description: 'Your assistant uses it to check your calendar and email; nobody else on the team can.',
+      status: { tone: 'done', label: 'Connected' },
+      rows: [{ title: 'dana@brokerage.example', detail: 'Last refreshed 2h ago' }],
+      actions: confirm
+        ? [h(J.Button, { key: 'c', variant: 'primary', onClick: function () { setConfirm(false); } }, 'Confirm disconnect'),
+           h(J.Button, { key: 'x', variant: 'ghost', onClick: function () { setConfirm(false); } }, 'Cancel')]
+        : h(J.Button, { onClick: function () { setConfirm(true); } }, 'Disconnect')
+    });
+  }
+  ReactDOM.createRoot(document.getElementById('root')).render(h(React.Fragment, null,
+    h(Google),
+    h(J.SettingsSection, {
+      title: 'Your Google account',
+      description: 'Your assistant uses it to check your calendar and email; nobody else on the team can.',
+      status: { tone: 'action', label: 'Needs reauth' },
+      rows: [{ title: 'marco@brokerage.example' }],
+      actions: h(J.Button, { variant: 'primary' }, 'Connect')
+    }),
+    h(J.SettingsSection, {
+      title: 'Website logins',
+      description: 'Jarvis signs in with these when you approve a task on that site. It never sees the password: the browser types it into the site’s own sign-in form.',
+      rows: [
+        { title: 'portal.listing.example', detail: 'dana@brokerage.example · last used 3d ago', action: { label: 'Remove' } },
+        { title: 'mls.example', detail: 'dreyes · not used yet', action: { label: 'Remove' } }
+      ]
+    },
+      h('form', { className: 'grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-jm-2', onSubmit: function (e) { e.preventDefault(); } },
+        h(J.Field, { placeholder: 'Site, e.g. zillow.com', 'aria-label': 'Site' }),
+        h(J.Field, { placeholder: 'Email or username', 'aria-label': 'Email or username', autoComplete: 'off' }),
+        h(J.Field, { placeholder: 'Password', 'aria-label': 'Password', type: 'password', autoComplete: 'new-password' })),
+      h('div', null, h(J.Button, { variant: 'primary' }, 'Save login'))),
+    h(J.SettingsSection, {
+      title: 'iMessage',
+      description: 'A small helper on your Mac lets Jarvis read your texts from the last 30 days. Reading only: Jarvis can’t send a text. Disconnecting deletes everything it synced.',
+      rows: [{ title: 'Dana’s MacBook Air', detail: '1,284 messages · synced 4m ago', action: { label: 'Disconnect' } }],
+      actions: h(J.Button, null, 'Connect another Mac')
+    })
+  ));
+</script>
+</body>
+</html>
