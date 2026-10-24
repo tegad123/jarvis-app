@@ -98,7 +98,7 @@ async function desktop(browser, who) {
 
   ck('dark is the default (body is #0a0a0a)', (await bg(page)) === 'rgb(10, 10, 10)', await bg(page))
   for (const label of ['Activity', 'Approvals', 'Tasks', 'Leads'])
-    ck(`sidebar offers ${label}`, (await nav(page).getByRole('button', { name: label, exact: true }).count()) === 1)
+    ck(`sidebar offers ${label}`, (await nav(page).getByRole('button', { name: new RegExp(`^${label}( \\d+ waiting on you)?$`) }).count()) === 1)
   const settings = await nav(page).getByRole('button', { name: 'Settings', exact: true }).count()
   ck(expectOperator ? 'operator: no Settings in the sidebar' : 'Settings in the sidebar', expectOperator ? settings === 0 : settings === 1)
 

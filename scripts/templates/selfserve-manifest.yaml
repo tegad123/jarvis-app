@@ -1,0 +1,146 @@
+# Self-serve account, made by scripts/signup_worker.py from an invite sign-up.
+# Practice mode like Eddie's: writes blocked, Sentinel in shadow. The owner's
+# Google address is identity only (outside boundary_domains, never a
+# recipient). Real writes need a human yes, as for every account.
+slug: {{SLUG}}
+display_name: {{DISPLAY_NAME}}
+business_description: {{DESCRIPTION}}
+timezone: America/Chicago
+assistant_address: {{SLUG}}-assistant@assistant.invalid
+agent_display_name: {{AGENT_NAME}}
+mailbox_strategy: dedicated_account
+ports:
+  app: {{APP_PORT}}
+  gateway: {{GATEWAY_PORT}}
+  hooks: {{HOOKS_PORT}}
+public_origin: {{PUBLIC_ORIGIN}}
+oauth_front: {{OAUTH_FRONT}}
+signin: google
+sheet_id: ''
+boundary_domains:
+- assistant.invalid
+outbound_suffix_policy: production
+skill_loadout: base
+skill_loadout_optional: []
+skills_origin_sha: {{SKILLS_SHA}}
+app_origin_sha: {{APP_SHA}}
+curator_packs: omit
+writes_posture: blocked
+agent_model: claude-sonnet-5-5
+background_model: claude-haiku-5-5
+venv: platform
+isolation: two_user
+sentinel_mode: shadow
+backup:
+  destination: /root/backups/{{SLUG}}
+  keep_daily: 14
+digest:
+  times_local:
+  - 05:00
+  - '15:00'
+  default_assignee: ''
+sweeps:
+  stale_email_hours: 24
+  email_grace_days: 2
+  task_quiet_hours: 24
+  task_escalate_after: 3
+  lead_quiet_days: 3
+  hot_lead_quiet_days: 1
+  lead_nudge_backoff_days: 3
+  min_interval_minutes: 30
+schedule:
+  digest_tick_seconds: 300
+  sweep_tick_seconds: 1800
+  metrics_calendar: '*-*-* 08:30:00'
+  digest_on_boot_sec: 120
+  sweep_on_boot_sec:
+  - 180
+  - 240
+  - 300
+  digest_accuracy_sec: 30
+  sweep_accuracy_sec: 60
+  metrics_accuracy: 5m
+email_router:
+  lookback_days: 7
+  recording_subject_prefix: 'PLAUD:'
+  deal_channel_prefix: deals-
+email_monitor:
+  lookback_days: 14
+gmail_push_trigger:
+  webhook_port: {{HOOKS_PORT}}
+  mailbox: ''
+  gcp_project: ''
+  pubsub_topic: ''
+  pubsub_subscription: ''
+  tunnel_hostname: ''
+cost_guard:
+  spend_warn_usd: 5
+  spend_pause_usd: 10
+leads:
+  source: store
+  export_enabled: false
+  export_sheet_id: ''
+tasks:
+  source: store
+lead_reply:
+  sheet_id: ''
+  exclude_tabs:
+  - SEND LOG
+  - OLD LEADS
+google_calendar:
+  default_calendar_id: ''
+email_to_calendar:
+  calendar_id: ''
+  always_attendee: ''
+meeting_briefing:
+  owner_person: ''
+owner_email_voice:
+  voice_corpus_path: ''
+feed:
+  team_destinations:
+  - ops
+  - deals
+safety:
+  outbound_recipient_suffix: []
+  allow_writes: false
+gateway:
+  base_url: http://127.0.0.1:{{GATEWAY_PORT}}
+paths:
+  app_root: /opt/{{SLUG}}/jarvis-app
+platform:
+  primary: discord
+  discord:
+    guild_id: '888111222333444555'
+people:
+  owner:
+    name: {{OWNER_NAME}}
+    display_name: {{OWNER_NAME}}
+    title: owner
+    roles:
+    - owner
+    - internal
+    email:
+    - {{OWNER_EMAIL}}
+    platform_ids:
+      discord:
+      - '888111222333444999'
+  assistant:
+    name: {{AGENT_NAME}}
+    display_name: {{AGENT_NAME}}
+    title: assistant
+    roles:
+    - assistant
+    email:
+    - {{SLUG}}-assistant@assistant.invalid
+    platform_ids:
+      discord: []
+destinations:
+  ops:
+    name: ops
+    discord: '888111222333444001'
+  tasks:
+    name: tasks
+    discord: '888111222333444002'
+  assistant:
+    name: assistant
+    discord: '888111222333444003'

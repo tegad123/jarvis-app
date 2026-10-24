@@ -14,7 +14,8 @@ Reading chat.db needs Full Disk Access (System Settings > Privacy & Security >
 Full Disk Access) for whatever runs this: Terminal when you run it yourself,
 and the python3 shown by `install` when it runs in the background.
 
-Only the Python standard library is used.
+Only the Python standard library is used. Most people use Jarvis.app instead
+(Settings > iMessage > Download for Mac); this is the same reader for a terminal.
 """
 import argparse
 import glob
@@ -172,16 +173,13 @@ def post(cfg, path, body, token=None):
     headers = {"Content-Type": "application/json", "User-Agent": "jarvis-imessage-helper/1"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    if cfg.get("cf_id") and cfg.get("cf_secret"):
-        headers["CF-Access-Client-Id"], headers["CF-Access-Client-Secret"] = cfg["cf_id"], cfg["cf_secret"]
     req = urllib.request.Request(cfg["server"].rstrip("/") + path, data=json.dumps(body).encode(),
                                  headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
             raw = resp.read().decode()
             if "json" not in (resp.headers.get("Content-Type") or ""):
-                raise Refused("Jarvis didn't answer (a sign-in page came back instead). If your Jarvis is behind "
-                              "Cloudflare Access, pair again with --cf-id and --cf-secret.")
+                raise Refused("Jarvis didn't answer (a web page came back instead). Check the address.")
             return json.loads(raw or "{}")
     except urllib.error.HTTPError as exc:
         try:
@@ -223,10 +221,6 @@ def sync(cfg_path, db_path, contacts_root):
 
 def cmd_pair(a):
     cfg = {"server": a.server.rstrip("/")}
-    if a.cf_id or a.cf_secret:
-        if not (a.cf_id and a.cf_secret):
-            raise Refused("Give both --cf-id and --cf-secret, or neither.")
-        cfg["cf_id"], cfg["cf_secret"] = a.cf_id, a.cf_secret
     got = post(cfg, "/api/mac/claim", {"code": a.code, "name": a.name or platform.node() or "Mac"})
     cfg.update(token=got["token"], device_id=got["device_id"], last_rowid=0)
     save_config(a.config, cfg)
@@ -288,8 +282,6 @@ def main(argv=None):
     s.add_argument("--server", required=True)
     s.add_argument("--code", required=True)
     s.add_argument("--name")
-    s.add_argument("--cf-id")
-    s.add_argument("--cf-secret")
     sub.add_parser("sync")
     for name in ("run", "install"):
         s = sub.add_parser(name)

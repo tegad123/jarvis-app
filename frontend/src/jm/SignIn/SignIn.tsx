@@ -24,6 +24,8 @@ export interface SignInProps {
   defaultPerson?: string | null
   defaultSecret?: string
   brand?: string
+  /** Public address of a Google-only tenant: no PIN and no operator access offered. */
+  googleOnly?: boolean
   className?: string
 }
 
@@ -44,7 +46,7 @@ export function SignIn(p: SignInProps) {
   const people = p.people ?? []
   const id = useId()
   const [who, setWho] = useState<string | null>(p.defaultPerson !== undefined ? p.defaultPerson : people.length === 1 ? people[0].id : null)
-  const [mode, setMode] = useState(p.defaultMode ?? (people.length === 0 ? 'operator' : 'start'))
+  const [mode, setMode] = useState(p.googleOnly ? 'start' : (p.defaultMode ?? (people.length === 0 ? 'operator' : 'start')))
   const [secret, setSecret] = useState(p.defaultSecret ?? '')
   const [reveal, setReveal] = useState(false)
   const operator = mode === 'operator'
@@ -68,7 +70,9 @@ export function SignIn(p: SignInProps) {
       ? who
         ? 'Enter your PIN to continue.'
         : 'Choose who you are.'
-      : 'Continue with Google, or sign in with a PIN.'
+      : p.googleOnly
+        ? 'Continue with Google.'
+        : 'Continue with Google, or sign in with a PIN.'
 
   return (
     <main className={cx('box-border grid min-h-full place-items-center bg-jm-bg px-jm-4 py-jm-12 text-jm-fg', p.className)}>
@@ -84,7 +88,7 @@ export function SignIn(p: SignInProps) {
             Continue with Google
           </Button>
         )}
-        {!operator && (
+        {!operator && !p.googleOnly && (
           <button type="button" aria-expanded={mode === 'pin'} onClick={() => go(mode === 'pin' ? 'start' : 'pin')} className={cx(link, 'text-jm-label text-jm-accent-text')}>
             {mode === 'pin' ? 'Hide PIN sign-in' : 'Sign in with PIN'}
           </button>
@@ -168,9 +172,13 @@ export function SignIn(p: SignInProps) {
           </form>
         )}
 
-        <button type="button" onClick={() => go(operator ? 'start' : 'operator')} className={cx(link, 'mt-jm-4 text-jm-caption text-jm-fg-secondary')}>
-          {operator ? 'Back to sign in' : 'Operator access'}
-        </button>
+        {mode === 'start' && p.error && <ErrorLine id={`${id}-error`}>{p.error}</ErrorLine>}
+
+        {!p.googleOnly && (
+          <button type="button" onClick={() => go(operator ? 'start' : 'operator')} className={cx(link, 'mt-jm-4 text-jm-caption text-jm-fg-secondary')}>
+            {operator ? 'Back to sign in' : 'Operator access'}
+          </button>
+        )}
       </div>
     </main>
   )

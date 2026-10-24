@@ -1,7 +1,7 @@
 """Each person's iMessages, read from their own Mac.
 
-No website shows iMessage, so a small helper on the person's Mac
-(mac-helper/jarvis_imessage.py) reads the Messages database there and sends
+No website shows iMessage, so a small app on the person's Mac
+(mac-helper/Jarvis.app, downloaded from Settings) reads the Messages database there and sends
 recent messages here. Reading only: nothing in this module sends a text.
 
 Pairing: in Settings the person asks for a one-time code (10 minutes); the
@@ -22,10 +22,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
-from . import auth, broker
+from . import auth, broker, config
 
 log = logging.getLogger("jarvis.imessage")
 
@@ -224,7 +224,7 @@ async def post_messages(request: Request, authorization: str = Header(default=""
     return out
 
 
-# ── each person's own Settings (never under /api/mac: Cloudflare lets only the Mac's token reach that) ──
+# ── each person's own Settings (session cookie; /api/mac is the Mac's, by device token only) ──
 
 def _person(sess: dict) -> str:
     auth.require_person(sess)
@@ -234,7 +234,21 @@ def _person(sess: dict) -> str:
 @settings_router.get("/status")
 def get_status(sess: dict = Depends(auth.current_session)):
     who = _person(sess)
-    return {"devices": devices(who), "messages": message_count(who), "retention_days": RETENTION_DAYS}
+    return {"devices": devices(who), "messages": message_count(who), "retention_days": RETENTION_DAYS,
+            "mac_app": bool(config.public_origin())}
+
+
+@settings_router.get("/mac-app")
+def get_mac_app(sess: dict = Depends(auth.current_session)):
+    """Jarvis.app, zipped, pointed at this tenant. Any signed-in person."""
+    _person(sess)
+    origin = config.public_origin()
+    if not origin:
+        raise HTTPException(status_code=503, detail="This Jarvis has no public address yet.")
+    from . import mac_app  # noqa: PLC0415
+    broker._bump("imessage_app_downloads")
+    return Response(content=mac_app.build(origin), media_type="application/zip",
+                    headers={"Content-Disposition": 'attachment; filename="Jarvis.zip"', "Cache-Control": "no-store"})
 
 
 @settings_router.post("/pair")

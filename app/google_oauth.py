@@ -249,7 +249,7 @@ def _fail_response(request: Request, status_code: int = 401) -> JSONResponse:
 
 
 def _begin_state(purpose: str) -> Tuple[str, int]:
-    nonce = secrets.token_urlsafe(32)
+    nonce = config.oauth_state_prefix() + secrets.token_urlsafe(32)
     expires_at = int(time.time()) + config.OAUTH_STATE_MAX_AGE
     accounts.put_oauth_state(nonce, purpose, expires_at)
     return nonce, expires_at
@@ -296,7 +296,7 @@ def start_login(request: Request, response: Response):
         return _missing_client_page()
 
     nonce, expires_at = _begin_state(PURPOSE_LOGIN)
-    redirect_uri = f"{origin}/oauth/callback"
+    redirect_uri = config.oauth_redirect_uri()
     verifier = None
     if mock:
         loc = f"{origin}/api/auth/google/mock/authorize?{urlencode({'state': nonce})}"
@@ -335,7 +335,7 @@ def start_connect(request: Request, response: Response, sess: dict, purpose: str
         return _missing_client_page()
 
     nonce, expires_at = _begin_state(purpose)
-    redirect_uri = f"{origin}/oauth/callback"
+    redirect_uri = config.oauth_redirect_uri()
     verifier = None
     if mock:
         loc = (
@@ -408,7 +408,7 @@ def mock_authorize(
     else:
         rec["email"] = addr
     _mock_codes[code] = rec
-    loc = f"{origin}/oauth/callback?{urlencode({'code': code, 'state': state})}"
+    loc = f"{config.oauth_redirect_uri()}?{urlencode({'code': code, 'state': state})}"
     return RedirectResponse(loc, status_code=302)
 
 
@@ -466,7 +466,7 @@ def _exchange_google_login(
     from google_auth_oauthlib.flow import Flow
 
     _relax_token_scope()
-    redirect_uri = f"{origin}/oauth/callback"
+    redirect_uri = config.oauth_redirect_uri()
     flow = Flow.from_client_secrets_file(
         str(config.oauth_client_path()),
         scopes=list(LOGIN_SCOPES),
@@ -483,6 +483,8 @@ def _exchange_google_login(
     email = (claims.get("email") or "").strip()
     if not email:
         raise ValueError("no email")
+    if claims.get("email_verified") is not True:
+        raise ValueError("email not verified")
     return email
 
 
@@ -537,7 +539,7 @@ def _exchange_google_connect(
     else:
         from google_auth_oauthlib.flow import Flow
 
-        redirect_uri = f"{origin}/oauth/callback"
+        redirect_uri = config.oauth_redirect_uri()
         _relax_token_scope()
         flow = Flow.from_client_secrets_file(
             str(config.oauth_client_path()),
@@ -623,13 +625,22 @@ def callback(request: Request, response: Response):
     return _fail_response(request, status_code=400)
 
 
+def _login_failed(request: Request) -> RedirectResponse:
+    """A person in a browser: back to the sign-in screen with one sentence,
+    not a JSON body. Counted as a failure like any other."""
+    auth.record_failure(request)
+    resp = RedirectResponse("/?signin=failed", status_code=302)
+    _clear_state_cookie(resp)
+    return resp
+
+
 def _callback_login(
     request: Request, code: str, q_state: str, origin: str, cookie: dict,
 ):
     if not accounts.consume_oauth_state(q_state, PURPOSE_LOGIN):
-        return _fail_response(request, status_code=401)
+        return _login_failed(request)
     if not code:
-        return _fail_response(request, status_code=400)
+        return _login_failed(request)
 
     verifier = (cookie.get("code_verifier") or "").strip() or None
     try:
@@ -639,11 +650,11 @@ def _callback_login(
             email = _exchange_google_login(code, origin, code_verifier=verifier)
     except Exception as exc:
         _log_exchange_failure("google login", exc)
-        return _fail_response(request, status_code=401)
+        return _login_failed(request)
 
     acct = accounts.get_by_email(email)
     if not acct or acct.get("disabled"):
-        return _fail_response(request, status_code=401)
+        return _login_failed(request)
 
     auth.clear_failures(request)
     accounts.mark_login(acct["person_key"])

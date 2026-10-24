@@ -51,6 +51,27 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def from_public(request: Request) -> bool:
+    """Arrived through Cloudflare (which always sets cf-connecting-ip) or the
+    front door (which always sets x-forwarded-for). The app listens on
+    loopback only, so a request without either came from this host."""
+    return bool(request.headers.get("cf-connecting-ip") or request.headers.get("x-forwarded-for"))
+
+
+def secret_signin_allowed(request: Request) -> bool:
+    """PIN and passphrase sign-in. Refused from the public side when the
+    tenant is Google-only; counted and logged when that happens."""
+    if not (config.google_only_in_public() and from_public(request)):
+        return True
+    log.warning("sign-in: a PIN or passphrase attempt from the public side was refused (Google only)")
+    try:
+        from . import threads as threads_mod  # noqa: PLC0415
+        threads_mod.bump_counter("signin_secret_refused_public")
+    except Exception:
+        log.error("sign-in: counter bump failed (signin_secret_refused_public)")
+    return False
+
+
 def _prune(bucket: Deque[float], now: float) -> None:
     while bucket and now - bucket[0] > config.LOGIN_WINDOW_SECONDS:
         bucket.popleft()

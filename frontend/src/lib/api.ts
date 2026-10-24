@@ -140,6 +140,23 @@ async function requestOk<T>(path: string, init: RequestInit = {}): Promise<T> {
 /** Sign-in roster for the picker. Unauthenticated by design. */
 export interface Person { person_key: string; name: string; title?: string }
 
+export interface AuthMethods {
+  pin: boolean
+  passphrase: boolean
+  google: boolean
+}
+
+/** What this address offers. The server refuses the rest in /api/login. */
+export async function getAuthMethods(): Promise<AuthMethods> {
+  try {
+    const { ok, body } = await request<AuthMethods>('/api/auth/methods')
+    if (ok && body) return body
+  } catch {
+    // An older server has no such route; it offers everything.
+  }
+  return { pin: true, passphrase: true, google: true }
+}
+
 export async function getPeople(): Promise<Person[]> {
   try {
     const { ok, body } = await request<{ people: Person[] }>('/api/people')

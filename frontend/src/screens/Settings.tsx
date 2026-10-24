@@ -258,7 +258,30 @@ function MacMessages({ onUnauthorized }: { onUnauthorized: () => void }) {
         )
       }
     >
-      {code && <PairingCode code={code.code} expires={absoluteTime(code.expires_at)} />}
+      {code && st.mac_app && (
+        <ol className="m-0 grid gap-jm-3 pl-jm-5 text-jm-body-sm text-jm-fg-secondary" data-testid="mac-steps">
+          <li>
+            <span className="text-jm-fg">Download Jarvis for Mac</span> and open it.
+            <div className="mt-jm-2">
+              <Button variant="primary"onClick={() => (window.location.href = '/api/imessage/mac-app')}>
+                Download for Mac
+              </Button>
+            </div>
+          </li>
+          <li>
+            The first time, macOS asks whether to open it: choose <span className="text-jm-fg">Open</span>, or go to System Settings →
+            Privacy &amp; Security and click <span className="text-jm-fg">Open Anyway</span>.
+          </li>
+          <li>
+            Type this code when Jarvis asks:
+            <div className="mt-jm-2">
+              <PairingCode code={code.code} expires={absoluteTime(code.expires_at)} instruction={null} />
+            </div>
+          </li>
+          <li>Turn on Full Disk Access for Jarvis when it shows you where. That’s it: it keeps up in the background.</li>
+        </ol>
+      )}
+      {code && !st.mac_app && <PairingCode code={code.code} expires={absoluteTime(code.expires_at)} />}
     </SettingsSection>
   )
 }

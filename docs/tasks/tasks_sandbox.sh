@@ -78,8 +78,11 @@ open(sys.argv[3], 'w').write(json.dumps(cfg, indent=2) + '\n')
   cd "$APP"
   APP_GOOGLE_OAUTH_MOCK=1 \
   APP_GOOGLE_TOKEN_KEY="$(cat "$SB/token_key")" \
-  APP_PUBLIC_ORIGIN="http://127.0.0.1:$PORT" \
+  APP_PUBLIC_ORIGIN="${VERIFY_PUBLIC_ORIGIN:-http://127.0.0.1:$PORT}" \
   APP_COOKIE_SECURE=0 \
+  APP_OAUTH_FRONT="${VERIFY_OAUTH_FRONT:-}" \
+  APP_TENANT_SLUG="${VERIFY_TENANT_SLUG:-}" \
+  APP_SIGNIN="${VERIFY_SIGNIN:-}" \
   HERMES_HOME="$SB/hermes" \
   JARVIS_SKILLS_ROOT="$SKILLS_CODE" \
   JARVIS_APP_ROOT="$APP" \

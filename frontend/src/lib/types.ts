@@ -302,6 +302,8 @@ export interface MacStatus {
   devices: MacDevice[]
   messages: number
   retention_days: number
+  /** The server can hand out Jarvis.app pointed at itself. */
+  mac_app?: boolean
 }
 
 export interface WebsiteLogin {

@@ -14,6 +14,7 @@ anything without editing it.
 """
 
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -142,6 +143,42 @@ def public_origin() -> Optional[str]:
     if not raw:
         return None
     return raw.rstrip("/")
+
+
+def oauth_front() -> Optional[str]:
+    """APP_OAUTH_FRONT: the front door's origin (https://join.yamin.io). When
+    set, Google answers there — one redirect URI for every tenant — and the
+    front door sends the browser on to this tenant by the state's slug prefix."""
+    raw = (get("APP_OAUTH_FRONT") or "").strip().rstrip("/")
+    return raw or None
+
+
+def tenant_slug() -> str:
+    return (get("APP_TENANT_SLUG") or "").strip().lower()
+
+
+def oauth_redirect_uri() -> Optional[str]:
+    front = oauth_front()
+    if front:
+        return f"{front}/oauth/callback"
+    origin = public_origin()
+    return f"{origin}/oauth/callback" if origin else None
+
+
+def oauth_state_prefix() -> str:
+    """'<slug>.' when Google answers the front door, else ''."""
+    if not oauth_front():
+        return ""
+    slug = tenant_slug()
+    if not re.fullmatch(r"[a-z][a-z0-9-]{1,30}", slug):
+        raise RuntimeError("APP_OAUTH_FRONT needs APP_TENANT_SLUG (the front door routes Google's answer by it)")
+    return slug + "."
+
+
+def google_only_in_public() -> bool:
+    """APP_SIGNIN=google: requests that came through Cloudflare or the front
+    door can only sign in with Google; PIN and passphrase stay loopback-only."""
+    return (get("APP_SIGNIN") or "pin").strip().lower() == "google"
 
 
 def oauth_mock() -> bool:

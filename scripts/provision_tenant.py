@@ -937,6 +937,7 @@ def common_map(manifest: dict, posture: dict, fernet: str, force: str,
         "GATEWAY_FORCE": force,
         "PUBLIC_ORIGIN": str(manifest["public_origin"]).rstrip("/"),
         "COOKIE_SECURE": posture["cookie"],
+        "SIGNIN_LINES": signin_lines(manifest),
         "FERNET_KEY": fernet,
         "OAUTH_CLIENT": str(OAUTH_CLIENT),
         "POSTURE": posture["posture"],
@@ -1295,6 +1296,26 @@ def render_skill_config(manifest: dict, posture: dict, opt: Path, skills_clone: 
     return minted
 
 
+def signin_lines(manifest: dict) -> str:
+    """`signin: google` (absent = pin) makes the public side Google-only.
+    `oauth_front: https://join.yamin.io` has Google answer the front door,
+    which hands the browser back here by slug; one redirect URI for all."""
+    signin = str(manifest.get("signin") or "pin").strip().lower()
+    if signin not in ("pin", "google"):
+        die("signin must be pin | google (absent = pin)")
+    front = str(manifest.get("oauth_front") or "").strip().rstrip("/")
+    if front and not re.fullmatch(r"https://[a-z0-9.-]+", front):
+        die("oauth_front must be an https origin with no path, e.g. https://join.yamin.io")
+    if signin == "google" and not front and not str(manifest.get("public_origin", "")).startswith("https://"):
+        die("signin: google needs an https public_origin or oauth_front (Google will not redirect elsewhere)")
+    lines = [f"Environment=APP_TENANT_SLUG={manifest['slug']}"]
+    if front:
+        lines.append(f"Environment=APP_OAUTH_FRONT={front}")
+    if signin == "google":
+        lines.append("Environment=APP_SIGNIN=google")
+    return "\n".join(lines)
+
+
 def validate_manifest(manifest: dict) -> tuple:
     slug = manifest.get("slug")
     check_slug(slug)
@@ -1346,6 +1367,7 @@ def validate_manifest(manifest: dict) -> tuple:
             die("browser: enabled needs isolation: two_user")
         if not os.access(BROWSER_BIN, os.X_OK):
             die(f"browser: enabled but {BROWSER_BIN} is missing; run scripts/install_browser_runtime.py")
+    signin_lines(manifest)
     log(f"venv=platform: {PLATFORM_VENV} (a copy; pip installs there do not reach live)")
 
     ports = manifest["ports"]

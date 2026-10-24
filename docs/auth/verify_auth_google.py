@@ -49,6 +49,9 @@ def pins():
 
 
 def passphrase():
+    # The sandbox started with VERIFY_OPERATOR_PASSPHRASE checks that one, not the fixture's.
+    if os.environ.get("VERIFY_OPERATOR_PASSPHRASE"):
+        return os.environ["VERIFY_OPERATOR_PASSPHRASE"]
     for line in (HOME / ".env").read_text().splitlines():
         if line.strip().startswith("APP_PASSPHRASE="):
             return line.split("=", 1)[1].strip().strip('"').strip("'")
@@ -254,7 +257,8 @@ ck("mock authorize redirects to /oauth/callback",
    code == 302 and "/oauth/callback" in location(heads), f"HTTP {code} {location(heads)}")
 cb = location(heads)
 code, _, heads = curl(cb, jar_g)
-ck("callback redirects home after mock login", code == 302, f"HTTP {code}")
+ck("callback redirects home after mock login",
+   code == 302 and "signin=failed" not in location(heads), f"HTTP {code} {location(heads)}")
 ck("callback issued a session cookie", cookie_set(heads, "jarvis_session"))
 code, sess, _ = curl("/api/session", jar_g)
 ck("mock login as dana@testco.example.com is person_key=dana role=owner",
@@ -305,9 +309,9 @@ try:
     code, _, heads = curl(authz, jar_dis)
     cb_dis = location(heads)
     code, d, heads = curl(cb_dis, jar_dis)
-    ck("disabled-dana mock Google login is 401 with the generic message",
-       code == 401 and isinstance(d, dict) and d.get("detail") == GENERIC,
-       f"HTTP {code} {d}")
+    ck("disabled-dana mock Google login goes back to sign-in with the failure line",
+       code == 302 and urlparse(location(heads)).path == "/" and "signin=failed" in location(heads),
+       f"HTTP {code} {location(heads)}")
     ck("disabled-dana issues no session cookie",
        not cookie_set(heads, "jarvis_session"))
     disabled_ok = True

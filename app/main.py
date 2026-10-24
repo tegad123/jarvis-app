@@ -224,13 +224,19 @@ def ping():
 
 
 @app.get("/api/people")
-def get_people():
+def get_people(request: Request):
     """Sign-in roster. UNAUTHENTICATED on purpose — the login screen needs it.
 
     Deliberately minimal: person key, display name, title. NO email addresses,
     no roles, no account state. Enough to render a picker for a small team on a
     private deployment, and nothing that turns the login page into a directory.
+    Google-only tenants show no picker to the public side, so it lists nobody.
     """
+    if config.google_only_in_public() and auth.from_public(request):
+        try:
+            auth.current_session(jarvis_session=request.cookies.get(config.COOKIE_NAME))
+        except HTTPException:
+            return {"people": []}
     try:
         return {"people": [
             {"person_key": r["person_key"], "name": r["name"], "title": r["title"]}
@@ -247,6 +253,9 @@ def login(body: LoginRequest, request: Request, response: Response):
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Too many failed attempts. Try again shortly.",
         )
+    if not auth.secret_signin_allowed(request):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Sign in with Google on this address.")
     # ── per-person sign-in ────────────────────────────────────────────────
     if body.person_key:
         if auth.person_locked(body.person_key):
@@ -296,6 +305,15 @@ def login(body: LoginRequest, request: Request, response: Response):
     return {"ok": True, "session": {"iat": session["iat"]},
             "person_key": None, "role": "operator", "operator": valid,
             "expires_in": config.SESSION_MAX_AGE}
+
+
+@app.get("/api/auth/methods")
+def auth_methods(request: Request):
+    """Which sign-in the login screen offers here. UNAUTHENTICATED; the server
+    enforces the same rule in /api/login."""
+    secret = not (config.google_only_in_public() and auth.from_public(request))
+    return {"pin": secret, "passphrase": secret,
+            "google": bool(config.public_origin()) and (config.oauth_mock() or config.oauth_client_path() is not None)}
 
 
 @app.get("/api/auth/google/start")

@@ -1,0 +1,19 @@
+#!/bin/bash
+# Jarvis for Mac. Runs Resources/helper.js with the osascript every Mac has.
+# Opened from Downloads (or anywhere but an Applications folder), it first
+# moves itself to Applications, so Full Disk Access and the background sync
+# point at a path that stays put.
+APP="$(cd "$(dirname "$0")/../.." && pwd -P)"
+case "$APP" in
+  /Applications/*|"$HOME"/Applications/*) ;;
+  *)
+    if [ "$1" != "sync" ]; then
+      DEST=/Applications
+      [ -w "$DEST" ] || { DEST="$HOME/Applications"; mkdir -p "$DEST"; }
+      rm -rf "$DEST/Jarvis.app"
+      /usr/bin/ditto "$APP" "$DEST/Jarvis.app"
+      /usr/bin/xattr -dr com.apple.quarantine "$DEST/Jarvis.app" 2>/dev/null
+      exec /usr/bin/open "$DEST/Jarvis.app"
+    fi ;;
+esac
+exec /usr/bin/osascript -l JavaScript "$APP/Contents/Resources/helper.js" "$APP" "$@"
