@@ -258,6 +258,29 @@ def browser_enabled(manifest: dict) -> bool:
     return True
 
 
+def preflight_owner_addresses(manifest: dict) -> List[str]:
+    """`preflight_owner_addresses`: the owner's own Google address, when it carries a
+    prior-tenant term (the prior tenant's owner opening an account of their own).
+    Preflight ignores exactly these addresses and nothing else; each must be an
+    owner's email in this manifest."""
+    want = manifest.get("preflight_owner_addresses") or []
+    if not isinstance(want, list):
+        die("preflight_owner_addresses must be a list of addresses")
+    owners = set()
+    for p in (manifest.get("people") or {}).values():
+        if "owner" in (p.get("roles") or []):
+            owners.update(str(e).strip().lower() for e in (p.get("email") or []))
+    out = []
+    for a in want:
+        a = str(a).strip().lower()
+        if not re.fullmatch(r"[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}", a):
+            die("preflight_owner_addresses: not an email address")
+        if a not in owners:
+            die("preflight_owner_addresses: every address must be an owner's email in this manifest")
+        out.append(a)
+    return out
+
+
 def imessage_history_days(manifest: dict) -> int:
     """How far before pairing a Mac's texts may reach. `imessage: {history_days: 0}`
     is new messages only; absent keeps the 30-day window."""
@@ -930,6 +953,7 @@ def common_map(manifest: dict, posture: dict, fernet: str, force: str,
         "HERMES_HOME": f"{opt}/hermes",
         "SKILLS": f"{opt}/skills/openclaw-imports",
         "PREFLIGHT": f"{opt}/{slug}_preflight.sh",
+        "OWNER_ADDRS": " ".join(preflight_owner_addresses(manifest)),
         "VENV_PYTHON": str(venv_python(manifest)),
         "HERMES_PYTHON": str(HERMES_PYTHON),
         "APP_PORT": str(int(manifest["ports"]["app"])),

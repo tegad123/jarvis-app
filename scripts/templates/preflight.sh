@@ -52,10 +52,18 @@ if [ "$POSTURE" = "live" ] || [ "$POSTURE" = "blocked" ]; then
   fi
 fi
 
+# The owner's own address may carry a term (the prior tenant's owner opening
+# their own account). Exactly those addresses are blanked before the check;
+# the term anywhere else still refuses.
+OWNER_ADDRS='{{OWNER_ADDRS}}'
 for f in "$RUNTIME" "$SKILLS/_shared/identity.json" "$SKILLS/_shared/channels.json" \
          "$HERMES_HOME/config.yaml"; do
   [ -f "$f" ] || continue
-  if grep -qiE "$FORBIDDEN" "$f"; then
+  body="$(tr 'A-Z' 'a-z' < "$f")"
+  for a in $OWNER_ADDRS; do
+    body="${body//"$a"/}"
+  done
+  if printf '%s' "$body" | grep -qE "$FORBIDDEN"; then
     fail "prior-tenant term found in reachable config: $f"
   fi
   if [ "$POSTURE" = "live" ] || [ "$POSTURE" = "blocked" ]; then

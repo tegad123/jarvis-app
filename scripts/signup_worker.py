@@ -47,6 +47,7 @@ MAX_ACCOUNTS = int(os.environ.get("SIGNUP_MAX_ACCOUNTS", "3"))
 BASE = os.environ.get("FRONT_BASE_DOMAIN", "yamin.io")
 FRONT = os.environ.get("SIGNUP_OAUTH_FRONT", f"https://join.{BASE}")
 APP_PORTS = range(8800, 9000, 10)
+LOCK_HELD = -2
 
 
 def free_mb() -> int:
@@ -159,6 +160,9 @@ def provision(slug: str, manifest: Path) -> int:
     fd = os.open(logs / f"{slug}.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     with os.fdopen(fd, "a") as f:
         f.write("\n".join(lines) + f"\n# rc={r.returncode}\n")
+    # rc 2 is also every provisioner refusal; only the lock's own HELD line means "try later".
+    if r.returncode == 2 and (r.stderr or "").lstrip().startswith("HELD:"):
+        return LOCK_HELD
     return r.returncode
 
 
@@ -194,27 +198,28 @@ def healthy(port: int) -> bool:
     return r.stdout.strip() == "200"
 
 
-def handle(conn, su: dict) -> None:
+def handle(conn, su: dict) -> bool:
+    """False when the sign-up has to wait (the loop then sleeps before trying again)."""
     sid, slug = su["id"], su["slug"]
     if not store.SLUG_RE.fullmatch(slug):
         store.set_status(conn, sid, "failed", f"account name {slug!r} is not letters and digits; nothing was made")
         store.bump(conn, "signup_bad_slug")
         log.error("sign-up %s refused before provisioning: bad account name %r", sid, slug)
-        return
+        return True
     why = room(conn)
     if why:
         store.set_status(conn, sid, "full", why)
         store.bump(conn, "signup_full")
         log.warning("sign-up %s (%s) waits: %s", sid, slug, why)
-        return
+        return False
     try:
         manifest = write_manifest(su)
         rc = provision(slug, manifest)
-        if rc == 2:
+        if rc == LOCK_HELD:
             store.set_status(conn, sid, "queued", "agent lock busy; retrying")
             store.bump(conn, "signup_lock_busy")
             log.info("sign-up %s: agent lock busy, back in the queue", sid)
-            return
+            return False
         if rc != 0:
             raise RuntimeError(f"provisioner rc={rc} (see {STATE}/logs/{slug}.log)")
         make_owner(su)
@@ -229,6 +234,7 @@ def handle(conn, su: dict) -> None:
         store.set_status(conn, sid, "failed", f"{type(exc).__name__}: {exc}")
         store.bump(conn, "signup_failed")
         log.error("sign-up %s (%s) failed: %s", sid, slug, exc)
+    return True
 
 
 def requeue_full(conn) -> None:
@@ -244,9 +250,7 @@ def once() -> bool:
     conn = store.connect()
     requeue_full(conn)
     su = store.claim_next(conn)
-    if su:
-        handle(conn, su)
-    return bool(su)
+    return handle(conn, su) if su else False
 
 
 def main(argv=None) -> int:
