@@ -37,7 +37,7 @@ const W = 1280
 const H = 800
 
 function fakeBrowser(page, jpeg, who) {
-  const state = { takenOver: false, pending: true, sent: [], refused: null }
+  const state = { takenOver: false, pending: true, sent: [], refused: null, needsYou: null }
   const ask = () => ({
     id: 'appr-browser-1', ts: new Date().toISOString(), tenant: 'testco', origin: 'broker', kind: 'action',
     skill: 'browser', summary: 'On zillow.com: save 118 Alderwood to favourites',
@@ -48,7 +48,7 @@ function fakeBrowser(page, jpeg, who) {
   })
   const json = (route, body) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
   page.route('**/api/browser/status', (r) =>
-    json(r, CANARY ? { enabled: false } : { enabled: true, running: true, url: 'https://www.zillow.com/', title: 'Zillow', taken_over: state.takenOver, access: [] }),
+    json(r, CANARY ? { enabled: false } : { enabled: true, running: true, url: 'https://www.zillow.com/', title: 'Zillow', taken_over: state.takenOver, access: [], needs_you: state.needsYou }),
   )
   page.route('**/api/browser/screen', (r) =>
     json(r, {
@@ -60,6 +60,7 @@ function fakeBrowser(page, jpeg, who) {
     const body = JSON.parse(r.request().postData() || '{}')
     state.sent.push({ path: 'takeover', body })
     state.takenOver = !!body.on
+    if (body.on) state.needsYou = null
     return json(r, { taken_over: state.takenOver })
   })
   page.route('**/api/browser/input', (r) => {
@@ -129,6 +130,13 @@ try {
     const decide = state.sent.find((s) => s.path === 'decide')
     ck('Allow sends approve for that request', decide?.body?.decision === 'approve', JSON.stringify(decide?.body))
     ck('   and the ask goes away', (await card.getByRole('button', { name: 'Allow for 30 min' }).count()) === 0)
+
+    state.needsYou = "Sign in to zillow.com: there's no saved login. Tap Take over, sign in yourself, then tap I'm done and tell Jarvis to carry on."
+    await page.waitForTimeout(4000)
+    const why = card.getByText('there\'s no saved login', { exact: false })
+    ck('when Jarvis needs them, the card says Action needed', (await card.getByText('Action needed').count()) === 1)
+    ck('   with the reason, visible', (await why.count()) === 1 && (await why.isVisible()))
+    await card.screenshot({ path: new URL('./mono-shots/browser-needs-you.png', import.meta.url).pathname })
 
     await card.getByRole('button', { name: 'Take over' }).click()
     await page.waitForTimeout(1800)

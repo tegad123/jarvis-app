@@ -58,7 +58,7 @@ TASK_MINUTES = 30
 TAKEOVER_IDLE_S = 900
 READ_OPS = ("open", "read", "scroll", "back")
 ACT_OPS = ("click", "type", "press", "login")
-OPS = READ_OPS + ACT_OPS + ("request_access", "status")
+OPS = READ_OPS + ACT_OPS + ("request_access", "ask_person", "status")
 KEYS = ("Enter", "Tab", "Escape", "Backspace", "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "PageDown",
         "PageUp", "Home", "End", "Space")
 REF = re.compile(r"^e\d{1,5}$")
@@ -157,6 +157,29 @@ def _touch_takeover(person: str) -> None:
     with _takeover_lock:
         if person in _takeover:
             _takeover[person] = time.monotonic()
+
+
+# ── "needs you": the card asks the person to take over ─────────────────────────
+# Set by the server (no saved login) or by the agent (a code, a check it can't
+# pass); cleared when they take over or close the browser.
+_needs_you: Dict[str, str] = {}
+
+
+def needs_you(person: str) -> Optional[str]:
+    with _takeover_lock:
+        return _needs_you.get(person)
+
+
+def _ask_person(person: str, reason: str, ctx: Dict[str, str], site: str, why: str) -> None:
+    with _takeover_lock:
+        _needs_you[person] = reason[:300]
+    broker._bump(f"browser_needs_you_{why}")
+    _record("needs_you", "asked", sentinel.READ, site, ctx, person, reason=reason[:200])
+
+
+def _clear_needs_you(person: str) -> None:
+    with _takeover_lock:
+        _needs_you.pop(person, None)
 
 
 # ── saved logins ──────────────────────────────────────────────────────────────
@@ -308,6 +331,14 @@ def gate(op: str, args: Dict[str, Any], ctx: Dict[str, str], person: str) -> Tup
             r = call(op, person, direction="up" if args.get("direction") == "up" else "down")
         elif op == "request_access":
             return _request_access(args, current, here, ctx, person)
+        elif op == "ask_person":
+            reason = re.sub(r"\s+", " ", str(args.get("text") or "")).strip()
+            if not current.get("running"):
+                return 409, {"error": "nothing_open", "detail": "Open the page first, then ask them to take over."}
+            if len(reason) < 8:
+                return 400, {"error": "bad_task", "detail": "Say in one sentence what they need to do in the browser."}
+            _ask_person(person, reason, ctx, here, "agent")
+            return 200, {"ok": True, "asked": True, "site": here}
         else:
             return _act(op, args, current, here, ctx, person)
     except WorkerDown:
@@ -385,6 +416,8 @@ def _act(op, args, current, here, ctx, person, approval: Optional[Dict[str, Any]
     if op == "login":
         saved = _login_for(person, here)
         if not saved:
+            _ask_person(person, f"Sign in to {here}: there's no saved login. Tap Take over, sign in yourself, "
+                                f"then tap I'm done and tell Jarvis to carry on.", ctx, here, "no_saved_login")
             return 409, {"error": "no_saved_login", "site": here}
         r = call("fill_login", person, username=saved[0], password=saved[1], expect_site=current.get("site"))
         saved = None
@@ -547,7 +580,8 @@ def browser_status(sess: dict = Depends(auth.current_session)):
     except platform_db.Unavailable:
         grants = []
     return {"enabled": True, "running": bool(st.get("running")), "url": st.get("url"), "title": st.get("title"),
-            "taken_over": taken_over(who), "access": grants}
+            "taken_over": taken_over(who), "access": grants,
+            "needs_you": needs_you(who) if st.get("running") else None}
 
 
 @router.get("/screen")
@@ -570,6 +604,7 @@ def browser_takeover(body: TakeoverBody, sess: dict = Depends(auth.current_sessi
     with _takeover_lock:
         if body.on:
             _takeover[who] = time.monotonic()
+            _needs_you.pop(who, None)
         else:
             _takeover.pop(who, None)
     broker._bump("browser_takeover_on" if body.on else "browser_takeover_off")
@@ -611,6 +646,7 @@ def browser_input(body: InputBody, sess: dict = Depends(auth.current_session)):
 @router.post("/close")
 def browser_close(sess: dict = Depends(auth.current_session)):
     who = _person(sess)
+    _clear_needs_you(who)
     try:
         call("close", who, timeout=20)
     except WorkerDown:

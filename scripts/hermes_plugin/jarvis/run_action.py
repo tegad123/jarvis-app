@@ -227,9 +227,10 @@ BROWSER_SAY = {
     "needs_task_approval": "Not done: you don't have their go-ahead to act on {site} yet. Call browser_request_access "
                            "with one plain sentence describing the whole task, then tell them to tap Allow in the "
                            "browser window in this chat.",
-    "no_saved_login": "There's no saved login for {site}. Ask them to tap Take over in the browser window in this "
-                      "chat and sign in themselves, then hand it back (never ask for a password in chat). They can "
-                      "also save one in Settings under Website logins.",
+    "no_saved_login": "There's no saved login for {site}. The browser window in this chat now shows 'Action needed' "
+                      "with a Take over button. Tell them in one sentence: tap Take over, sign in, then tap I'm done "
+                      "and tell you to carry on (never ask for a password in chat). They can also save a login in Settings "
+                      "under Website logins. Then stop and wait.",
     "taken_over": "They're using the browser themselves right now. Say you'll wait, and do nothing in the browser "
                   "until they hand it back.",
     "browser_off": "The browser isn't switched on for this assistant. Say so plainly.",
@@ -270,6 +271,10 @@ def browser(op: str, args: dict) -> None:
     if op == "request_access":
         return out(ok=True, say=f"You already have their go-ahead on {r.get('site')} for about "
                                 f"{r.get('minutes_left')} more minutes; carry on.")
+    if op == "ask_person":
+        return out(ok=True, say="The browser window in this chat now shows 'Action needed' with your reason and a "
+                                "Take over button. Tell them in one sentence what to do there, then to tap I'm done and "
+                                "tell you to carry on. Then stop and wait for their message.")
     if op == "status":
         return out(ok=True, open=bool(r.get("running")), url=r.get("url"), title=r.get("title"))
     res = {"ok": bool(r.get("ok")), "url": r.get("url"), "title": r.get("title"), "note": PAGE_NOTE,
@@ -346,6 +351,10 @@ def browser_request_access(a):
     browser("request_access", a)
 
 
+def browser_ask_person(a):
+    browser("ask_person", {"text": a.get("reason")})
+
+
 def connect_google(a):
     r = connect_request()
     if r.get("why") == "already_connected":
@@ -361,7 +370,7 @@ def connect_google(a):
 ACTIONS = {f.__name__: f for f in (list_tasks, add_task, complete_task, calendar_upcoming, add_calendar_event,
                                    search_email, draft_email, connect_google, browser_open, browser_read,
                                    browser_scroll, browser_back, browser_click, browser_type, browser_press,
-                                   browser_login, browser_request_access, imessage_search)}
+                                   browser_login, browser_request_access, browser_ask_person, imessage_search)}
 
 if __name__ == "__main__":
     name = sys.argv[1] if len(sys.argv) > 1 else ""

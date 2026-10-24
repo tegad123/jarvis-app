@@ -126,8 +126,12 @@ async function desktop(browser, who) {
   await page.screenshot({ path: `${SHOTS}${who}-desktop-chat.png` })
 
   for (const [label, title] of SCREENS) {
-    const btn = nav(page).getByRole('button', { name: label, exact: true })
-    if (!(await btn.count())) continue
+    const btn = nav(page).getByRole('button', { name: new RegExp(`^${label}( \\d+ waiting on you)?$`) })
+    if (operator && label === 'Settings') continue
+    if (!(await btn.count())) {
+      ck(`${label} is in the sidebar to open`, false)
+      continue
+    }
     await btn.click()
     await page.waitForTimeout(900)
     ck(`${label} opens with its title`, (await page.getByRole('heading', { level: 1, name: title, exact: true }).count()) === 1)

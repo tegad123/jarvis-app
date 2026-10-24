@@ -410,6 +410,28 @@
       }
     },
     {
+      "name": "browser_ask_person",
+      "authz": null,
+      "label": "Asking you to take over",
+      "needs": [
+        "browser"
+      ],
+      "description": "Hand the browser to them when the page needs something only they can do: signing in when there's no saved login, a verification code or two-step prompt, a 'prove you're human' check, or a choice that is theirs to make. The browser window in this chat switches to 'Action needed' with your reason and a Take over button. Use it as soon as you hit such a page instead of stopping or describing the problem; then tell them what to do and wait for them.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "One plain sentence shown on the card: what they need to do, e.g. 'Sign in to Google, then tap I'm done.'"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "connect_google",
       "authz": null,
       "label": "Getting the Google connect button ready",

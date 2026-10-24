@@ -270,6 +270,8 @@ export interface BrowserStatus {
   taken_over?: boolean
   /** Sites with an approved task, and when that access ends. */
   access?: { site: string; until: string | null }[]
+  /** Set when Jarvis needs them to take over (no saved login, a code, a check); the card's reason line. */
+  needs_you?: string | null
 }
 
 export interface BrowserScreen {

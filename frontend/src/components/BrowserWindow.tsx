@@ -67,7 +67,7 @@ export default function BrowserWindow({ busy, hidden, onHiddenChange, onAvailabl
       const mine = ap.approvals.filter(isBrowserAsk)
       setAsks(mine)
       // Something new to look at brings the window back.
-      if ((sc.running && sc.url && sc.url !== lastUrl.current) || mine.length) onHiddenRef.current(false)
+      if ((sc.running && sc.url && sc.url !== lastUrl.current) || mine.length || st.needs_you) onHiddenRef.current(false)
       lastUrl.current = sc.url ?? null
     } catch (err) {
       if (err instanceof Unauthorized) onUnauthorized()
@@ -76,6 +76,7 @@ export default function BrowserWindow({ busy, hidden, onHiddenChange, onAvailabl
 
   const takeover = screen?.taken_over ?? status?.taken_over ?? false
   const running = !!screen?.running
+  const needsYou = !takeover && running ? status?.needs_you ?? undefined : undefined
   const available = !!status?.enabled && (running || takeover || asks.length > 0)
 
   useEffect(() => {
@@ -125,7 +126,8 @@ export default function BrowserWindow({ busy, hidden, onHiddenChange, onAvailabl
 
   return (
     <ComputerCard
-      state={takeover ? 'yours' : asks.length ? 'needs-you' : running && screen?.jpeg ? 'working' : 'starting'}
+      state={takeover ? 'yours' : asks.length || needsYou ? 'needs-you' : running && screen?.jpeg ? 'working' : 'starting'}
+      reason={needsYou}
       screenshot={running && screen?.jpeg ? `data:image/jpeg;base64,${screen.jpeg}` : undefined}
       title={screen?.title ?? undefined}
       notice={running ? screen?.site_refused ?? undefined : undefined}

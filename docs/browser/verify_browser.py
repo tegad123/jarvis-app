@@ -202,6 +202,22 @@ out["exfil_same_site"] = [code, r.get("error")]
 code, r = go("omar", "open", url=f"{B}/get?d={EXFIL}")
 out["exfil_new_site"] = [code, r.get("error")]
 
+nsl0 = threads_mod.bump_counter("browser_needs_you_no_saved_login", 0)
+ag0 = threads_mod.bump_counter("browser_needs_you_agent", 0)
+code, r = go("omar", "login")
+as_person("omar", "member")
+out["no_login"] = [code, r.get("error"), c.get("/api/browser/status").json().get("needs_you") or ""]
+as_person("dana", "owner")
+out["no_login_dana_sees"] = c.get("/api/browser/status").json().get("needs_you")
+out["ask_short"] = go("dana", "ask_person", text="hi")[0]
+code, r = go("dana", "ask_person", text="Enter the 6-digit code Google sent you, then tap I'm done.")
+out["ask"] = [code, r.get("asked"), c.get("/api/browser/status").json().get("needs_you") or ""]
+c.post("/api/browser/takeover", json={"on": True})
+out["ask_after_takeover"] = c.get("/api/browser/status").json().get("needs_you")
+c.post("/api/browser/takeover", json={"on": False})
+out["needs_deltas"] = [threads_mod.bump_counter("browser_needs_you_no_saved_login", 0) - nsl0,
+                       threads_mod.bump_counter("browser_needs_you_agent", 0) - ag0]
+
 before = len(browser.list_logins("omar"))
 browser.save_login("omar", browser.site_key(A), "omar@example.com", PW)
 sites = lambda who: [x["site"] for x in browser.list_logins(who)]
@@ -357,6 +373,13 @@ def main() -> int:
     ck("presence twin: the same address on the approved site opens", o["exfil_same_site"][0] == 200,
        o["exfil_same_site"])
     print("saved logins:")
+    ck("no saved login: refused and the card asks omar to take over",
+       o["no_login"][:2] == [409, "no_saved_login"] and "Take over" in o["no_login"][2], o["no_login"])
+    ck("   and dana's card does not", o["no_login_dana_sees"] is None, o["no_login_dana_sees"])
+    ck("a one-word ask is refused", o["ask_short"] == 400, o["ask_short"])
+    ck("the agent's ask shows on the card", o["ask"][:2] == [200, True] and "6-digit code" in o["ask"][2], o["ask"])
+    ck("   and taking over clears it", o["ask_after_takeover"] is None, o["ask_after_takeover"])
+    ck("needs-you counters moved by exactly 1 each", o["needs_deltas"] == [1, 1], o["needs_deltas"])
     ck("the login is omar's alone (+1 for omar, none for dana)", o["logins"] == [True, False, 1], o["logins"])
     ck("signing in worked", o["login"][:2] == [200, True] and o["login"][3] == "Welcome", o["login"])
     ck("presence twin: the site received the saved password", PASSWORD in RECEIVED)
