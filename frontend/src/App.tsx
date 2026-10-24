@@ -1,7 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import AmbientField from './components/AmbientField'
-import Chrome from './components/Chrome'
-import TabBar, { canSeeSettings, type TabId } from './components/TabBar'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { BackContext } from './components/Page'
 import Approvals from './screens/Approvals'
 import Ask from './screens/Ask'
 import Feed from './screens/Feed'
@@ -9,18 +7,60 @@ import Leads from './screens/Leads'
 import Login from './screens/Login'
 import Settings from './screens/Settings'
 import Tasks from './screens/Tasks'
-import { Unauthorized, getSession, logout } from './lib/api'
+import Page from './components/Page'
+import {
+  ApiError,
+  Unauthorized,
+  archiveThread,
+  createThread,
+  getApprovals,
+  getPeople,
+  getSession,
+  getThreads,
+  logout,
+  renameThread,
+  type Person,
+} from './lib/api'
+import { EmptyState, NewChannelSheet, Sidebar, type SidebarNavItem } from './jm'
+import { canSeeSettings, ROLE_LABEL } from './lib/roles'
 import { applyTheme, initialTheme, type Theme } from './lib/theme'
-import type { Role } from './lib/types'
+import { relativeTime } from './lib/time'
+import type { Role, Thread } from './lib/types'
 
 type AuthState =
   | { status: 'checking' }
   | { status: 'out' }
   | { status: 'in'; displayName?: string; role: Role; personKey: string | null }
 
+type NavId = 'feed' | 'approvals' | 'tasks' | 'leads' | 'settings'
+type View = { kind: 'nav'; id: NavId } | { kind: 'thread'; id: string } | null
+
+type Sheet = { mode: 'create' } | { mode: 'rename'; thread: Thread } | null
+
+const NAV_IDS: NavId[] = ['feed', 'approvals', 'tasks', 'leads', 'settings']
+
+/** A channel with no message for this long reads "Quiet" in the sidebar. */
+const QUIET_AFTER_HOURS = 48
+
+function isQuiet(t: Thread): boolean {
+  if (!t.last_message_at) return false
+  return Date.now() - new Date(t.last_message_at).getTime() > QUIET_AFTER_HOURS * 3600_000
+}
+
+function useDesktop(): boolean {
+  const query = '(min-width: 768px)'
+  const [desktop, setDesktop] = useState(() => window.matchMedia(query).matches)
+  useEffect(() => {
+    const m = window.matchMedia(query)
+    const on = () => setDesktop(m.matches)
+    m.addEventListener('change', on)
+    return () => m.removeEventListener('change', on)
+  }, [])
+  return desktop
+}
+
 export default function App() {
   const [auth, setAuth] = useState<AuthState>({ status: 'checking' })
-  const [tab, setTab] = useState<TabId>('feed')
   const [theme, setTheme] = useState<Theme>(() => initialTheme())
 
   useEffect(() => {
@@ -41,14 +81,10 @@ export default function App() {
         role: s.role ?? 'member',
         personKey: s.person_key ?? null,
       })
-    } catch (err) {
-      if (err instanceof Unauthorized) {
-        setAuth({ status: 'out' })
-      } else {
-        // Server unreachable at boot. Show Login rather than a dead screen —
-        // the login attempt will surface the real error.
-        setAuth({ status: 'out' })
-      }
+    } catch {
+      // Unauthorized, or the server is unreachable at boot: show Login rather
+      // than a dead screen — the login attempt will surface the real error.
+      setAuth({ status: 'out' })
     }
   }, [])
 
@@ -56,22 +92,9 @@ export default function App() {
     void check()
   }, [check])
 
-  const signOut = useCallback(async () => {
-    await logout()
-    setAuth({ status: 'out' })
-    setTab('feed')
-  }, [])
-
-  const onTab = useCallback((next: TabId) => {
-    if (next === 'settings' && auth.status === 'in' && !canSeeSettings(auth.role)) {
-      return
-    }
-    setTab(next)
-  }, [auth])
-
   if (auth.status === 'checking') {
     return (
-      <main className="grid min-h-[100dvh] place-items-center">
+      <main className="grid min-h-[100dvh] place-items-center bg-jm-bg">
         <span className="sr-only">Loading</span>
       </main>
     )
@@ -82,79 +105,267 @@ export default function App() {
   }
 
   return (
-    <div className="relative min-h-[100dvh]">
-      <AmbientField />
+    <Shell
+      key={auth.personKey ?? 'operator'}
+      auth={auth}
+      theme={theme}
+      onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+      onSignedOut={() => setAuth({ status: 'out' })}
+    />
+  )
+}
 
-      <Chrome
-        displayName={auth.displayName}
+function Shell({
+  auth,
+  theme,
+  onToggleTheme,
+  onSignedOut,
+}: {
+  auth: Extract<AuthState, { status: 'in' }>
+  theme: Theme
+  onToggleTheme: () => void
+  onSignedOut: () => void
+}) {
+  const { role, personKey } = auth
+  const structureOnly = role === 'operator'
+  const desktop = useDesktop()
+  const [view, setView] = useState<View>(null)
+  const [threads, setThreads] = useState<Thread[] | null>(null)
+  const [threadsError, setThreadsError] = useState<string | null>(null)
+  const [people, setPeople] = useState<Person[]>([])
+  const [pending, setPending] = useState(0)
+  const [sheet, setSheet] = useState<Sheet>(null)
+  const [sheetBusy, setSheetBusy] = useState(false)
+  const [sheetError, setSheetError] = useState<string | null>(null)
+  const onSignedOutRef = useRef(onSignedOut)
+  onSignedOutRef.current = onSignedOut
+  const unauthorized = useCallback(() => onSignedOutRef.current(), [])
+
+  // The roster is needed by ANYONE who can open the members sheet, not just
+  // by someone who can edit it: without it the sheet renders raw person keys
+  // instead of names. It is the same unauthenticated list the login picker uses.
+  useEffect(() => {
+    void getPeople().then(setPeople).catch(() => setPeople([]))
+  }, [])
+
+  const loadThreads = useCallback(async () => {
+    try {
+      const r = await getThreads()
+      setThreads(r.threads)
+      setThreadsError(null)
+      return r.threads
+    } catch (err) {
+      if (err instanceof Unauthorized) unauthorized()
+      else setThreadsError('Could not load your conversations.')
+      return null
+    }
+  }, [unauthorized])
+
+  useEffect(() => {
+    void loadThreads()
+  }, [loadThreads])
+
+  // The sidebar's Approvals count. The server decides what each person sees
+  // (approvals.may_see); the operator sees none, so it does not ask.
+  const loadPending = useCallback(async () => {
+    if (structureOnly) return
+    try {
+      const r = await getApprovals()
+      setPending(r.approvals.filter((a) => a.status === 'pending').length)
+    } catch (err) {
+      if (err instanceof Unauthorized) unauthorized()
+    }
+  }, [structureOnly, unauthorized])
+
+  useEffect(() => {
+    void loadPending()
+    const t = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void loadPending()
+    }, 20_000)
+    return () => window.clearInterval(t)
+  }, [loadPending, view])
+
+  const signOut = useCallback(async () => {
+    await logout()
+    onSignedOutRef.current()
+  }, [])
+
+  const direct = threads?.find((t) => t.is_direct) ?? null
+  const channels = (threads ?? []).filter((t) => !t.is_direct)
+
+  // Phones show the sidebar until something is opened; desktops open the direct line.
+  const shown: View = view ?? (desktop && direct ? { kind: 'thread', id: direct.thread_id } : null)
+  const openThread = shown?.kind === 'thread' ? (threads ?? []).find((t) => t.thread_id === shown.id) ?? null : null
+
+  const select = (id: string) => {
+    if ((NAV_IDS as string[]).includes(id)) {
+      if (id === 'settings' && !canSeeSettings(role)) return
+      setView({ kind: 'nav', id: id as NavId })
+    } else {
+      setView({ kind: 'thread', id })
+    }
+  }
+
+  const archive = useCallback(
+    async (thread: Thread) => {
+      try {
+        await archiveThread(thread.thread_id, true)
+        if (view?.kind === 'thread' && view.id === thread.thread_id) setView(null)
+        await loadThreads()
+      } catch (err) {
+        if (err instanceof Unauthorized) return unauthorized()
+        setThreadsError(err instanceof ApiError ? err.message : 'Could not archive that channel.')
+      }
+    },
+    [loadThreads, unauthorized, view],
+  )
+
+  const submitSheet = useCallback(
+    async (name: string) => {
+      if (!sheet) return
+      setSheetBusy(true)
+      setSheetError(null)
+      try {
+        if (sheet.mode === 'create') {
+          const created = await createThread(name)
+          setSheet(null)
+          await loadThreads()
+          // Drop straight into the new channel — creating one is an intent to use it.
+          setView({ kind: 'thread', id: created.thread_id })
+        } else {
+          await renameThread(sheet.thread.thread_id, name)
+          setSheet(null)
+          await loadThreads()
+        }
+      } catch (err) {
+        if (err instanceof Unauthorized) return unauthorized()
+        setSheetError(err instanceof ApiError ? err.message : 'That did not work.')
+      } finally {
+        setSheetBusy(false)
+      }
+    },
+    [sheet, loadThreads, unauthorized],
+  )
+
+  const row = (t: Thread) => ({
+    id: t.thread_id,
+    name: t.name,
+    preview: t.preview,
+    previewRole: t.preview_role,
+    time: t.last_message_at ? relativeTime(t.last_message_at) : undefined,
+    unread: t.unread,
+    quiet: !t.is_direct && isQuiet(t),
+    byJarvis: t.created_by === 'jarvis',
+    bodiesHidden: structureOnly,
+  })
+
+  const nav: SidebarNavItem[] = [
+    { id: 'feed', label: 'Activity', icon: 'activity' },
+    { id: 'approvals', label: 'Approvals', icon: 'approvals', count: pending, attention: pending > 0 },
+    { id: 'tasks', label: 'Tasks', icon: 'tasks' },
+    { id: 'leads', label: 'Leads', icon: 'leads' },
+    ...(canSeeSettings(role) ? [{ id: 'settings', label: 'Settings', icon: 'settings' as const }] : []),
+  ]
+
+  let content
+  if (shown?.kind === 'thread' && openThread) {
+    content = (
+      <Ask
+        key={openThread.thread_id}
+        thread={openThread}
+        role={role}
+        personKey={personKey}
+        people={people}
+        onThreadsChanged={() => void loadThreads()}
+        onUnauthorized={unauthorized}
+      />
+    )
+  } else if (shown?.kind === 'nav') {
+    switch (shown.id) {
+      case 'feed':
+        content = <Feed role={role} onUnauthorized={unauthorized} />
+        break
+      case 'approvals':
+        content =
+          role === 'operator' ? (
+            <Page title="Approvals">
+              <EmptyState icon="approvals">Approvals are the account’s people to make.</EmptyState>
+            </Page>
+          ) : (
+            <Approvals onUnauthorized={unauthorized} onDecided={() => void loadPending()} />
+          )
+        break
+      case 'tasks':
+        content = <Tasks role={role} personKey={personKey} people={people} onUnauthorized={unauthorized} />
+        break
+      case 'leads':
+        content = <Leads personKey={personKey} onUnauthorized={unauthorized} />
+        break
+      case 'settings':
+        content = canSeeSettings(role) ? <Settings role={role} onUnauthorized={unauthorized} /> : null
+        break
+    }
+  } else if (threads === null && !threadsError) {
+    content = <span className="sr-only">Loading</span>
+  } else {
+    content = (
+      <Page title="Jarvis">
+        <EmptyState icon="chat">{threadsError ?? 'Pick a conversation.'}</EmptyState>
+      </Page>
+    )
+  }
+
+  return (
+    <div className="flex h-[100dvh] overflow-hidden bg-jm-bg text-jm-fg">
+      <Sidebar
+        className={shown ? 'hidden md:flex' : '!w-full md:!w-jm-sidebar'}
+        nav={nav}
+        active={shown ? shown.id : undefined}
+        onSelect={select}
+        onNewChat={() => {
+          setSheetError(null)
+          setSheet({ mode: 'create' })
+        }}
+        direct={direct ? { ...row(direct), direct: true } : undefined}
+        channels={channels.map((t) => ({
+          ...row(t),
+          menu: [
+            {
+              label: 'Rename',
+              onSelect: () => {
+                setSheetError(null)
+                setSheet({ mode: 'rename', thread: t })
+              },
+            },
+            { label: 'Archive', onSelect: () => void archive(t) },
+          ],
+        }))}
+        emptyLabel={threads === null ? 'Loading…' : threadsError ?? undefined}
+        person={{ name: auth.displayName || (structureOnly ? 'Operator' : 'Signed in'), role: ROLE_LABEL[role] }}
         theme={theme}
-        onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+        onToggleTheme={onToggleTheme}
         onSignOut={() => void signOut()}
       />
 
-      {/* Padding clears the fixed chrome above and the tab bar below.
-          DESKTOP: the content column is capped at 700px and centred. The design
-          was drawn at 390px, and letting it fill a 1280px viewport turns the
-          hero into a void and stretches every card until one line of text sits
-          alone on 1200px. A reading column keeps the composition the design
-          actually has; the extra width becomes quiet ground around it, which is
-          what makes the elevation read at all.
-          md:pl-[88px] clears the left rail the tab bar becomes at that width. */}
-      {/* lg (1024px+): the rail is 220px wide and the reading column becomes a
-          1080px container centred in the space to its right, with 48px of
-          horizontal padding. The header shares the same container so its left
-          edge is the content's left edge. Nothing below lg changes. */}
-      <main
-        className="relative z-10 mx-auto w-full max-w-[700px]
-                   px-screen-x pb-[calc(96px+env(safe-area-inset-bottom))] pt-[92px]
-                   md:max-w-[788px] md:pb-16 md:pl-[88px]
-                   lg:max-w-none lg:px-0 lg:pb-20 lg:pl-[220px] lg:pt-[104px]"
-      >
-       <div className="lg:mx-auto lg:w-full lg:max-w-[1080px] lg:px-12">
-        {tab === 'feed' && <Feed role={auth.role} onUnauthorized={() => setAuth({ status: 'out' })} />}
-
-        {tab === 'ask' && (
-          <Ask
-            role={auth.role}
-            personKey={auth.personKey}
-            onUnauthorized={() => setAuth({ status: 'out' })}
-          />
-        )}
-
-        {/* The server decides what each person sees (approvals.may_see): the
-            owner the whole queue, anyone else only their own browser
-            approvals. The operator sees none. */}
-        {tab === 'approvals' && auth.role !== 'operator' && (
-          <Approvals onUnauthorized={() => setAuth({ status: 'out' })} />
-        )}
-        {tab === 'approvals' && auth.role === 'operator' && (
-          <p className="py-10 text-center text-body-s text-light-text-muted dark:text-dark-text-muted">
-            Approvals are the account’s people to make.
-          </p>
-        )}
-
-        {tab === 'tasks' && (
-          <Tasks
-            role={auth.role}
-            personKey={auth.personKey}
-            onUnauthorized={() => setAuth({ status: 'out' })}
-          />
-        )}
-
-        {tab === 'leads' && (
-          <Leads personKey={auth.personKey} onUnauthorized={() => setAuth({ status: 'out' })} />
-        )}
-
-        {tab === 'settings' && canSeeSettings(auth.role) && (
-          <Settings
-            role={auth.role}
-            onUnauthorized={() => setAuth({ status: 'out' })}
-          />
-        )}
-       </div>
+      <main className={shown ? 'flex min-w-0 flex-1 flex-col' : 'hidden min-w-0 flex-1 flex-col md:flex'}>
+        <BackContext.Provider value={desktop ? null : () => setView(null)}>{content}</BackContext.Provider>
       </main>
 
-      <TabBar active={tab} onChange={onTab} role={auth.role} />
+      {sheet && (
+        <NewChannelSheet
+          mode={sheet.mode}
+          title={sheet.mode === 'create' ? 'New channel' : 'Rename channel'}
+          submitLabel={sheet.mode === 'create' ? 'Create' : 'Save'}
+          initialValue={sheet.mode === 'rename' ? sheet.thread.name : ''}
+          busy={sheetBusy}
+          error={sheetError ?? undefined}
+          onSubmit={(name) => void submitSheet(name)}
+          onClose={() => {
+            setSheet(null)
+            setSheetError(null)
+          }}
+        />
+      )}
     </div>
   )
 }

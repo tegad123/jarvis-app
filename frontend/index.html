@@ -11,19 +11,17 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="Jarvis" />
     <!-- theme-color is swapped at runtime by theme.ts to match the active mode -->
-    <meta name="theme-color" content="#FAF8F4" />
+    <meta name="theme-color" content="#0A0A0A" />
     <script>
       // Applied pre-paint so the first frame is already in the right mode.
       // Mirrors initialTheme() in src/lib/theme.ts — keep the two in step.
       (function () {
         try {
-          var stored = localStorage.getItem('jarvis-theme');
-          var dark = stored
-            ? stored === 'dark'
-            : window.matchMedia('(prefers-color-scheme: dark)').matches;
-          if (dark) document.documentElement.classList.add('dark');
+          var stored = localStorage.getItem('jarvis-mono-theme');
+          document.documentElement.classList.add(stored === 'light' ? 'light' : 'dark');
         } catch (e) {
-          /* private mode / storage disabled — fall through to light */
+          /* private mode / storage disabled — the default dark */
+          document.documentElement.classList.add('dark');
         }
       })();
     </script>

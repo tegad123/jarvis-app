@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ErrorState } from '../components/States'
-import { canSeeSettings } from '../components/TabBar'
+import Page from '../components/Page'
 import {
   ApiError,
   Unauthorized,
@@ -14,11 +13,13 @@ import {
   newMacCode,
   saveWebsiteLogin,
 } from '../lib/api'
+import { Button, ErrorState, Field, PairingCode, SettingsSection, type SettingsSectionProps } from '../jm'
+import { canSeeSettings } from '../lib/roles'
 import { absoluteTime, relativeTime } from '../lib/time'
 import type { GoogleConnectionStatus, MacStatus, Role, WebsiteLogin } from '../lib/types'
 
 /**
- * Settings — the signed-in person's own Google account. Any person; never the
+ * Settings — the signed-in person's own accounts. Any person; never the
  * operator.
  *
  * The API enforces require_person and only ever reads, connects or
@@ -35,36 +36,28 @@ interface Props {
 }
 
 type Phase = 'idle' | 'disconnecting' | 'disconnected'
+type Status = NonNullable<SettingsSectionProps['status']>
 
-function statusCopy(
-  conn: GoogleConnectionStatus | null,
-  phase: Phase,
-): { status: string; time: string | null; timeAbs: string | null } {
-  if (phase === 'disconnecting') {
-    return { status: 'Disconnecting…', time: null, timeAbs: null }
-  }
+function statusCopy(conn: GoogleConnectionStatus | null, phase: Phase): { status: Status; time: string | null; timeAbs: string | null } {
+  if (phase === 'disconnecting') return { status: { tone: 'busy', label: 'Disconnecting…' }, time: null, timeAbs: null }
   if (phase === 'disconnected' || conn?.status === 'disconnected') {
     return {
-      status: phase === 'disconnected' ? 'Disconnected' : 'Never connected',
+      status: { tone: 'neutral', label: phase === 'disconnected' ? 'Disconnected' : 'Never connected' },
       time: null,
       timeAbs: null,
     }
   }
-  if (conn?.status === 'needs_reauth') {
-    return { status: 'Needs reauth', time: null, timeAbs: null }
-  }
+  if (conn?.status === 'needs_reauth') return { status: { tone: 'action', label: 'Needs reauth' }, time: null, timeAbs: null }
   if (conn?.status === 'connected') {
     const ts = conn.refreshed_at || conn.connected_at
-    if (!ts) return { status: 'Connected', time: null, timeAbs: null }
+    if (!ts) return { status: { tone: 'done', label: 'Connected' }, time: null, timeAbs: null }
     return {
-      status: 'Connected',
-      time: conn.refreshed_at
-        ? `Last refreshed ${relativeTime(conn.refreshed_at)}`
-        : `Connected ${relativeTime(conn.connected_at as string)}`,
+      status: { tone: 'done', label: 'Connected' },
+      time: conn.refreshed_at ? `Last refreshed ${relativeTime(conn.refreshed_at)}` : `Connected ${relativeTime(conn.connected_at as string)}`,
       timeAbs: ts,
     }
   }
-  return { status: 'Never connected', time: null, timeAbs: null }
+  return { status: { tone: 'neutral', label: 'Never connected' }, time: null, timeAbs: null }
 }
 
 export default function Settings({ role, onUnauthorized }: Props) {
@@ -125,100 +118,64 @@ export default function Settings({ role, onUnauthorized }: Props) {
         onUnauthorized()
         return
       }
-      if (err instanceof ApiError) {
-        setError({
-          message: 'Could not disconnect Google.',
-          detail: err.detail ?? (err.status ? `HTTP ${err.status}` : undefined),
-        })
-      } else {
-        setError({ message: 'Could not disconnect Google.' })
-      }
+      setError({
+        message: 'Could not disconnect Google.',
+        detail: err instanceof ApiError ? (err.detail ?? (err.status ? `HTTP ${err.status}` : undefined)) : undefined,
+      })
     }
   }
 
   return (
-    <section>
-      <h2 className="text-screen-title">Settings</h2>
-      <p className="mt-1 text-body-s text-light-text-secondary dark:text-dark-text-secondary">
-        Your own Google account. Your assistant uses it to check your calendar and email; nobody else on the team can.
-      </p>
+    <Page title="Settings" subtitle="Your own accounts. Your assistant uses them for you; nobody else on the team can.">
+      {error && <ErrorState label="Settings unavailable" message={error.message} detail={error.detail} onRetry={() => void load()} />}
 
-      {error && (
-        <ErrorState
-          message={error.message}
-          detail={error.detail}
-          onRetry={() => void load()}
-        />
-      )}
-
-      <div className="glass-featured mt-5 rounded-card px-4 py-4 lg:px-6 lg:py-5">
-        <h3 className="text-row-title">Your Google account</h3>
-        <p className="mt-2 text-body-s text-light-text-primary dark:text-dark-text-primary">
-          {copy.status}
-        </p>
-        {mailbox && phase !== 'disconnected' && (
-          <p className="mt-1 truncate text-body-s text-light-text-secondary dark:text-dark-text-secondary">
-            {mailbox}
-          </p>
-        )}
-        {copy.time && copy.timeAbs && (
-          <p
-            className="mt-1 text-caption text-light-text-muted dark:text-dark-text-muted"
-            title={absoluteTime(copy.timeAbs)}
-          >
-            {copy.time}
-          </p>
-        )}
-
-        <div className="mt-4 flex flex-wrap items-center gap-3">
-          {showConnect && (
-            <button
-              type="button"
-              onClick={() => {
-                window.location.href = '/api/google/connect/start'
-              }}
-              className="rounded-pill bg-light-accent px-5 py-2.5 text-body font-semibold
-                         text-white shadow-accent-btn dark:bg-dark-accent-fill
-                         lg:transition-[opacity,box-shadow,transform] lg:duration-[120ms]
-                         lg:hover:-translate-y-px lg:hover:shadow-glass"
-            >
-              Connect
-            </button>
-          )}
-          {showDisconnect && (
-            <>
-              <button
-                type="button"
-                onClick={() => void onDisconnect()}
-                className="rounded-pill border border-light-border px-5 py-2.5 text-body
-                           font-semibold text-light-text-primary
-                           dark:border-dark-border dark:text-dark-text-primary"
+      <SettingsSection
+        title="Your Google account"
+        description="Your assistant uses it to check your calendar and email."
+        status={conn || phase !== 'idle' ? copy.status : undefined}
+        rows={
+          mailbox && phase !== 'disconnected'
+            ? [
+                {
+                  title: mailbox,
+                  detail: copy.time && copy.timeAbs ? <span title={absoluteTime(copy.timeAbs)}>{copy.time}</span> : undefined,
+                },
+              ]
+            : undefined
+        }
+        actions={
+          <>
+            {showConnect && (
+              <Button
+                variant="primary"
+                onClick={() => {
+                  window.location.href = '/api/google/connect/start'
+                }}
               >
-                {confirm ? 'Confirm disconnect' : 'Disconnect'}
-              </button>
-              {confirm && (
-                <button
-                  type="button"
-                  onClick={() => setConfirm(false)}
-                  className="text-caption text-light-text-muted underline-offset-2 hover:underline
-                             dark:text-dark-text-muted"
-                >
-                  Cancel
-                </button>
-              )}
-            </>
-          )}
-        </div>
-      </div>
+                Connect
+              </Button>
+            )}
+            {showDisconnect && (
+              <>
+                <Button onClick={() => void onDisconnect()}>{confirm ? 'Confirm disconnect' : 'Disconnect'}</Button>
+                {confirm && (
+                  <Button variant="ghost" onClick={() => setConfirm(false)}>
+                    Cancel
+                  </Button>
+                )}
+              </>
+            )}
+          </>
+        }
+      />
 
       {role !== 'operator' && <WebsiteLogins onUnauthorized={onUnauthorized} />}
       {role !== 'operator' && <MacMessages onUnauthorized={onUnauthorized} />}
-    </section>
+    </Page>
   )
 }
 
-/** Saved website logins for Jarvis's browser. The API never returns a
- *  password; the browser types it into the site's own form. */
+/** The read-only iMessage helper. Pairing is a one-time code the Mac claims. */
 function MacMessages({ onUnauthorized }: { onUnauthorized: () => void }) {
   const [st, setSt] = useState<MacStatus | null>(null)
   const [code, setCode] = useState<{ code: string; expires_at: string } | null>(null)
@@ -274,64 +231,40 @@ function MacMessages({ onUnauthorized }: { onUnauthorized: () => void }) {
     }
   }
 
-  if (!st) return error ? <p className="mt-5 text-body-s text-light-alert dark:text-dark-alert">{error}</p> : null
+  if (!st) return error ? <SettingsSection title="iMessage" error={error} /> : null
 
   return (
-    <div className="glass-featured mt-5 rounded-card px-4 py-4 lg:px-6 lg:py-5">
-      <h3 className="text-row-title">iMessage</h3>
-      <p className="mt-1 text-body-s text-light-text-secondary dark:text-dark-text-secondary">
-        A small helper on your Mac lets Jarvis read your texts from the last {st.retention_days} days. Reading only:
-        Jarvis can’t send a text. Disconnecting deletes everything it synced.
-      </p>
-      {error && <p className="mt-2 text-body-s text-light-alert dark:text-dark-alert">{error}</p>}
-      {st.devices.length > 0 && (
-        <ul className="mt-3 grid gap-2">
-          {st.devices.map((d) => (
-            <li key={d.device_id} className="flex min-w-0 items-center gap-3">
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-body-s text-light-text-primary dark:text-dark-text-primary">{d.name}</p>
-                <p className="truncate text-caption text-light-text-muted dark:text-dark-text-muted">
-                  {st.messages} messages
-                  {d.last_sync_at ? ` · synced ${relativeTime(d.last_sync_at)}` : ' · waiting for the first sync'}
-                </p>
-              </div>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void remove(d.device_id)}
-                className="text-caption text-light-text-muted underline-offset-2 hover:underline dark:text-dark-text-muted"
-              >
-                Disconnect
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-      {code ? (
-        <div className="mt-4 text-body-s text-light-text-secondary dark:text-dark-text-secondary">
-          <p>On your Mac, run the Jarvis helper’s pair command with this code:</p>
-          <p className="mt-2 font-mono text-[22px] tracking-widest text-light-text-primary dark:text-dark-text-primary">
-            {code.code}
-          </p>
-          <p className="mt-1 text-caption text-light-text-muted dark:text-dark-text-muted">
-            Works once, until {absoluteTime(code.expires_at)}.
-          </p>
-        </div>
-      ) : (
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void pair()}
-          className="mt-4 rounded-pill bg-light-accent px-5 py-2.5 text-body font-semibold text-white shadow-accent-btn
-                     disabled:opacity-50 dark:bg-dark-accent-fill"
-        >
-          {st.devices.length > 0 ? 'Connect another Mac' : 'Connect a Mac'}
-        </button>
-      )}
-    </div>
+    <SettingsSection
+      title="iMessage"
+      description={
+        <>
+          A small helper on your Mac lets Jarvis read your texts from the last {st.retention_days} days. Reading only: Jarvis can’t send
+          a text. Disconnecting deletes everything it synced.
+        </>
+      }
+      status={st.devices.length > 0 ? { tone: 'done', label: 'Connected' } : { tone: 'neutral', label: 'Not connected' }}
+      rows={st.devices.map((d) => ({
+        id: d.device_id,
+        title: d.name,
+        detail: `${st.messages} messages${d.last_sync_at ? ` · synced ${relativeTime(d.last_sync_at)}` : ' · waiting for the first sync'}`,
+        action: { label: 'Disconnect', disabled: busy, onClick: () => void remove(d.device_id) },
+      }))}
+      error={error ?? undefined}
+      actions={
+        !code && (
+          <Button variant="primary" disabled={busy} onClick={() => void pair()}>
+            {st.devices.length > 0 ? 'Connect another Mac' : 'Connect a Mac'}
+          </Button>
+        )
+      }
+    >
+      {code && <PairingCode code={code.code} expires={absoluteTime(code.expires_at)} />}
+    </SettingsSection>
   )
 }
 
+/** Saved website logins for Jarvis's browser. The API never returns a
+ *  password; the browser types it into the site's own form. */
 function WebsiteLogins({ onUnauthorized }: { onUnauthorized: () => void }) {
   const [enabled, setEnabled] = useState(false)
   const [logins, setLogins] = useState<WebsiteLogin[]>([])
@@ -389,68 +322,41 @@ function WebsiteLogins({ onUnauthorized }: { onUnauthorized: () => void }) {
     }
   }
 
-  const field =
-    'min-w-0 rounded-btn border border-light-border bg-transparent px-3 py-2 text-body-s dark:border-dark-border'
-
   return (
-    <div className="glass-featured mt-5 rounded-card px-4 py-4 lg:px-6 lg:py-5">
-      <h3 className="text-row-title">Website logins</h3>
-      <p className="mt-1 text-body-s text-light-text-secondary dark:text-dark-text-secondary">
-        Jarvis signs in with these when you approve a task on that site. It never sees the password: the browser
-        types it into the site’s own sign-in form.
-      </p>
-      {error && <p className="mt-2 text-body-s text-light-alert dark:text-dark-alert">{error}</p>}
-      {logins.length > 0 && (
-        <ul className="mt-3 grid gap-2">
-          {logins.map((l) => (
-            <li key={l.site} className="flex min-w-0 items-center gap-3">
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-body-s text-light-text-primary dark:text-dark-text-primary">{l.site}</p>
-                <p className="truncate text-caption text-light-text-muted dark:text-dark-text-muted">
-                  {l.username}
-                  {l.last_used_at ? ` · last used ${relativeTime(l.last_used_at)}` : ' · not used yet'}
-                </p>
-              </div>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void remove(l.site)}
-                className="text-caption text-light-text-muted underline-offset-2 hover:underline dark:text-dark-text-muted"
-              >
-                Remove
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-      <form onSubmit={(e) => void add(e)} className="mt-4 grid gap-2 sm:grid-cols-3">
-        <input value={site} onChange={(e) => setSite(e.target.value)} placeholder="Site, e.g. zillow.com" required className={field} />
-        <input
+    <SettingsSection
+      title="Website logins"
+      description="Jarvis signs in with these when you approve a task on that site. It never sees the password: the browser types it into the site’s own sign-in form."
+      rows={logins.map((l) => ({
+        id: l.site,
+        title: l.site,
+        detail: `${l.username}${l.last_used_at ? ` · last used ${relativeTime(l.last_used_at)}` : ' · not used yet'}`,
+        action: { label: 'Remove', disabled: busy, onClick: () => void remove(l.site) },
+      }))}
+      error={error ?? undefined}
+    >
+      <form onSubmit={(e) => void add(e)} className="grid gap-jm-2 sm:grid-cols-3">
+        <Field value={site} onChange={(e) => setSite(e.target.value)} placeholder="Site, e.g. zillow.com" aria-label="Site" required />
+        <Field
           value={username}
           onChange={(e) => setUsername(e.target.value)}
           placeholder="Email or username"
+          aria-label="Email or username"
           autoComplete="off"
           required
-          className={field}
         />
-        <input
+        <Field
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           placeholder="Password"
+          aria-label="Password"
           autoComplete="new-password"
           required
-          className={field}
         />
-        <button
-          type="submit"
-          disabled={busy}
-          className="rounded-pill bg-light-accent px-5 py-2.5 text-body font-semibold text-white shadow-accent-btn
-                     disabled:opacity-50 dark:bg-dark-accent-fill sm:col-span-3 sm:justify-self-start"
-        >
+        <Button type="submit" variant="primary" disabled={busy} className="sm:col-span-3 sm:justify-self-start">
           Save login
-        </button>
+        </Button>
       </form>
-    </div>
+    </SettingsSection>
   )
 }

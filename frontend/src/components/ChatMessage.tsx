@@ -1,20 +1,18 @@
+import { Button, MessageBubble, type MessageBubbleProps } from '../jm'
+
 /**
  * What the assistant says, and the app's own controls under it.
  *
  * The model's words are plain text, always: no markdown, no links, nothing
  * clickable, whatever it writes. A control in the chat comes only from a
  * server `action` event, and its destination is fixed here, never taken from
- * the model or the event.
+ * the model or the event. docs/frontend/verify_chat_links.mjs renders these.
  */
 
 export const CONNECT_GOOGLE_START = '/api/google/connect/start'
 
-export function AssistantText({ content }: { content: string }) {
-  return (
-    <p className="mt-1.5 whitespace-pre-wrap text-chat text-light-text-primary dark:text-dark-text-primary">
-      {content}
-    </p>
-  )
+export function AssistantText({ content, ...rest }: { content: string } & Omit<MessageBubbleProps, 'role' | 'text' | 'children' | 'actions'>) {
+  return <MessageBubble role="assistant" text={content} {...rest} />
 }
 
 export type ChatAction = 'connect_google'
@@ -39,32 +37,29 @@ export function ChatActionButton({
   go?: (url: string) => void
 }) {
   return (
-    <button
-      type="button"
-      data-testid="chat-action"
-      data-action={action}
-      onClick={() => go(ACTION_TARGET[action])}
-      className="mt-3 rounded-card bg-light-accent px-4 py-2.5 text-chat text-white dark:bg-dark-accent-fill"
-    >
+    <Button variant="primary" data-testid="chat-action" data-action={action} onClick={() => go(ACTION_TARGET[action])}>
       {ACTION_LABEL[action]}
-    </button>
+    </Button>
   )
 }
 
-/** Controls saved under a reply in history. Only known actions draw, with this file's own label and target. */
+/** The buttons under one reply: this turn's live actions plus any saved with it. Only known actions draw. */
 export function SavedActions({
   actions,
+  live = [],
   go,
 }: {
   actions?: { action: string }[]
+  live?: ChatAction[]
   go?: (url: string) => void
 }) {
-  const known = [...new Set((actions ?? []).map((a) => a.action).filter(isChatAction))]
+  const known = [...new Set([...live, ...(actions ?? []).map((a) => a.action)].filter(isChatAction))]
+  if (!known.length) return null
   return (
-    <>
+    <div className="flex flex-wrap gap-jm-2">
       {known.map((a) => (
         <ChatActionButton key={a} action={a} go={go} />
       ))}
-    </>
+    </div>
   )
 }
