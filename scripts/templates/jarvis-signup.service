@@ -1,0 +1,15 @@
+[Unit]
+Description=Jarvis sign-up worker (provisions invited accounts in practice mode)
+After=network-online.target jarvis-front.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/jarvis-platform
+ExecStart=/opt/jarvis/venv/bin/python scripts/signup_worker.py --every 5
+Environment=FRONT_DB=/var/lib/jarvis-front/front.db
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

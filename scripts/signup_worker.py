@@ -253,6 +253,8 @@ def main(argv=None) -> int:
     if os.geteuid() != 0:
         print("REFUSED: the account worker runs as root", file=sys.stderr)
         return 2
+    # front.db's WAL side files must stay writable by the front door's group.
+    os.umask(0o007)
     if a.once:
         once()
         return 0

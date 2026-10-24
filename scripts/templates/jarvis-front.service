@@ -1,0 +1,36 @@
+[Unit]
+Description=Jarvis front door (*.yamin.io host router, invites, sign-up)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jarvis-front
+Group=jarvis-front
+UMask=0007
+WorkingDirectory=/opt/jarvis-front/app
+ExecStart=/opt/jarvis/venv/bin/python -m front.main
+EnvironmentFile=/etc/jarvis/front.env
+Environment=FRONT_DB=/var/lib/jarvis-front/front.db
+Environment=FRONT_PORT=8790
+LoadCredential=oauth:/etc/jarvis/oauth_client.json
+Environment=FRONT_OAUTH_CLIENT=%d/oauth
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ReadWritePaths=/var/lib/jarvis-front
+CapabilityBoundingSet=
+AmbientCapabilities=
+MemoryMax=200M
+
+[Install]
+WantedBy=multi-user.target
