@@ -82,6 +82,10 @@ class Site(http.server.BaseHTTPRequestHandler):
         elif path == "/shop":
             self.page("Test shop", "<h1>Test shop</h1><button onclick=\"document.title='noted'\">Add note</button>"
                                    "<button>Place order</button>")
+        elif path == "/busy":
+            self.send_response(429)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
         elif path == "/login":
             self.page("Sign in", "<form method=post action=/login><label>Email <input name=username></label>"
                                  "<label>Password <input type=password name=password></label>"
@@ -134,6 +138,19 @@ code, r = go("omar", "open", url=f"{A}/get")
 out["omar_cookie"] = [code, (r.get("snapshot") or "")[-80:]]
 code, r = go("dana", "open", url=f"{A}/get")
 out["dana_cookie"] = [code, (r.get("snapshot") or "")[-80:]]
+from app import threads as threads_mod
+refused0 = threads_mod.bump_counter("browser_site_refused", 0)
+code, r = go("dana", "open", url=f"{A}/busy")
+out["busy"] = [code, r.get("http_status"), r.get("site_refused") or "",
+               (r.get("snapshot") or "").startswith("THE SITE REFUSED THIS PAGE:")]
+as_person("dana", "owner")
+s = c.get("/api/browser/screen").json()
+out["busy_screen"] = [s.get("http_status"), bool(s.get("site_refused"))]
+code, r = go("dana", "open", url=f"{A}/get")
+out["ok_page"] = [code, r.get("http_status"), "site_refused" in r]
+s = c.get("/api/browser/screen").json()
+out["ok_screen"] = [s.get("http_status"), s.get("site_refused")]
+out["refused_delta"] = threads_mod.bump_counter("browser_site_refused", 0) - refused0
 
 code, r = go("omar", "open", url=f"{A}/shop")
 note, order = ref(r.get("snapshot"), "Add note"), ref(r.get("snapshot"), "Place order")
@@ -309,6 +326,13 @@ def main() -> int:
     ck("an unknown chat turn gets no browser", o["bad_ref"] == 403, o["bad_ref"])
     ck("omar does not see dana's cookie", "who=dana" not in o["omar_cookie"][1], o["omar_cookie"][1])
     ck("presence twin: dana sees her own cookie", "who=dana" in o["dana_cookie"][1], o["dana_cookie"][1])
+    ck("a 429 page is reported as refused, with the status", o["busy"][:2] == [200, 429] and "HTTP 429" in o["busy"][2],
+       o["busy"])
+    ck("   and the model reads the refusal first", o["busy"][3] is True)
+    ck("   and the card's screen carries it", o["busy_screen"] == [429, True], o["busy_screen"])
+    ck("presence twin: a normal page is 200 with no refusal", o["ok_page"] == [200, 200, False], o["ok_page"])
+    ck("   and the card shows none", o["ok_screen"] == [200, None], o["ok_screen"])
+    ck("refused counter moved by exactly 1", o["refused_delta"] == 1, o["refused_delta"])
     print("approvals are the person's own:")
     ck("acting with no approval is held", o["omar_click_no_grant"][0] == 403
        and o["omar_click_no_grant"][1].get("error") == "needs_task_approval", o["omar_click_no_grant"])

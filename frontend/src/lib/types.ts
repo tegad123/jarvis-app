@@ -280,6 +280,9 @@ export interface BrowserScreen {
   width?: number
   height?: number
   taken_over: boolean
+  http_status?: number | null
+  /** Set when the page answered 4xx/5xx: the sentence to show instead of a silent blank page. */
+  site_refused?: string | null
 }
 
 export interface BrowserInput {

@@ -61,6 +61,20 @@ def site_of(url: str) -> str:
     return host[4:] if host.startswith("www.") else host
 
 
+def refused_text(site: str, code: int) -> str:
+    """The one sentence the person and the model both get when a page answers 4xx/5xx."""
+    if code == 429:
+        return (f"{site} is refusing this server right now (HTTP 429, too many requests). The page is empty; "
+                f"clicking or retrying won't fix it soon.")
+    if code in (401, 403):
+        return f"{site} refused access from this server (HTTP {code}). The page is empty or an error page."
+    if code == 404:
+        return f"{site} says this page doesn't exist (HTTP 404)."
+    if code >= 500:
+        return f"{site} is having trouble right now (HTTP {code}). Try again later."
+    return f"{site} refused the request (HTTP {code})."
+
+
 class CDPError(RuntimeError):
     pass
 
@@ -251,13 +265,19 @@ class Browser:
             await asyncio.sleep(0.25)
         await asyncio.sleep(0.3)
 
-    async def where(self) -> Dict[str, str]:
+    async def where(self) -> Dict[str, Any]:
         try:
             url = await self.eval("location.href") or ""
             title = await self.eval("document.title") or ""
+            code = await self.eval("(performance.getEntriesByType('navigation')[0] || {}).responseStatus || 0")
         except (CDPError, asyncio.TimeoutError):
-            url, title = "", ""
-        return {"url": str(url), "title": str(title)[:200], "site": site_of(str(url))}
+            url, title, code = "", "", 0
+        out: Dict[str, Any] = {"url": str(url), "title": str(title)[:200], "site": site_of(str(url))}
+        if isinstance(code, int) and code:
+            out["http_status"] = code
+            if code >= 400:
+                out["site_refused"] = refused_text(out["site"] or "The site", code)
+        return out
 
     def _node(self, ref: str) -> int:
         if ref not in self.refs:
@@ -368,6 +388,10 @@ class Browser:
             out["snapshot"] = await self.snapshot()
             if out["snapshot"].startswith("Blocked by Jarvis:"):
                 out["blocked"] = out["snapshot"].split(":", 1)[1].strip()[:200]
+            elif out.get("site_refused"):
+                out["snapshot"] = f"THE SITE REFUSED THIS PAGE: {out['site_refused']}\n\n{out['snapshot']}"
+        if out.get("site_refused"):
+            log(op="site_refused", person=self.person, site=out.get("site"), status=out.get("http_status"))
         if self.dialogs:
             out["dialogs"], self.dialogs = self.dialogs, []
         return out

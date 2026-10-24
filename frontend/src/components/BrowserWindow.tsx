@@ -128,6 +128,7 @@ export default function BrowserWindow({ busy, hidden, onHiddenChange, onAvailabl
       state={takeover ? 'yours' : asks.length ? 'needs-you' : running && screen?.jpeg ? 'working' : 'starting'}
       screenshot={running && screen?.jpeg ? `data:image/jpeg;base64,${screen.jpeg}` : undefined}
       title={screen?.title ?? undefined}
+      notice={running ? screen?.site_refused ?? undefined : undefined}
       url={screen?.url ?? undefined}
       asks={asks.map((a) => ({
         id: a.id,

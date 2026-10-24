@@ -30,6 +30,8 @@ export interface ComputerCardProps {
   asks?: ComputerAsk[]
   /** Why it needs you when there is no approval (a sign-in, a code). */
   reason?: string
+  /** The site refused the page (HTTP 4xx/5xx); shown under the picture. */
+  notice?: string
   expanded?: boolean
   onToggleExpand?: () => void
   onHide?: () => void
@@ -136,6 +138,11 @@ export function ComputerCard(p: ComputerCardProps) {
       </div>
 
       {screen}
+      {p.notice && (
+        <p role="status" data-testid="browser-refused" className="m-0 text-jm-body-sm text-jm-fg">
+          {p.notice}
+        </p>
+      )}
       {expanded && p.url && <p className={cx('m-0 -mt-jm-1 text-jm-caption text-jm-fg-secondary', truncate)}>{p.url}</p>}
       {state === 'needs-you' && !asks.length && p.reason && <p className="m-0 text-jm-body-sm text-jm-fg">{p.reason}</p>}
 

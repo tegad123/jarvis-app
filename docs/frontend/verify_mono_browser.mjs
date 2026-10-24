@@ -37,7 +37,7 @@ const W = 1280
 const H = 800
 
 function fakeBrowser(page, jpeg, who) {
-  const state = { takenOver: false, pending: true, sent: [] }
+  const state = { takenOver: false, pending: true, sent: [], refused: null }
   const ask = () => ({
     id: 'appr-browser-1', ts: new Date().toISOString(), tenant: 'testco', origin: 'broker', kind: 'action',
     skill: 'browser', summary: 'On zillow.com: save 118 Alderwood to favourites',
@@ -51,7 +51,10 @@ function fakeBrowser(page, jpeg, who) {
     json(r, CANARY ? { enabled: false } : { enabled: true, running: true, url: 'https://www.zillow.com/', title: 'Zillow', taken_over: state.takenOver, access: [] }),
   )
   page.route('**/api/browser/screen', (r) =>
-    json(r, { running: true, url: 'https://www.zillow.com/', title: 'Zillow', jpeg, width: W, height: H, taken_over: state.takenOver }),
+    json(r, {
+      running: true, url: 'https://www.zillow.com/', title: 'Zillow', jpeg, width: W, height: H, taken_over: state.takenOver,
+      http_status: state.refused ? 429 : 200, site_refused: state.refused,
+    }),
   )
   page.route('**/api/browser/takeover', (r) => {
     const body = JSON.parse(r.request().postData() || '{}')
@@ -109,6 +112,16 @@ try {
   ck('   with the page title', (await card.getByText('Zillow').count()) >= 1)
   ck('   and the ask, as a 30-minute allow', (await card.getByRole('button', { name: 'Allow for 30 min' }).count()) === 1)
   await page.screenshot({ path: new URL('./mono-shots/browser-ask.png', import.meta.url).pathname })
+
+  ck('a page that loaded shows no refusal line', (await card.getByTestId('browser-refused').count()) === 0)
+  state.refused = "zillow.com is refusing this server right now (HTTP 429, too many requests). The page is empty; clicking or retrying won't fix it soon."
+  await page.waitForTimeout(4000)
+  const line = card.getByTestId('browser-refused').filter({ hasText: 'HTTP 429' })
+  ck('a refused page says so under the picture', (await line.count()) === 1 && (await line.isVisible()), `visible=${await line.isVisible().catch(() => false)}`)
+  await card.screenshot({ path: new URL('./mono-shots/browser-refused.png', import.meta.url).pathname })
+  state.refused = null
+  await page.waitForTimeout(4000)
+  ck('   and the line goes once a page loads', (await card.getByTestId('browser-refused').count()) === 0)
 
   if ((await card.count()) === 1) {
     await card.getByRole('button', { name: 'Allow for 30 min' }).click()

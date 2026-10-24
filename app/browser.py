@@ -245,7 +245,8 @@ def _active_grant(site: str, person: str) -> Optional[sentinel.Grant]:
 
 
 def _say_page(r: Dict[str, Any]) -> Dict[str, Any]:
-    keep = ("ok", "url", "title", "site", "snapshot", "dialogs", "blocked", "load_error", "login", "redacted")
+    keep = ("ok", "url", "title", "site", "snapshot", "dialogs", "blocked", "load_error", "login", "redacted",
+            "http_status", "site_refused")
     return {k: r[k] for k in keep if k in r}
 
 
@@ -319,6 +320,8 @@ def gate(op: str, args: Dict[str, Any], ctx: Dict[str, str], person: str) -> Tup
         _record(op, "executed" if r.get("ok") else "failed", sentinel.READ, site, ctx, person, verdict="allow")
         broker._taint(ctx, "read a web page")
         broker._bump(f"browser_{op}")
+        if r.get("site_refused"):
+            broker._bump("browser_site_refused")
     return (200 if r.get("ok") else 502), _say_page(r)
 
 
@@ -557,7 +560,8 @@ def browser_screen(sess: dict = Depends(auth.current_session)):
     except WorkerDown:
         raise HTTPException(status_code=503, detail="The browser isn't running right now.")
     return {"running": True, "url": r.get("url"), "title": r.get("title"), "jpeg": r.get("jpeg"),
-            "width": r.get("width"), "height": r.get("height"), "taken_over": taken_over(who)}
+            "width": r.get("width"), "height": r.get("height"), "taken_over": taken_over(who),
+            "http_status": r.get("http_status"), "site_refused": r.get("site_refused")}
 
 
 @router.post("/takeover")
