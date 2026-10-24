@@ -147,6 +147,10 @@ function makeCore(sys) {
     return name ? name + ' (' + handle + ')' : handle
   }
 
+  function newestRowid() {
+    return Number((sql(chatDb, 'SELECT COALESCE(MAX(ROWID), 0) AS n FROM message')[0] || {}).n || 0)
+  }
+
   function readMessages(afterRowid, since, names) {
     const rows = sql(
       chatDb,
@@ -210,7 +214,11 @@ function makeCore(sys) {
   function pair(code, name) {
     const cfg = { server: sys.server }
     const got = post(cfg, '/api/mac/claim', { code: code, name: name || 'Mac' })
-    const saved = { server: sys.server, token: got.token, device_id: got.device_id, last_rowid: 0 }
+    const days = got.history_days === undefined ? DAYS : Math.max(0, Math.min(DAYS, Number(got.history_days) || 0))
+    // No history: everything already in Messages counts as seen; only what arrives from now on is sent.
+    const start = days === 0 && canRead() ? newestRowid() : 0
+    const saved = { server: sys.server, token: got.token, device_id: got.device_id, last_rowid: start,
+                    history_days: days, paired_at: new Date().toISOString() }
     saveConfig(saved)
     return saved
   }
@@ -224,7 +232,10 @@ function makeCore(sys) {
       throw err
     }
     const names = contactNames()
-    const since = new Date(Date.now() - DAYS * 86400000)
+    const days = cfg.history_days === undefined ? DAYS : Number(cfg.history_days)
+    const since = cfg.paired_at
+      ? new Date(Math.max(Date.now() - DAYS * 86400000, Date.parse(cfg.paired_at) - days * 86400000))
+      : new Date(Date.now() - DAYS * 86400000)
     let after = Number(cfg.last_rowid || 0)
     let sent = 0
     let posted = false

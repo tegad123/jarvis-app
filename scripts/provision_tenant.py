@@ -258,6 +258,15 @@ def browser_enabled(manifest: dict) -> bool:
     return True
 
 
+def imessage_history_days(manifest: dict) -> int:
+    """How far before pairing a Mac's texts may reach. `imessage: {history_days: 0}`
+    is new messages only; absent keeps the 30-day window."""
+    v = (manifest.get("imessage") or {}).get("history_days", 30)
+    if isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= 30:
+        die("imessage.history_days must be a whole number of days, 0 to 30")
+    return v
+
+
 def browser_unit_names(slug: str) -> List[str]:
     return [f"{slug}-browser.socket", f"{slug}-browser.service", f"{slug}-egress.socket", f"{slug}-egress.service"]
 
@@ -835,7 +844,8 @@ def build_client_config(manifest: dict, paths: dict, shipped: List[str], loadout
         "app": {
             "feed": {
                 "team_destinations": list(feed.get("team_destinations") or ["ops"]),
-            }
+            },
+            "imessage": {"history_days": imessage_history_days(manifest)},
         },
         "schedule": schedule,
         "credentials": {},

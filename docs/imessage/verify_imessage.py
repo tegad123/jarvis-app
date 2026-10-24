@@ -145,6 +145,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from app import actor_refs, agent_status, auth, broker, imessage, platform_store as store
+from app import threads as threads_mod
 broker._authorize = lambda request: None
 if os.environ.get("CANARY") == "1":
     real = imessage.search
@@ -255,6 +256,46 @@ out["post_revoked"] = c.post("/api/mac/messages", json={"messages": []},
 as_person("dana", "owner")
 for d in imessage.devices("dana"):
     imessage.disconnect("dana", d["device_id"])
+
+# New messages only: the account's real setting, read through tenant_config.
+import tenant_config as tc
+real_cfg = tc.CONFIG_PATH
+rt = json.loads(real_cfg.read_text())
+rt.setdefault("app", {})["imessage"] = {"history_days": int(os.environ["NEWONLY_DAYS"])}
+(SCR / "runtime-newonly.json").write_text(json.dumps(rt))
+tc.CONFIG_PATH = SCR / "runtime-newonly.json"
+tc.load(force=True)
+out["newonly_days"] = imessage.history_days()
+early = lambda: threads_mod.bump_counter("imessage_items_before_pairing", 0)
+as_person("priya", "admin")
+code = c.post("/api/imessage/pair").json()["code"]
+out["claim_days"] = c.post("/api/mac/claim", json={"code": code, "name": "probe"}).json().get("history_days")
+for d in imessage.devices("priya"):
+    imessage.disconnect("priya", d["device_id"])
+e0 = early()
+code = c.post("/api/imessage/pair").json()["code"]
+helper("priya", "pair", "--server", URL, "--code", code)
+out["old_helper"] = [list(helper("priya", "sync")), imessage.message_count("priya"), early() - e0]
+subprocess.run([sys.executable, os.environ["ADD"], "priya"], check=True)
+helper("priya", "sync")
+out["old_helper_new"] = imessage.message_count("priya")
+for d in imessage.devices("priya"):
+    imessage.disconnect("priya", d["device_id"])
+
+as_person("tester", "member")
+e0 = early()
+code = c.post("/api/imessage/pair").json()["code"]
+p = subprocess.run(["node", os.environ["JS"]], capture_output=True, text=True, timeout=180,
+                   env={**os.environ, "SERVER": URL, "CODE": code})
+try:
+    js = json.loads(p.stdout.strip().splitlines()[-1])
+except Exception:
+    js = {"raw": (p.stdout + p.stderr)[-600:]}
+out["mac_app"] = [js, imessage.message_count("tester"), early() - e0]
+for d in imessage.devices("tester"):
+    imessage.disconnect("tester", d["device_id"])
+tc.CONFIG_PATH = real_cfg
+tc.load(force=True)
 server.should_exit = True
 print("RESULT " + json.dumps(out))
 '''
@@ -267,12 +308,50 @@ import verify_imessage as v
 v.add_messages(v.SCR / sys.argv[1], sys.argv[1], [("text", "One more thing: bring the keys", timedelta(minutes=1))])
 '''
 
+# The real Mac app (helper.js) with a stand-in for macOS, as docs/front/verify_front.mjs runs it:
+# pair, sync, then one message arrives, sync again. Prints what it stored and what it read.
+JS = r'''
+const { execFileSync } = require('child_process')
+const fs = require('fs'), path = require('path')
+const FIX = process.env.FIXTURE, home = process.env.JS_HOME
+const expected = JSON.parse(execFileSync('python3', [FIX, 'make', home]).toString()).expected_stored
+const sqls = []
+const sys = {
+  home, server: process.env.SERVER,
+  sh: (cmd) => {
+    let real = cmd
+    if (cmd.startsWith('/usr/bin/sqlite3 ')) { sqls.push(cmd); real = `python3 ${FIX} sqlite3 ` + cmd.slice(16) }
+    else if (/^\/usr\/bin\/id -u/.test(cmd)) return '501\n'
+    else if (/launchctl|^\/usr\/bin\/open /.test(cmd)) return ''
+    return execFileSync('/bin/sh', ['-c', real], { maxBuffer: 20e6 }).toString()
+  },
+  read: (p) => (fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : ''),
+  write: (p, t) => fs.writeFileSync(p, t),
+  tmp: (name) => path.join(home, `${name}-${Date.now()}.json`),
+  sleep: () => {}, computerName: () => 'Fixture Mac', dialog: () => 'OK', ask: () => null, notify: () => {},
+}
+const core = require(process.env.HELPER_JS).makeCore(sys)
+core.pair(process.env.CODE, 'Fixture Mac')
+const cfg = core.loadConfig()
+const first = core.sync()
+execFileSync('python3', ['-c', `
+import sqlite3, sys, time
+db = sqlite3.connect(sys.argv[1] + '/Library/Messages/chat.db')
+ns = int((time.time() - 978307200) * 1e9)
+cur = db.execute("INSERT INTO message (guid, text, handle_id, date, is_from_me) VALUES ('js-new-1', 'Arrived after connecting', 1, ?, 0)", (ns,))
+db.execute("INSERT INTO chat_message_join VALUES (1, ?)", (cur.lastrowid,)); db.commit()`, home])
+const second = core.sync()
+console.log(JSON.stringify({ expected, history_days: cfg.history_days, start_rowid: cfg.last_rowid, first, second,
+                             paired_at: Boolean(cfg.paired_at) }))
+'''
+
 
 def main() -> int:
     for k in ("AUTH_BASE", "APP_PORT"):
         if os.environ.get(k, "").endswith(("8700", "8710")):
             sys.exit("REFUSING: live or testco port")
     canary = "--canary" in sys.argv
+    history_canary = "--canary-history" in sys.argv
     subprocess.run(["rm", "-rf", str(SCR)], check=True)
     SCR.mkdir(parents=True)
     make_mac(SCR / "omar", "omar", [
@@ -283,6 +362,9 @@ def main() -> int:
         ("text", "ancient history", timedelta(days=45)),
     ])
     make_mac(SCR / "dana", "dana", [("text", "dana-only: offer accepted", timedelta(hours=3))])
+    make_mac(SCR / "priya", "priya", [("text", "priya: from last week", timedelta(days=6)),
+                                      ("mine", "priya: from this morning", timedelta(hours=4))])
+    (SCR / "newonly.js").write_text(JS)
     add = SCR / "add.py"
     add.write_text(ADD.replace("pathlib.Path(__file__).parent", repr(str(pathlib.Path(__file__).parent))))
 
@@ -301,6 +383,9 @@ def main() -> int:
         "JARVIS_BROWSER": "off", "SCR": str(SCR), "HELPER": str(HELPER), "WORD": WORD, "ADD": str(add),
         "PLUGIN": str(APP_ROOT / "scripts" / "hermes_plugin" / "jarvis" / "run_action.py"),
     })
+    env.update({"NEWONLY_DAYS": "30" if history_canary else "0", "JS": str(SCR / "newonly.js"),
+                "FIXTURE": str(APP_ROOT / "docs" / "front" / "mac_fixture.py"), "JS_HOME": str(SCR / "tester"),
+                "HELPER_JS": str(APP_ROOT / "mac-helper" / "Jarvis.app" / "Contents" / "Resources" / "helper.js")})
     if canary:
         env["CANARY"] = "1"
     p = subprocess.run([sys.executable, "-c", CHILD], env=env, cwd=str(APP_ROOT), capture_output=True, text=True,
@@ -357,6 +442,20 @@ def main() -> int:
     ck("the helper is refused afterwards", o["sync_revoked"][0] != 0 and "401" in o["sync_revoked"][1],
        o["sync_revoked"])
     ck("the old token is refused", o["post_revoked"] == 401, o["post_revoked"])
+    print("new messages only (app.imessage.history_days = 0):")
+    js, js_stored, js_early = o["mac_app"][0], o["mac_app"][1], o["mac_app"][2]
+    ck("the account's setting is read as 0", o["newonly_days"] == 0, o["newonly_days"])
+    ck("   and pairing tells the Mac 0", o["claim_days"] == 0, o["claim_days"])
+    ck("a helper that sends old texts anyway: the server stores none of them",
+       o["old_helper"][0][0] == 0 and o["old_helper"][1] == 0, o["old_helper"])
+    ck("   refused and counted, exactly the 2 old texts", o["old_helper"][2] == 2, o["old_helper"])
+    ck("   presence twin: a text arriving after pairing is stored (+1)", o["old_helper_new"] == 1, o["old_helper_new"])
+    ck("the real Mac app pairs with history 0 and starts after the newest message",
+       js.get("history_days") == 0 and js.get("start_rowid") == 5 and js.get("paired_at"), js)
+    ck(f"   its first sync sends none of the {js.get('expected')} texts already on the Mac",
+       js.get("first") == 0 and js_early == 0, [js.get("first"), js_early])
+    ck("   presence twin: the message that arrives next is sent and stored (+1)",
+       js.get("second") == 1 and js_stored == 1, [js.get("second"), js_stored])
 
     passed = sum(ok)
     print(f"\n{passed}/{len(ok)} passed" + ("  (canary run: the isolation check is expected to FAIL)" if canary else ""))

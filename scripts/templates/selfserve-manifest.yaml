@@ -96,6 +96,8 @@ meeting_briefing:
   owner_person: ''
 owner_email_voice:
   voice_corpus_path: ''
+imessage:
+  history_days: 0
 feed:
   team_destinations:
   - ops
