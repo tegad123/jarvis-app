@@ -1,0 +1,24 @@
+# Named Cloudflare tunnel for yamin.io, front-door version (replaces
+# yamin-config-tega.yml). Every account is <slug>.yamin.io and sign-up is
+# join.yamin.io; all of them go to the front door (jarvis-front, 127.0.0.1:8790),
+# which routes by Host to each account's loopback port. Adding an account no
+# longer touches this file or DNS.
+#
+# Install (human, Cloudflare is human-only):
+#   cp docs/platform/ingress/yamin-config-front.yml /etc/cloudflared/config.yml
+#   cloudflared tunnel ingress validate
+#   cloudflared tunnel route dns yamin '*.yamin.io'
+#   systemctl restart cloudflared-yamin
+# Rehearsal keeps its explicit rules; explicit hostnames are matched before the wildcard.
+tunnel: yamin
+credentials-file: /etc/cloudflared/yamin.json
+ingress:
+  - hostname: rehearsal.yamin.io
+    service: http://127.0.0.1:8730        # rehearsal app
+  - hostname: rehearsal-gw.yamin.io
+    service: http://127.0.0.1:8672        # rehearsal gateway
+  - hostname: rehearsal-hooks.yamin.io
+    service: http://127.0.0.1:18793       # rehearsal Gmail webhook listener (when enabled)
+  - hostname: "*.yamin.io"
+    service: http://127.0.0.1:8790        # front door: join + every <slug>.yamin.io
+  - service: http_status:404
