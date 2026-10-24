@@ -25,7 +25,7 @@ outbound_suffix_policy: production
 skill_loadout: base
 skill_loadout_optional: []
 skills_origin_sha: b8c2d1f164b6e2fd97f4dc6347b2ad4230c3388e
-app_origin_sha: dd25ac75601ed7819dc089c4a27224f653e1ba66
+app_origin_sha: 27b50db4301d864ef0a3d539c1d835bfe822f965
 curator_packs: omit
 writes_posture: live
 agent_model: claude-sonnet-5-5
