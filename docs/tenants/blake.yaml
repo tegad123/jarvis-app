@@ -14,7 +14,9 @@ ports:
   app: 8760
   gateway: 8762
   hooks: 18796
-public_origin: http://127.0.0.1:8760
+public_origin: https://blake.yamin.io
+signin: google
+oauth_front: https://join.yamin.io
 sheet_id: ''
 boundary_domains:
 - assistant.invalid

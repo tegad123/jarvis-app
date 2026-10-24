@@ -14,7 +14,9 @@ ports:
   app: 8770
   gateway: 8772
   hooks: 18797
-public_origin: http://127.0.0.1:8770
+public_origin: https://martin.yamin.io
+signin: google
+oauth_front: https://join.yamin.io
 sheet_id: ''
 boundary_domains:
 - assistant.invalid

@@ -16,6 +16,8 @@ ports:
   gateway: 8782
   hooks: 18798
 public_origin: https://tega.yamin.io
+signin: google
+oauth_front: https://join.yamin.io
 sheet_id: ''
 boundary_domains:
 - assistant.invalid

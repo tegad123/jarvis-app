@@ -14,7 +14,9 @@ ports:
   app: 8750
   gateway: 8752
   hooks: 18795
-public_origin: http://127.0.0.1:8750
+public_origin: https://eddie.yamin.io
+signin: google
+oauth_front: https://join.yamin.io
 sheet_id: ''
 boundary_domains:
 - assistant.invalid
