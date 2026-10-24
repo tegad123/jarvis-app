@@ -11,11 +11,11 @@ code() { curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$@"; }
 
 echo "join.yamin.io"
 getent hosts join.yamin.io >/dev/null; ck "join.yamin.io resolves" $([ $? = 0 ] && echo 1 || echo 0)
-c=$(code https://join.yamin.io/); ck "join page answers 200 (no Access login in front of it)" $([ "$c" = 200 ] && echo 1 || echo 0) "$c"
+c=$(code https://join.yamin.io/); join=$c; ck "join page answers 200 (no Access login in front of it)" $([ "$c" = 200 ] && echo 1 || echo 0) "$c"
 loc=$(curl -s -o /dev/null -w '%{redirect_url}' --max-time 15 https://join.yamin.io/signin/google)
 ck "join Google sign-in goes to Google with the join callback" \
   $([[ "$loc" == https://accounts.google.com/* && "$loc" == *redirect_uri=https%3A%2F%2Fjoin.yamin.io%2Foauth%2Fcallback* ]] && echo 1 || echo 0)
-c=$(code https://nosuch-account-x.yamin.io/api/ping); ck "unknown account name is 404 from the front door" $([ "$c" = 404 ] && echo 1 || echo 0) "$c"
+c=$(code https://nosuch-account-x.yamin.io/api/ping); ck "unknown account name is 404 from the front door (join reached it)" $([ "$c" = 404 ] && [ "$join" = 200 ] && echo 1 || echo 0) "$c, join $join"
 
 for s in "${SLUGS[@]}"; do
   echo "$s.yamin.io"
