@@ -336,6 +336,26 @@ c.commit()`, FRONT_DB])
   const badRow = sqlite(FRONT_DB, "SELECT status FROM signups WHERE id='su_badslug'")[0]?.[0]
   ck('a hyphenated account name is refused before anything is made', wb.status === 0 && badRow === 'failed' && !existsSync('/opt/bad-slug'), `rc=${wb.status} status=${badRow}`)
   ck('   counted (+1)', frontCounter('signup_bad_slug') === bad0 + 1, `${bad0} -> ${frontCounter('signup_bad_slug')}`)
+  // The worker's reading of the provisioner, with subprocess stubbed: only the lock's HELD line is "try later".
+  const rc = JSON.parse(execFileSync(PY, ['-c', `
+import json, os, subprocess, sys, tempfile, types
+sys.path.insert(0, "scripts")
+os.environ["SIGNUP_STATE"] = tempfile.mkdtemp()
+import signup_worker as w
+def fake(rc, err):
+    return lambda *a, **k: types.SimpleNamespace(returncode=rc, stdout="", stderr=err)
+out = {}
+for name, rc, err in (("held", 2, "HELD: /root/.jarvis-agent-lock is held by pid 1"), ("refused", 2, "REFUSED: structural collision"), ("ok", 0, "")):
+    w.subprocess.run = fake(rc, err)
+    out[name] = w.provision("verifyrc", w.Path("/nonexistent.yaml"))
+su = {"slug": "verifyrc", "owner_name": "Riley Fixture", "business_name": "Verify RC", "email": "riley@fixture.example"}
+out["first"] = w.manifest_ports(w.write_manifest(su))
+out["retry"] = w.manifest_ports(w.write_manifest(su))
+out["fresh"] = w.pick_ports()
+print(json.dumps(out))`], { cwd: REPO, env }).toString())
+  ck('a provisioner refusal is a failure, not "lock busy"', rc.refused === 2 && rc.held === -2 && rc.ok === 0, JSON.stringify(rc))
+  ck('a retry keeps the ports in its own manifest', JSON.stringify(rc.first) === JSON.stringify(rc.retry), `${JSON.stringify(rc.first)} -> ${JSON.stringify(rc.retry)}`)
+  ck('   presence twin: a fresh pick would choose other ports', rc.fresh.app !== rc.first.app, JSON.stringify(rc.fresh))
   await p3.goto(`${JOIN}/signup/${su[0]}`)
   await p3.waitForTimeout(1500)
   ck('   and the page says so in words', (await p3.getByText("We're full right now.", { exact: false }).count()) === 1)
