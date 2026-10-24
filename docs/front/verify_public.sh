@@ -19,14 +19,15 @@ c=$(code https://nosuch-account-x.yamin.io/api/ping); ck "unknown account name i
 
 for s in "${SLUGS[@]}"; do
   echo "$s.yamin.io"
-  c=$(code "https://$s.yamin.io/api/ping"); ck "$s ping 200 (no Access redirect)" $([ "$c" = 200 ] && echo 1 || echo 0) "$c"
+  c=$(code "https://$s.yamin.io/api/ping"); ping=$c; ck "$s ping 200 (no Access redirect)" $([ "$c" = 200 ] && echo 1 || echo 0) "$c"
   m=$(curl -s --max-time 15 "https://$s.yamin.io/api/auth/methods")
   ck "$s public sign-in is Google only" $([ "$m" = '{"pin":false,"passphrase":false,"google":true}' ] && echo 1 || echo 0) "$m"
   c=$(code -X POST -H 'content-type: application/json' -d '{}' "https://$s.yamin.io/api/mac/claim")
   ck "$s Mac path reaches Jarvis (Jarvis refuses a bad claim, not Cloudflare)" $([[ "$c" = 400 || "$c" = 401 || "$c" = 422 ]] && echo 1 || echo 0) "$c"
   c=$(code -X POST -H 'content-type: application/json' -d '{}' "https://$s.yamin.io/api/mac/messages")
   ck "$s Mac upload without a device token is refused by Jarvis" $([[ "$c" = 401 || "$c" = 422 ]] && echo 1 || echo 0) "$c"
-  c=$(code "https://$s.yamin.io/api/broker/health"); ck "$s internal broker path is 404 from outside" $([ "$c" = 404 ] && echo 1 || echo 0) "$c"
+  # A tunnel catch-all also answers 404; only count it when this host reached Jarvis.
+  c=$(code "https://$s.yamin.io/api/broker/health"); ck "$s internal broker path is 404 from outside (host reaches Jarvis)" $([ "$c" = 404 ] && [ "$ping" = 200 ] && echo 1 || echo 0) "$c, ping $ping"
 done
 echo; echo "$pass/$total passed"
 [ "$pass" = "$total" ]
