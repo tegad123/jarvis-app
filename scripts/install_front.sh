@@ -21,9 +21,13 @@ chown -R root:root "$APP.new"; chmod -R go-w "$APP.new"
 rm -rf "$APP.old"; [ -d "$APP" ] && mv "$APP" "$APP.old"; mv "$APP.new" "$APP"
 
 install -d -m 2770 -o jarvis-front -g jarvis-front "$STATE"
+# The front door owns front.db; SQLite gives root's WAL side files the db file's owner.
+systemctl stop jarvis-signup.service 2>/dev/null || true
 for f in "$STATE"/front.db "$STATE"/front.db-wal "$STATE"/front.db-shm; do
-  [ -e "$f" ] && chgrp jarvis-front "$f" && chmod g+rw "$f"
+  [ -e "$f" ] && chown jarvis-front:jarvis-front "$f" && chmod 660 "$f"
 done
+(cd "$APP" && runuser -u jarvis-front -- env FRONT_DB="$STATE/front.db" /opt/jarvis/venv/bin/python -c \
+  "from front import store; store.connect().close()")
 
 if [ ! -f /etc/jarvis/front.env ]; then
   (umask 077; printf 'FRONT_SECRET=%s\n' "$(head -c 48 /dev/urandom | base64 | tr -d '\n')" > /etc/jarvis/front.env)
