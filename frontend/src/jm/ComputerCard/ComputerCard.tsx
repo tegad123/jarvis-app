@@ -62,10 +62,11 @@ export function ComputerCard(p: ComputerCardProps) {
     input({ kind: 'click', x: (e.clientX - box.left) / box.width, y: (e.clientY - box.top) / box.height })
   }
 
-  /* The state sits on the picture's corner, on a solid bg ground, so the
-     header keeps its room for the page title and the pill reads over any page. */
+  /* Big: the state sits on the picture's corner, on a solid bg ground, so the
+     header keeps its room for the page title and the pill reads over any page.
+     Small: the picture is a thumbnail the pill would cover, so it sits by the title. */
   const status = (
-    <span className="pointer-events-none absolute left-jm-2 top-jm-2 flex rounded-jm-pill bg-jm-bg">
+    <span className={cx('pointer-events-none flex shrink-0 rounded-jm-pill bg-jm-bg', expanded && 'absolute left-jm-2 top-jm-2')}>
       {state === 'needs-you' ? (
         <Tag tone="action">Action needed</Tag>
       ) : (
@@ -92,15 +93,42 @@ export function ComputerCard(p: ComputerCardProps) {
       className={cx(screenBox, 'appearance-none', !expanded ? 'cursor-zoom-in' : state === 'yours' ? 'cursor-crosshair' : 'cursor-default', focus)}
     >
       <img src={p.screenshot} alt={p.title ? `The page: ${p.title}` : 'The browser'} className="block h-full w-full object-cover object-top" />
-      {status}
+      {expanded && status}
     </button>
   ) : (
     <div className={cx(screenBox, 'grid content-center place-items-center gap-jm-2 text-jm-fg-secondary')}>
       <Dots />
-      <span className="text-jm-caption">Starting the browser…</span>
-      {status}
+      {expanded && <span className="text-jm-caption">Starting the browser…</span>}
+      {expanded && status}
     </div>
   )
+
+  const header = (
+    <div className="flex min-w-0 items-center gap-jm-2">
+      {expanded ? (
+        <span className="text-jm-fg-secondary">
+          <Icon name="globe" size={16} />
+        </span>
+      ) : (
+        status
+      )}
+      <p className={cx('m-0 min-w-0 flex-1 text-jm-body-sm text-jm-fg-secondary', truncate)}>{p.title || p.url || 'Jarvis’s browser'}</p>
+      {p.onToggleExpand && (
+        <Button
+          variant="ghost"
+          size="sm"
+          icon={expanded ? 'shrink' : 'expand'}
+          aria-label={expanded ? 'Make the browser small' : 'Make the browser big'}
+          onClick={p.onToggleExpand}
+        />
+      )}
+      {p.onHide && <Button variant="ghost" size="sm" icon="close" aria-label="Hide the browser" onClick={p.onHide} />}
+    </div>
+  )
+
+  /* Small, the long lines (a refusal, an ask carrying a whole search address)
+     stop at two lines; the full text is on hover and in the big view. */
+  const clamp = expanded ? 'break-words' : 'line-clamp-2 break-words'
 
   const close =
     expanded && p.onClose ? (
@@ -109,46 +137,25 @@ export function ComputerCard(p: ComputerCardProps) {
       </Button>
     ) : null
 
-  return (
-    <section
-      aria-label="Jarvis’s browser"
-      className={cx(
-        'box-border grid max-w-full gap-jm-3 rounded-jm-lg border bg-jm-panel p-jm-3',
-        expanded ? 'w-jm-computer-lg' : 'w-jm-computer-sm',
-        state === 'needs-you' ? 'border-jm-accent' : 'border-jm-border',
-        p.floating && 'shadow-jm-float',
-        p.className,
-      )}
-    >
-      <div className="flex min-w-0 items-center gap-jm-2">
-        <span className="text-jm-fg-secondary">
-          <Icon name="globe" size={16} />
-        </span>
-        <p className={cx('m-0 min-w-0 flex-1 text-jm-body-sm text-jm-fg-secondary', truncate)}>{p.title || p.url || 'Jarvis’s browser'}</p>
-        {p.onToggleExpand && (
-          <Button
-            variant="ghost"
-            size="sm"
-            icon={expanded ? 'shrink' : 'expand'}
-            aria-label={expanded ? 'Make the browser small' : 'Make the browser big'}
-            onClick={p.onToggleExpand}
-          />
-        )}
-        {p.onHide && <Button variant="ghost" size="sm" icon="close" aria-label="Hide the browser" onClick={p.onHide} />}
-      </div>
-
-      {screen}
+  const body = (
+    <>
       {p.notice && (
-        <p role="status" data-testid="browser-refused" className="m-0 text-jm-body-sm text-jm-fg">
+        <p role="status" data-testid="browser-refused" title={p.notice} className={cx('m-0 text-jm-body-sm text-jm-fg', clamp)}>
           {p.notice}
         </p>
       )}
       {expanded && p.url && <p className={cx('m-0 -mt-jm-1 text-jm-caption text-jm-fg-secondary', truncate)}>{p.url}</p>}
-      {state === 'needs-you' && !asks.length && p.reason && <p className="m-0 text-jm-body-sm text-jm-fg">{p.reason}</p>}
+      {state === 'needs-you' && !asks.length && p.reason && (
+        <p title={p.reason} className={cx('m-0 text-jm-body-sm text-jm-fg', expanded ? '' : 'line-clamp-3')}>
+          {p.reason}
+        </p>
+      )}
 
       {asks.map((a, i) => (
-        <div key={a.id ?? i} className="grid gap-jm-3">
-          <p className="m-0 text-jm-body-sm text-jm-fg">{a.summary}</p>
+        <div key={a.id ?? i} className={cx('grid', expanded ? 'gap-jm-3' : 'gap-jm-2')}>
+          <p title={a.summary} className={cx('m-0 text-jm-body-sm text-jm-fg', clamp)}>
+            {a.summary}
+          </p>
           <div className="flex flex-wrap gap-jm-2">
             <Button variant="primary" disabled={p.busy} onClick={a.onAllow}>
               {a.kind === 'task' ? 'Allow for 30 min' : 'Allow once'}
@@ -225,6 +232,35 @@ export function ComputerCard(p: ComputerCardProps) {
       )}
 
       {p.error && <ErrorLine small>{p.error}</ErrorLine>}
+    </>
+  )
+
+  const frame = cx(
+    'box-border max-w-full rounded-jm-lg border bg-jm-panel p-jm-3',
+    state === 'needs-you' ? 'border-jm-accent' : 'border-jm-border',
+    p.floating && 'shadow-jm-float',
+    p.className,
+  )
+
+  /* Small is a strip the width of the chat: the thumbnail on the left, the
+     words and buttons beside it, so the transcript above keeps its room. */
+  if (!expanded) {
+    return (
+      <section aria-label="Jarvis’s browser" className={cx(frame, 'grid w-full grid-cols-[minmax(96px,168px)_minmax(0,1fr)] items-start gap-jm-3')}>
+        {screen}
+        <div className="grid min-w-0 gap-jm-2">
+          {header}
+          {body}
+        </div>
+      </section>
+    )
+  }
+
+  return (
+    <section aria-label="Jarvis’s browser" className={cx(frame, 'grid w-jm-computer-lg gap-jm-3')}>
+      {header}
+      {screen}
+      {body}
     </section>
   )
 }

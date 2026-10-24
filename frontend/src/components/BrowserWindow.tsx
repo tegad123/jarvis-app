@@ -151,7 +151,7 @@ export default function BrowserWindow({ busy, hidden, onHiddenChange, onAvailabl
       onInput={onInput}
       busy={working}
       error={error ?? undefined}
-      className={big ? 'w-full' : 'justify-self-end'}
+      className="w-full"
     />
   )
 }

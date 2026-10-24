@@ -113,6 +113,16 @@ try {
   ck('   with the page title', (await card.getByText('Zillow').count()) >= 1)
   ck('   and the ask, as a 30-minute allow', (await card.getByRole('button', { name: 'Allow for 30 min' }).count()) === 1)
   await page.screenshot({ path: new URL('./mono-shots/browser-ask.png', import.meta.url).pathname })
+  const cardBox = await card.boundingBox()
+  const composerBox = await page.getByRole('textbox', { name: 'Message Jarvis' }).boundingBox()
+  const picBox = await card.getByRole('img', { name: /The page/ }).boundingBox()
+  const pillBox = await card.getByText('Action needed').boundingBox()
+  const fmt = (b) => (b ? `${Math.round(b.x)},${Math.round(b.y)} ${Math.round(b.width)}x${Math.round(b.height)}` : 'none')
+  ck('the small card is a short strip (at most 200px tall)', cardBox && cardBox.height <= 200, fmt(cardBox))
+  ck('   it sits above the message box, not over it', cardBox && composerBox && cardBox.y + cardBox.height <= composerBox.y, `${fmt(cardBox)} / ${fmt(composerBox)}`)
+  ck('   it spans the chat column (at least as wide as the message box)', cardBox && composerBox && cardBox.width >= composerBox.width - 2, `${fmt(cardBox)} / ${fmt(composerBox)}`)
+  const overlap = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
+  ck('   the status pill does not cover the page picture', pillBox && picBox && !overlap(pillBox, picBox), `${fmt(pillBox)} / ${fmt(picBox)}`)
 
   ck('a page that loaded shows no refusal line', (await card.getByTestId('browser-refused').count()) === 0)
   state.refused = "zillow.com is refusing this server right now (HTTP 429, too many requests). The page is empty; clicking or retrying won't fix it soon."
