@@ -268,7 +268,38 @@ def _person(sess: dict) -> str:
 def get_status(sess: dict = Depends(auth.current_session)):
     who = _person(sess)
     return {"devices": devices(who), "messages": message_count(who), "retention_days": RETENTION_DAYS,
-            "mac_app": bool(config.public_origin())}
+            "mac_app": bool(config.public_origin()), "reminder": _reminder(who)}
+
+
+def _reminder(who: str) -> Dict[str, Any]:
+    """What the iMessage card says about the reply reminder: on or off, when,
+    to which address, and what happened last time."""
+    from . import accounts, google_connection, text_followup  # noqa: PLC0415
+    cfg = text_followup.settings()
+    g = google_connection.person_status(who)
+    return {"enabled": bool(cfg.get("enabled")), "times_local": list(cfg.get("times_local") or []),
+            "older_than_hours": cfg.get("older_than_hours"), "lookback_days": cfg.get("lookback_days"),
+            "to": g.get("google_email") if g.get("status") == google_connection.STATUS_CONNECTED else None,
+            "google_status": g.get("status"), "send_on": accounts.feature_on(who, "send"),
+            "last": text_followup.last(who)}
+
+
+@settings_router.post("/reminder/email")
+def post_reminder_email(sess: dict = Depends(auth.current_session)):
+    """Email me the texts waiting for my reply, now. Doesn't touch the schedule."""
+    who = _person(sess)
+    auth.require_feature(sess, "imessage")
+    auth.require_feature(sess, "send")
+    from . import text_followup  # noqa: PLC0415
+    if not text_followup.settings().get("enabled"):
+        raise HTTPException(status_code=409, detail="Reply reminders are off for this account.")
+    out = text_followup.send_now(who)
+    if out["result"] == "not_connected":
+        raise HTTPException(status_code=409, detail="Connect your Google first, so Jarvis can email you.")
+    if out["result"] != "sent":
+        raise HTTPException(status_code=502 if out["status"] >= 500 else 409,
+                            detail=f"The reminder wasn't sent ({out['result']}).")
+    return {"sent": True, "waiting": out["waiting"]}
 
 
 @settings_router.get("/mac-app")

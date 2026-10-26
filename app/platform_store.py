@@ -69,12 +69,14 @@ def recent_actions(limit: int = 50, outcome: Optional[str] = None) -> List[Dict[
 
 
 def rates(now: datetime) -> sentinel.Rates:
-    """Executed sends in the last day (9.4 check 4)."""
+    """Executed sends in the last day (9.4 check 4). A reminder the app sent a
+    person at their own address (broker.send_to_self) is not counted: the
+    limit is on reaching people, and its marker is written by the app only."""
     out = sentinel.Rates()
     with platform_db.connect() as c:
         rows = c.execute(
             "SELECT ts, action_class, destinations FROM actions WHERE outcome='executed' AND ts >= %s "
-            "AND action_class IN (%s, %s)",
+            "AND action_class IN (%s, %s) AND NOT COALESCE((detail->>'self_reminder')::boolean, false)",
             (now - timedelta(days=1), sentinel.INTERNAL_SEND, sentinel.EXTERNAL_SEND)).fetchall()
     hour = now - timedelta(hours=1)
     for r in rows:

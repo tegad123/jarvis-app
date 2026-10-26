@@ -345,6 +345,20 @@ export interface MacStatus {
   retention_days: number
   /** The server can hand out Jarvis.app pointed at itself. */
   mac_app?: boolean
+  reminder?: ReplyReminder
+}
+
+/** The twice-daily email of texts waiting for a reply (app/text_followup.py). */
+export interface ReplyReminder {
+  enabled: boolean
+  times_local: string[]
+  older_than_hours: number
+  lookback_days: number
+  /** Their own Gmail, when connected: the reminder goes from it, to it. */
+  to: string | null
+  google_status: string
+  send_on: boolean
+  last: { slot: string; result: string; at: string } | null
 }
 
 export interface WebsiteLogin {

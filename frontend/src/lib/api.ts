@@ -266,6 +266,10 @@ export function newMacCode(): Promise<{ code: string; expires_at: string }> {
   return requestOk('/api/imessage/pair', { method: 'POST' })
 }
 
+export function sendReplyReminder(): Promise<{ sent: boolean; waiting: number }> {
+  return requestOk('/api/imessage/reminder/email', { method: 'POST' })
+}
+
 export function disconnectMac(deviceId: string): Promise<{ ok: boolean }> {
   return requestOk(`/api/imessage/devices/${encodeURIComponent(deviceId)}`, { method: 'DELETE' })
 }

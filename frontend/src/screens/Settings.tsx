@@ -6,6 +6,7 @@ import {
   deleteWebsiteLogin,
   disconnectGoogleConnection,
   disconnectMac,
+  sendReplyReminder,
   getBrowserStatus,
   getGoogleConnection,
   getMacStatus,
@@ -20,7 +21,7 @@ import { Button, ErrorState, Field, PairingCode, SettingsSection, type SettingsS
 import { Select, cx, focus } from '../jm/shared/primitives'
 import { canManageTeam, canSeeSettings, ROLE_LABEL } from '../lib/roles'
 import { absoluteTime, relativeTime } from '../lib/time'
-import type { Feature, GoogleConnectionStatus, MacDevice, MacStatus, Role, TeamPerson, TeamResponse, WebsiteLogin } from '../lib/types'
+import type { Feature, GoogleConnectionStatus, MacDevice, MacStatus, ReplyReminder, Role, TeamPerson, TeamResponse, WebsiteLogin } from '../lib/types'
 
 /**
  * Settings — the signed-in person's own accounts. Any person; never the
@@ -485,7 +486,60 @@ function MacMessages({ onUnauthorized }: { onUnauthorized: () => void }) {
         </ol>
       )}
       {code && !st.mac_app && <PairingCode code={code.code} expires={absoluteTime(code.expires_at)} />}
+      {st.reminder?.enabled && st.devices.length > 0 && (
+        <ReplyReminderNote reminder={st.reminder} onUnauthorized={onUnauthorized} />
+      )}
     </SettingsSection>
+  )
+}
+
+function clockLabel(hhmm: string): string {
+  const [h, m] = hhmm.split(':').map(Number)
+  return `${h % 12 || 12}${m ? `:${String(m).padStart(2, '0')}` : ''} ${h < 12 ? 'AM' : 'PM'}`
+}
+
+function listLabel(items: string[]): string {
+  return items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
+}
+
+/** The twice-daily "texts waiting for your reply" email. It goes from the
+ *  person's own Gmail to that same address, so without one it can't go. */
+function ReplyReminderNote({ reminder, onUnauthorized }: { reminder: ReplyReminder; onUnauthorized: () => void }) {
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState<string | null>(null)
+  const when = listLabel(reminder.times_local.map(clockLabel))
+
+  async function sendNow() {
+    setBusy(true)
+    setNote(null)
+    try {
+      const r = await sendReplyReminder()
+      setNote(r.waiting ? `Sent: ${r.waiting} waiting for your reply.` : 'Sent: nothing is waiting for your reply.')
+    } catch (err) {
+      if (err instanceof Unauthorized) return onUnauthorized()
+      setNote(err instanceof ApiError ? err.message : 'The email could not be sent.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  let text: string
+  if (!reminder.send_on) text = `Reply reminders are paused: sending is switched off for you.`
+  else if (!reminder.to) text = `Connect your Google account above and Jarvis will email you at ${when} with the texts still waiting for your reply.`
+  else text = `At ${when}, Jarvis emails ${reminder.to} the texts still waiting for your reply.`
+
+  return (
+    <div className="grid gap-jm-2 text-jm-body-sm text-jm-fg-secondary" data-testid="reply-reminder">
+      <p className="m-0">{text}</p>
+      {reminder.to && reminder.send_on && (
+        <div className="flex flex-wrap items-center gap-jm-3">
+          <Button variant="secondary" disabled={busy} onClick={() => void sendNow()}>
+            Email me the list now
+          </Button>
+          {note && <span role="status">{note}</span>}
+        </div>
+      )}
+    </div>
   )
 }
 

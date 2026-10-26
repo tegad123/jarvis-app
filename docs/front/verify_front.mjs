@@ -257,6 +257,10 @@ print(json.dumps({"modes": out, "server": z.read("Jarvis.app/Contents/Resources/
   })()
   const afterSync = await macCard()
   ck('Settings says "Waiting for the Mac", not Connected, while a paired Mac has never synced', paired?.status === 'Waiting for the Mac' && /hasn’t synced yet/.test(paired?.text || ''), JSON.stringify(paired?.status))
+  const reminderOn = process.env.VERIFY_TEXT_FOLLOWUP === '1'
+  const note = /Connect your Google account above and Jarvis will email you at 7 AM and 5 PM with the texts still waiting for your reply\./.test(afterSync.text)
+  ck(reminderOn ? 'reply reminders on: the card says when, and that her Google must be connected first'
+    : 'reply reminders off (the default): the card says nothing about them', reminderOn ? note : !/Jarvis will email you|Jarvis emails/.test(afterSync.text))
   ck('   and "Syncing" once a sync has landed', afterSync.status === 'Syncing' && /synced just now|synced \d/.test(afterSync.text), JSON.stringify(afterSync.status))
   ck('a second sync stores nothing new', again === 0 && danaMessages() === before + expected, `stored=${again}`)
   const sqls = calls.filter((c) => c.startsWith('/usr/bin/sqlite3 '))

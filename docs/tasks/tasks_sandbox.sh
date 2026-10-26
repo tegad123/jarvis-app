@@ -70,8 +70,11 @@ src.backup(dst); dst.close(); src.close()
   python3 -c "
 import json, sys
 cfg = json.load(open(sys.argv[1])); cfg.setdefault('paths', {})['app_root'] = sys.argv[2]
+if sys.argv[4] == '1':
+    cfg.setdefault('app', {})['text_followup'] = {'enabled': True, 'times_local': ['07:00', '17:00'],
+                                                  'older_than_hours': 2, 'lookback_days': 7}
 open(sys.argv[3], 'w').write(json.dumps(cfg, indent=2) + '\n')
-" "$TESTCO_SKILLS/_shared/runtime.json" "$APP" "$SB/runtime.json"
+" "$TESTCO_SKILLS/_shared/runtime.json" "$APP" "$SB/runtime.json" "${VERIFY_TEXT_FOLLOWUP:-0}"
   # Env wins over the fixture's .env, so a caller-supplied passphrase is the one the app checks.
   if [ -n "${VERIFY_OPERATOR_PASSPHRASE:-}" ]; then export APP_PASSPHRASE="$VERIFY_OPERATOR_PASSPHRASE"; fi
 

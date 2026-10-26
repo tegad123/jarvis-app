@@ -133,6 +133,12 @@ def _announce_app_logging() -> None:
                broker_mod.sentinel_mode(), PLATFORM_DB or "not used (sentinel off)")
 
 
+@app.on_event("startup")
+def _start_text_followup() -> None:
+    from app import text_followup  # noqa: PLC0415
+    text_followup.start()
+
+
 class LoginRequest(BaseModel):
     """Either a per-person sign-in, or the break-glass operator passphrase.
 

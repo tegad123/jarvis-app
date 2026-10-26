@@ -301,6 +301,29 @@ def channel_categories(manifest: dict) -> List[str]:
     return [n.strip() for n in v]
 
 
+def text_followup(manifest: dict) -> dict:
+    """`text_followup: {enabled, times_local, older_than_hours, lookback_days}`:
+    each person with a Mac gets an email from their own Gmail to themselves
+    listing texts waiting for their reply. Off unless enabled: true."""
+    v = manifest.get("text_followup") or {}
+    if not isinstance(v, dict):
+        die("text_followup must be a mapping")
+    unknown = set(v) - {"enabled", "times_local", "older_than_hours", "lookback_days"}
+    if unknown:
+        die(f"text_followup has unknown keys: {sorted(unknown)}")
+    times = v.get("times_local", ["07:00", "17:00"])
+    if not isinstance(times, list) or not 0 < len(times) <= 6 or \
+            not all(isinstance(t, str) and re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", t) for t in times):
+        die("text_followup.times_local must be 1-6 times like '07:00'")
+    hours, days = v.get("older_than_hours", 2), v.get("lookback_days", 7)
+    if isinstance(hours, bool) or not isinstance(hours, (int, float)) or not 0 <= hours <= 72:
+        die("text_followup.older_than_hours must be 0 to 72")
+    if isinstance(days, bool) or not isinstance(days, int) or not 1 <= days <= 30:
+        die("text_followup.lookback_days must be a whole number, 1 to 30")
+    return {"enabled": v.get("enabled") is True, "times_local": sorted(times),
+            "older_than_hours": hours, "lookback_days": days}
+
+
 def browser_unit_names(slug: str) -> List[str]:
     return [f"{slug}-browser.socket", f"{slug}-browser.service", f"{slug}-egress.socket", f"{slug}-egress.service"]
 
@@ -881,6 +904,7 @@ def build_client_config(manifest: dict, paths: dict, shipped: List[str], loadout
             },
             "imessage": {"history_days": imessage_history_days(manifest)},
             "channels": {"categories": channel_categories(manifest)},
+            "text_followup": text_followup(manifest),
         },
         "schedule": schedule,
         "credentials": {},

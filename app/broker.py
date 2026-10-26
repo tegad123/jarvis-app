@@ -460,6 +460,85 @@ def gate_google(api, version, method, params, ctx, approval: Optional[Dict[str, 
     return out.status_code, _json.loads(out.body)
 
 
+SELF_SKILL = "text-followup"
+
+
+def send_to_self(person: str, subject: str, text: str, kind: str) -> Tuple[int, Dict[str, Any]]:
+    """An email the app wrote, from a person's own Gmail to that same address
+    and nobody else. The one personal send that needs no tap (human yes
+    2026-10-26: the twice-daily texts reminder). Never routed: no agent, chat
+    turn or tool reaches it; every other personal send still waits for the
+    owner in gate_google. Same ledger, switches, practice mode and policy."""
+    from email.message import EmailMessage  # noqa: PLC0415
+    from . import accounts, google_connection  # noqa: PLC0415
+    if not switches.on("sentinel"):
+        _bump("broker_sentinel_switch_off")
+        return 503, {"error": "sentinel_off", "detail": "Sentinel is switched off; nothing was sent."}
+    st = google_connection.person_status(person)
+    addr = str(st.get("google_email") or "").strip()
+    if st.get("status") != google_connection.STATUS_CONNECTED or not addr:
+        return 409, {"error": "not_connected", "detail": "Their own Google isn't connected."}
+    if not accounts.feature_on(person, "send"):
+        _bump("feature_refused_send")
+        return 403, {"error": "feature_off", "detail": "Sending is switched off for this person."}
+    msg = EmailMessage()
+    msg["To"], msg["From"], msg["Subject"] = addr, addr, subject
+    msg.set_content(text)
+    params = {"userId": "me", "body": {"raw": base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")}}
+    addrs, refusal = _recipients(params)
+    if sorted({a.lower() for a in addrs}) != [addr.lower()]:
+        _bump("broker_self_send_refused")
+        log.error("broker: a self-only send had another recipient; refused")
+        return 403, {"error": "not_self", "detail": "A reminder may only go to the person's own address."}
+    cls, dests = sentinel.classify_google("gmail", "users.messages.send", params, _org_domains(), addrs)
+    try:
+        user_mode, ceiling = store.policy_modes(OWNER, SELF_SKILL, cls)
+    except platform_db.Unavailable as exc:
+        _bump("broker_sentinel_db_unavailable")
+        log.error("broker: platform database unavailable, self send refused (%s)", exc)
+        return 503, {"error": "sentinel_unavailable", "detail": "The platform database is unavailable; nothing ran."}
+    mode = sentinel.effective_mode(cls, user_mode, ceiling)
+    action = sentinel.Action(connector="gmail", method="users.messages.send", cls=cls, destinations=dests,
+                             skill=SELF_SKILL, user=OWNER, tainted=False, source_kind="system",
+                             source_id=f"self_reminder.{kind}")
+    if mode == sentinel.BLOCK:
+        decision = sentinel.Decision(sentinel.DENY, "this kind of send is blocked by policy", cls, mode)
+    else:
+        decision = sentinel.Decision(sentinel.ALLOW, "the app's reminder to the person's own address only", cls, mode)
+    fields = store.fields_from_summary(sentinel.summarize(action, decision))
+    fields["sentinel_mode"] = sentinel_mode()
+
+    mark = {"self_reminder": True}
+
+    def refused(status, error, outcome, counter, detail):
+        aid = store.record_action("decision", outcome, fields, mark)
+        _bump(counter)
+        log.warning("broker: self reminder %s (%s)", outcome, detail)
+        return status, {"error": error, "detail": detail, "action_id": aid}
+
+    if sentinel_mode() == SHADOW:
+        return refused(409, "shadowed", "shadowed", "broker_self_send_shadowed",
+                       "Practice mode: logged, not sent.")
+    if not _writes_allowed():
+        return refused(403, "writes_disabled", "writes_disabled", "broker_google_write_refused",
+                       "Writes are disabled for this tenant.")
+    if refusal:
+        return refused(403, "recipient_refused", "recipient_refused", "broker_google_recipient_refused",
+                       "The address is outside the outbound boundary.")
+    if decision.verdict == sentinel.DENY:
+        return refused(403, "sentinel_denied", "denied", "broker_sentinel_denied", decision.reason)
+    store.record_action("decision", "allowed", fields, mark)
+    out = _execute("gmail", "v1", "users.messages.send", params, WRITE, person=person)
+    ok = isinstance(out, dict)
+    aid = store.record_action("decision", "executed" if ok else "failed",
+                              {**fields, **({} if ok else {"status_code": getattr(out, "status_code", None)})}, mark)
+    _bump("broker_self_send_executed" if ok else "broker_self_send_failed")
+    if ok:
+        return 200, {**out, "action_id": aid}
+    import json as _json  # noqa: PLC0415
+    return out.status_code, _json.loads(out.body)
+
+
 def execute_approved(item: Dict[str, Any], scope: str, decided_by: str) -> Dict[str, Any]:
     """Run an approved broker action through the gate again, with the approval
     answering `ask`. A wider scope than once becomes a grant first."""
