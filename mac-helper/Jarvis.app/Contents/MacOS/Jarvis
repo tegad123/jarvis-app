@@ -25,6 +25,19 @@ fail() {
 
 DEST=/Applications
 [ -w "$DEST" ] || { DEST="$HOME/Applications"; mkdir -p "$DEST"; }
+
+# Every build is signed anew, and Full Disk Access belongs to one signature:
+# rebuilding the same app would switch access off. Opening the download again
+# with nothing new just opens the installed Jarvis.
+STAMP="$HOME/Library/Application Support/Jarvis/installed.sha256"
+WANT="$(cat "$RES/helper.js" "$RES/server.txt" | /usr/bin/shasum -a 256 | cut -d' ' -f1)"
+for D in /Applications "$HOME/Applications"; do
+  if [ -x "$D/Jarvis.app/Contents/MacOS/applet" ] && [ "$(cat "$STAMP" 2>/dev/null)" = "$WANT $D" ]; then
+    echo "already installed at $D/Jarvis.app; opening it, not rebuilding"
+    exec /usr/bin/open "$D/Jarvis.app"
+  fi
+done
+
 BUILD="$(mktemp -d "${TMPDIR:-/tmp}/jarvis-build.XXXXXX")" || fail "no scratch folder"
 APP="$BUILD/Jarvis.app"
 
@@ -54,5 +67,6 @@ rm -rf "$DEST/Jarvis.app.new"
 rm -rf "$DEST/Jarvis.app" && mv "$DEST/Jarvis.app.new" "$DEST/Jarvis.app" || fail "could not put Jarvis in $DEST"
 /usr/bin/xattr -dr com.apple.quarantine "$DEST/Jarvis.app" 2>/dev/null
 rm -rf "$BUILD"
+mkdir -p "$(dirname "$STAMP")" && echo "$WANT $DEST" > "$STAMP" || echo "WARNING: could not record the install; opening the download again will rebuild"
 echo "installed $DEST/Jarvis.app"
 exec /usr/bin/open "$DEST/Jarvis.app"

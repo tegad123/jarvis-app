@@ -44,17 +44,18 @@ function ck(name, ok, detail = '') {
 
 const TOOLS = ['osacompile', 'plutil', 'codesign', 'tccutil', 'launchctl', 'pkill', 'ditto', 'xattr', 'open', 'osascript']
 
-function runInstaller({ osacompileFails = false } = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'jv-install-'))
+function runInstaller({ osacompileFails = false, root = mkdtempSync(join(tmpdir(), 'jv-install-')), keep = false, helperExtra = '' } = {}) {
   const home = join(root, 'home')
   const stubs = join(root, 'stubs')
   const log = join(root, 'calls.log')
   mkdirSync(home, { recursive: true })
+  rmSync(stubs, { recursive: true, force: true })
+  rmSync(log, { force: true })
   mkdirSync(stubs)
   const dl = join(root, 'Downloads/Jarvis.app')
   mkdirSync(join(dl, 'Contents/MacOS'), { recursive: true })
   mkdirSync(join(dl, 'Contents/Resources'), { recursive: true })
-  writeFileSync(join(dl, 'Contents/Resources/helper.js'), readFileSync(HELPER))
+  writeFileSync(join(dl, 'Contents/Resources/helper.js'), readFileSync(HELPER, 'utf8') + helperExtra)
   writeFileSync(join(dl, 'Contents/Resources/server.txt'), 'https://acct.example\n')
   for (const t of TOOLS) {
     let body = `echo "${t} $*" >> '${log}'\n`
@@ -62,7 +63,7 @@ function runInstaller({ osacompileFails = false } = {}) {
       body += osacompileFails
         ? 'exit 1\n'
         : 'out="$4"; mkdir -p "$out/Contents/MacOS" "$out/Contents/Resources"; echo plist > "$out/Contents/Info.plist"; ' +
-          'echo applet > "$out/Contents/MacOS/applet"; cp "$5" "$out/Contents/Resources/main.js"; ' +
+          'echo applet > "$out/Contents/MacOS/applet"; chmod +x "$out/Contents/MacOS/applet"; cp "$5" "$out/Contents/Resources/main.js"; ' +
           `echo "  built from $(head -c 60 "$5" | tr -d '\\n')" >> '${log}'\n`
     }
     if (t === 'ditto') body += 'cp -R "$1" "$2"\n'
@@ -87,7 +88,7 @@ function runInstaller({ osacompileFails = false } = {}) {
       ? readFileSync(join(home, 'Library/Logs/Jarvis-install.log'), 'utf8') : '',
     installedPath: installed,
   }
-  rmSync(root, { recursive: true, force: true })
+  if (!keep) rmSync(root, { recursive: true, force: true })
   return out
 }
 
@@ -111,6 +112,17 @@ ck('   it clears the stale Full Disk Access entry, and says whether that worked'
   idx(/^tccutil reset SystemPolicyAllFiles com\.jarvis\.messages$/) >= 0 && /cleared the old Full Disk Access entry|WARNING: tccutil/.test(inst.installLog))
 ck('   it opens the installed app, not the download', inst.calls[inst.calls.length - 1] === `open ${inst.installedPath}`, inst.calls[inst.calls.length - 1])
 ck('   nothing runs helper.js through osascript any more', !inst.calls.some((c) => /^osascript .*helper\.js/.test(c)) && !/osascript[^\n]*helper\.js/.test(readFileSync(LAUNCHER, 'utf8')))
+
+const again = mkdtempSync(join(tmpdir(), 'jv-again-'))
+const first = runInstaller({ root: again, keep: true })
+const second = runInstaller({ root: again, keep: true })
+ck('opening the same download again does not rebuild, re-sign or reset Full Disk Access (that switched access off)',
+  first.status === 0 && second.status === 0 && !second.calls.some((c) => /^(osacompile|codesign|tccutil) /.test(c)),
+  second.calls.filter((c) => /^(osacompile|codesign|tccutil) /.test(c)).join(' | '))
+ck('   it opens the installed Jarvis instead', second.calls[second.calls.length - 1] === `open ${second.installedPath}`, second.calls.join(' | '))
+const updated = runInstaller({ root: again, helperExtra: '\n// a newer build\n' })
+ck('   presence twin: a download with a changed app does rebuild and re-sign',
+  updated.status === 0 && updated.calls.some((c) => /^osacompile /.test(c)) && updated.calls.some((c) => /^codesign --force /.test(c)))
 
 const bad = runInstaller({ osacompileFails: true })
 ck('canary: when osacompile fails, it exits non-zero and installs nothing', bad.status !== 0 && !bad.installed, `rc=${bad.status} installed=${bad.installed}`)
