@@ -22,6 +22,7 @@ Environment=JARVIS_SKILLS_ROOT={{SKILLS}}
 Environment=HERMES_API_URL=http://127.0.0.1:{{GATEWAY_PORT}}
 Environment=JARVIS_RUNTIME_CONFIG={{SKILLS}}/_shared/runtime.json
 Environment=JARVIS_IDENTITY_CONFIG={{SKILLS}}/_shared/identity.json
+Environment=JARVIS_TEAM_FILE={{HERMES_HOME}}/state/team.json
 Environment=JARVIS_ACTIVITY_FEED={{HERMES_HOME}}/state/activity_feed.jsonl
 Environment=JARVIS_TASKS_DB={{HERMES_HOME}}/state/jarvis_tasks.db
 Environment=JARVIS_THREADS_DB={{HERMES_HOME}}/state/jarvis_threads.db

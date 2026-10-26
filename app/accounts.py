@@ -31,8 +31,10 @@ PINS
 
 import hashlib
 import hmac
+import json
 import logging
 import os
+import re
 import secrets
 import sqlite3
 import sys
@@ -58,6 +60,7 @@ ROLES = ("owner", "admin", "member")
 _ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
 _PBKDF2_ROUNDS = 240_000
 _EMAIL_INDEX = "idx_accounts_email_lower"
+_EMAIL_FORM = re.compile(r"[^@\s]+@[^@\s]+\.[a-z]{2,}")
 
 log = logging.getLogger(__name__)
 
@@ -151,11 +154,33 @@ def init() -> None:
                 refreshed_at  TEXT,
                 last_error    TEXT
             );
+
+            -- People invited from Settings → Team. The provisioner's registry
+            -- is re-rendered on every upgrade, so someone added at runtime
+            -- lives here and reaches identity.py through the team file.
+            CREATE TABLE IF NOT EXISTS team_people (
+                person_key  TEXT PRIMARY KEY,
+                name        TEXT NOT NULL,
+                title       TEXT NOT NULL DEFAULT '',
+                invited_by  TEXT NOT NULL,
+                invited_at  TEXT NOT NULL
+            );
+
+            -- A row only when an admin flipped a switch; no row means on.
+            CREATE TABLE IF NOT EXISTS person_features (
+                person_key  TEXT NOT NULL,
+                feature     TEXT NOT NULL,
+                enabled     INTEGER NOT NULL,
+                set_by      TEXT NOT NULL,
+                set_at      TEXT NOT NULL,
+                PRIMARY KEY (person_key, feature)
+            );
             """
         )
         conn.commit()
         _initialised = True
     backfill_emails_from_identity()
+    write_team_file()
 
 
 def _ensure() -> sqlite3.Connection:
@@ -402,6 +427,7 @@ def set_role(person_key: str, role: str) -> Dict[str, Any]:
     conn.execute("UPDATE accounts SET role=?, updated_at=? WHERE person_key=?",
                  (role, _now(), person_key))
     conn.commit()
+    write_team_file()
     return get(person_key)
 
 
@@ -417,6 +443,7 @@ def set_disabled(person_key: str, disabled: bool = True) -> Dict[str, Any]:
     conn.execute("UPDATE accounts SET disabled=?, updated_at=? WHERE person_key=?",
                  (1 if disabled else 0, _now(), person_key))
     conn.commit()
+    write_team_file()
     return get(person_key)
 
 
@@ -435,3 +462,179 @@ def verify(person_key: str, pin: str) -> Optional[Dict[str, Any]]:
     conn.execute("UPDATE accounts SET last_login=? WHERE person_key=?", (_now(), person_key))
     conn.commit()
     return get(person_key)
+
+
+# ── the team: invites and per-person features ────────────────────────────────
+
+FEATURES = ("ask", "leads", "tasks", "send", "browser", "imessage")
+FEATURE_LABELS = {
+    "ask": "Ask Jarvis",
+    "leads": "Leads",
+    "tasks": "Tasks",
+    "send": "Sending email",
+    "browser": "Web browser",
+    "imessage": "iMessage",
+}
+INVITE_ROLES = ("admin", "member")
+_KEY_RE = re.compile(r"[a-z][a-z0-9]{1,31}")
+
+
+def team_file() -> Optional[Path]:
+    """Where invites reach identity.py, or None when they can't: no path set,
+    or a skills checkout whose identity.py predates the team file."""
+    raw = os.environ.get("JARVIS_TEAM_FILE", "").strip()
+    if not raw:
+        return None
+    if not hasattr(identity, "feature_on"):
+        log.warning("team: identity.py at %s does not read the team file; invites are refused", config.SHARED)
+        return None
+    return Path(raw)
+
+
+def _bump(name: str) -> None:
+    try:
+        from . import threads  # noqa: PLC0415
+        threads.bump_counter(name)
+    except Exception:
+        log.error("accounts: counter %s could not be bumped", name)
+
+
+def write_team_file() -> bool:
+    """Export invited people and switched-off features for identity.py.
+
+    The database is the record; this file is derived from it on every change
+    and at startup, and written atomically so a reader never sees half."""
+    path = team_file()
+    if path is None:
+        log.warning("team: JARVIS_TEAM_FILE is not set; invites are refused on this tenant")
+        return False
+    conn = _ensure()
+    accts = {r["person_key"]: dict(r) for r in conn.execute("SELECT * FROM accounts")}
+    people = {}
+    for r in conn.execute("SELECT * FROM team_people ORDER BY invited_at"):
+        a = accts.get(r["person_key"]) or {}
+        people[r["person_key"]] = {
+            "name": r["name"], "display_name": r["name"].split()[0], "title": r["title"],
+            "email": [a["email"]] if a.get("email") else [],
+            "roles": ["internal", "admin"] if a.get("role") == "admin" else ["internal"],
+        }
+    off: Dict[str, List[str]] = {}
+    for r in conn.execute("SELECT person_key, feature FROM person_features WHERE enabled = 0"):
+        if (accts.get(r["person_key"]) or {}).get("role") != "owner":
+            off.setdefault(r["person_key"], []).append(r["feature"])
+    body = json.dumps({"people": people, "features_off": off}, indent=1, sort_keys=True) + "\n"
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(body)
+        os.chmod(tmp, 0o660)
+        os.replace(tmp, path)
+    except OSError as exc:
+        _bump("team_file_write_failed")
+        log.error("team: could not write %s: %s", path, exc)
+        return False
+    identity.load(force=True)
+    return True
+
+
+def _new_key(name: str) -> str:
+    base = re.sub(r"[^a-z0-9]", "", (name.split() or [""])[0].lower())
+    base = base.lstrip("0123456789")[:24] or "person"
+    if len(base) < 2:
+        base = base + "x"
+    taken = set(identity.load(force=True).get("people") or {})
+    taken |= {r["person_key"] for r in _ensure().execute("SELECT person_key FROM team_people")}
+    taken |= {r["person_key"] for r in _ensure().execute("SELECT person_key FROM accounts")}
+    key, n = base, 2
+    while key in taken:
+        key, n = f"{base}{n}", n + 1
+    if not _KEY_RE.fullmatch(key):
+        raise AccountError("Could not make a name for that person; try their first name in letters.")
+    return key
+
+
+def invite(name: str, email: str, role: str, by: str, title: str = "") -> Dict[str, Any]:
+    """Add someone to the team. They sign in with Google using this address;
+    there is no PIN and no link to forward."""
+    if team_file() is None:
+        _bump("team_invite_no_team_file")
+        raise AccountError("Inviting isn't set up on this account yet.")
+    name = " ".join((name or "").split())[:80]
+    if not name:
+        raise AccountError("Their name is required.")
+    if role not in INVITE_ROLES:
+        raise AccountError("Role must be admin or member.")
+    addr = normalize_email(email)
+    if not addr or not _EMAIL_FORM.fullmatch(addr):
+        raise AccountError("That doesn't look like an email address.")
+    if get_by_email(addr) or identity.resolve(addr):
+        raise AccountError("Someone on the team already has that email.")
+    key = _new_key(name)
+    now = _now()
+    conn = _ensure()
+    try:
+        with conn:
+            conn.execute("INSERT INTO team_people (person_key, name, title, invited_by, invited_at) "
+                         "VALUES (?,?,?,?,?)", (key, name, (title or "").strip()[:80], by, now))
+            conn.execute("INSERT INTO accounts (person_key, role, pin_hash, pin_salt, disabled, created_at, "
+                         "updated_at, email) VALUES (?,?,NULL,NULL,0,?,?,?)", (key, role, now, now, addr))
+    except sqlite3.IntegrityError:
+        raise AccountError("Someone on the team already has that email.")
+    if not write_team_file():
+        raise AccountError("They were saved, but Jarvis couldn't update the team list. Try again.")
+    _bump("team_invited")
+    return get(key)
+
+
+def features(person_key: str) -> Dict[str, bool]:
+    """Every feature for this person; on unless an admin switched it off. The
+    owner's are always on, so nobody can lock the account out of itself."""
+    out = {f: True for f in FEATURES}
+    if (get(person_key) or {}).get("role") == "owner":
+        return out
+    for r in _ensure().execute("SELECT feature, enabled FROM person_features WHERE person_key = ?",
+                               (person_key,)):
+        if r["feature"] in out:
+            out[r["feature"]] = bool(r["enabled"])
+    return out
+
+
+def feature_on(person_key: Optional[str], feature: str) -> bool:
+    if feature not in FEATURES:
+        raise ValueError(f"unknown feature {feature!r}")
+    if not person_key:
+        return True
+    return features(person_key)[feature]
+
+
+def set_feature(person_key: str, feature: str, enabled: bool, by: str) -> Dict[str, bool]:
+    if feature not in FEATURES:
+        raise AccountError(f"feature must be one of {FEATURES}")
+    acct = get(person_key)
+    if acct is None:
+        raise AccountError("No such person on the team.")
+    if acct["role"] == "owner":
+        raise AccountError("The owner always has every feature.")
+    conn = _ensure()
+    with conn:
+        conn.execute(
+            "INSERT INTO person_features (person_key, feature, enabled, set_by, set_at) VALUES (?,?,?,?,?) "
+            "ON CONFLICT(person_key, feature) DO UPDATE SET enabled=excluded.enabled, "
+            "set_by=excluded.set_by, set_at=excluded.set_at",
+            (person_key, feature, 1 if enabled else 0, by, _now()))
+    if not write_team_file():
+        _bump("team_feature_file_stale")
+    _bump(f"team_feature_{'on' if enabled else 'off'}")
+    return features(person_key)
+
+
+def team() -> List[Dict[str, Any]]:
+    """The Team screen: everyone who can sign in or has been invited."""
+    invited = {r["person_key"]: dict(r) for r in _ensure().execute("SELECT * FROM team_people")}
+    out = []
+    for r in roster():
+        acct = get(r["person_key"]) or {}
+        out.append({**r, "email": acct.get("email"), "invited": r["person_key"] in invited,
+                    "invited_at": (invited.get(r["person_key"]) or {}).get("invited_at"),
+                    "has_account": bool(acct), "features": features(r["person_key"])})
+    return out

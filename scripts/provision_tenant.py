@@ -290,6 +290,17 @@ def imessage_history_days(manifest: dict) -> int:
     return v
 
 
+def channel_categories(manifest: dict) -> List[str]:
+    """Sidebar sections a new account starts with: `channels: {categories: [...]}`.
+    Seeded once by the app; after that they are the admins' to change."""
+    v = (manifest.get("channels") or {}).get("categories", [])
+    if not isinstance(v, list) or len(v) > 20 or not all(isinstance(n, str) and 0 < len(n.strip()) <= 60 for n in v):
+        die("channels.categories must be a list of up to 20 names, 1-60 characters each")
+    if len({n.strip().lower() for n in v}) != len(v):
+        die("channels.categories has the same name twice")
+    return [n.strip() for n in v]
+
+
 def browser_unit_names(slug: str) -> List[str]:
     return [f"{slug}-browser.socket", f"{slug}-browser.service", f"{slug}-egress.socket", f"{slug}-egress.service"]
 
@@ -869,6 +880,7 @@ def build_client_config(manifest: dict, paths: dict, shipped: List[str], loadout
                 "team_destinations": list(feed.get("team_destinations") or ["ops"]),
             },
             "imessage": {"history_days": imessage_history_days(manifest)},
+            "channels": {"categories": channel_categories(manifest)},
         },
         "schedule": schedule,
         "credentials": {},

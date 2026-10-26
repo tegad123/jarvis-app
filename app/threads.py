@@ -166,6 +166,19 @@ def init() -> None:
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_threads_direct_for "
                 "ON threads(direct_for) WHERE direct_for IS NOT NULL"
             )
+        # Sidebar sections (Listings, Buyers, …). A category is structure, not
+        # access: who sees a channel is still only thread_members.
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS channel_categories (
+                   category_id TEXT PRIMARY KEY,
+                   name        TEXT NOT NULL,
+                   position    INTEGER NOT NULL,
+                   created_by  TEXT,
+                   created_at  TEXT NOT NULL
+               )"""
+        )
+        if "category_id" not in tcols:
+            conn.execute("ALTER TABLE threads ADD COLUMN category_id TEXT")
         conn.execute(
             """
             INSERT OR IGNORE INTO threads
@@ -177,6 +190,36 @@ def init() -> None:
         conn.commit()
         _initialised = True
         _migrate_to_owner(conn)
+        _seed_categories(conn)
+
+
+SEEDED_FLAG = "channel_categories_seeded"
+
+
+def _seed_categories(conn: sqlite3.Connection) -> None:
+    """The tenant's starting sections (app.channels.categories), once. After
+    that they are the admins' to rename, reorder and delete; a later config
+    change never brings back one an admin removed."""
+    if conn.execute("SELECT 1 FROM counters WHERE name = ?", (SEEDED_FLAG,)).fetchone():
+        return
+    try:
+        if str(config.SHARED) not in sys.path:
+            sys.path.insert(0, str(config.SHARED))
+        import tenant_config as tc  # noqa: PLC0415
+        names = tc.get("app.channels.categories", []) or []
+    except Exception as exc:
+        log.error("threads: could not read app.channels.categories (%s); no sections seeded", exc)
+        return
+    if not isinstance(names, list) or not names:
+        return
+    import uuid
+    with conn:
+        for i, name in enumerate(n for n in names if isinstance(n, str) and n.strip()):
+            conn.execute(
+                "INSERT INTO channel_categories (category_id, name, position, created_by, created_at) "
+                "VALUES (?,?,?,?,?)", (f"cat_{uuid.uuid4().hex[:10]}", name.strip()[:60], i, "setup", _now()))
+        conn.execute("INSERT INTO counters (name, value, updated_at) VALUES (?, 1, ?)", (SEEDED_FLAG, _now()))
+    log.info("threads: seeded %d channel categories from tenant config", len(names))
 
 
 def _migrate_to_owner(conn: sqlite3.Connection) -> None:
@@ -254,7 +297,93 @@ def _row_to_thread(row: sqlite3.Row) -> Dict[str, Any]:
         # its messages point at it.
         "is_direct": bool(row["direct_for"]) if "direct_for" in row.keys()
         else row["thread_id"] == DIRECT_THREAD,
+        "category_id": row["category_id"] if "category_id" in row.keys() else None,
     }
+
+
+# ------------------------------------------------------------------ categories
+
+
+class CategoryNotFound(ThreadError):
+    pass
+
+
+def categories() -> List[Dict[str, Any]]:
+    conn = _ensure()
+    return [dict(r) for r in conn.execute(
+        "SELECT category_id, name, position FROM channel_categories ORDER BY position, created_at")]
+
+
+def _category_exists(conn: sqlite3.Connection, category_id: str) -> bool:
+    return conn.execute("SELECT 1 FROM channel_categories WHERE category_id = ?",
+                        (category_id,)).fetchone() is not None
+
+
+def create_category(name: str, by: Optional[str]) -> Dict[str, Any]:
+    name = (name or "").strip()[:60]
+    if not name:
+        raise ValueError("Category name is required.")
+    conn = _ensure()
+    if conn.execute("SELECT 1 FROM channel_categories WHERE lower(name) = lower(?)", (name,)).fetchone():
+        raise ValueError("There's already a category with that name.")
+    import uuid
+    cid = f"cat_{uuid.uuid4().hex[:10]}"
+    pos = conn.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM channel_categories").fetchone()[0]
+    with conn:
+        conn.execute("INSERT INTO channel_categories (category_id, name, position, created_by, created_at) "
+                     "VALUES (?,?,?,?,?)", (cid, name, pos, by, _now()))
+    return {"category_id": cid, "name": name, "position": pos}
+
+
+def update_category(category_id: str, name: Optional[str] = None,
+                    position: Optional[int] = None) -> Dict[str, Any]:
+    conn = _ensure()
+    if not _category_exists(conn, category_id):
+        raise CategoryNotFound(category_id)
+    with conn:
+        if name is not None:
+            name = name.strip()[:60]
+            if not name:
+                raise ValueError("Category name is required.")
+            if conn.execute("SELECT 1 FROM channel_categories WHERE lower(name) = lower(?) AND category_id != ?",
+                            (name, category_id)).fetchone():
+                raise ValueError("There's already a category with that name.")
+            conn.execute("UPDATE channel_categories SET name = ? WHERE category_id = ?", (name, category_id))
+        if position is not None:
+            order = [r["category_id"] for r in conn.execute(
+                "SELECT category_id FROM channel_categories ORDER BY position, created_at")]
+            order.remove(category_id)
+            order.insert(max(0, min(int(position), len(order))), category_id)
+            for i, cid in enumerate(order):
+                conn.execute("UPDATE channel_categories SET position = ? WHERE category_id = ?", (i, cid))
+    return next(c for c in categories() if c["category_id"] == category_id)
+
+
+def delete_category(category_id: str) -> int:
+    """Remove a section. Its channels stay, ungrouped; nothing else changes.
+    Returns how many channels were moved out."""
+    conn = _ensure()
+    if not _category_exists(conn, category_id):
+        raise CategoryNotFound(category_id)
+    with conn:
+        moved = conn.execute("UPDATE threads SET category_id = NULL WHERE category_id = ?",
+                             (category_id,)).rowcount
+        conn.execute("DELETE FROM channel_categories WHERE category_id = ?", (category_id,))
+    return moved
+
+
+def set_category(thread_id: str, category_id: Optional[str]) -> Dict[str, Any]:
+    t = get_thread(thread_id)
+    if t is None:
+        raise ThreadNotFound(thread_id)
+    if t["direct_for"]:
+        raise ThreadProtected("The direct line isn't in a category.")
+    conn = _ensure()
+    if category_id is not None and not _category_exists(conn, category_id):
+        raise CategoryNotFound(category_id)
+    with conn:
+        conn.execute("UPDATE threads SET category_id = ? WHERE thread_id = ?", (category_id, thread_id))
+    return get_thread(thread_id)  # type: ignore[return-value]
 
 
 # --------------------------------------------------------------------- reads
@@ -507,7 +636,8 @@ def direct_thread_id(person_key: Optional[str]) -> Optional[str]:
 
 
 def create_thread(name: str, created_by: str = "user",
-                  creator: Optional[str] = None) -> Dict[str, Any]:
+                  creator: Optional[str] = None,
+                  category_id: Optional[str] = None) -> Dict[str, Any]:
     """New channel. `created_by` decides whether the UI shows the spark mark."""
     name = (name or "").strip()
     if not name:
@@ -516,6 +646,8 @@ def create_thread(name: str, created_by: str = "user",
         raise ValueError("created_by must be 'user' or 'jarvis'.")
 
     conn = _ensure()
+    if category_id is not None and not _category_exists(conn, category_id):
+        raise CategoryNotFound(category_id)
     # Human-readable, collision-proof id. Not derived from the name, because a
     # rename must not change identity.
     import uuid
@@ -523,9 +655,9 @@ def create_thread(name: str, created_by: str = "user",
     thread_id = f"ch_{uuid.uuid4().hex[:12]}"
     with conn:
         conn.execute(
-            "INSERT INTO threads (thread_id, name, created_by, created_at, archived) "
-            "VALUES (?, ?, ?, ?, 0)",
-            (thread_id, name[:120], created_by, _now()),
+            "INSERT INTO threads (thread_id, name, created_by, created_at, archived, category_id) "
+            "VALUES (?, ?, ?, ?, 0, ?)",
+            (thread_id, name[:120], created_by, _now(), category_id),
         )
         # The creator is a member, or they would immediately lose sight of the
         # channel they just made. `creator` is None when Jarvis opens a deal

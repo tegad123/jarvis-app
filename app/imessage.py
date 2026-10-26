@@ -247,6 +247,11 @@ async def post_messages(request: Request, authorization: str = Header(default=""
     items = body.get("messages")
     if not isinstance(items, list):
         raise HTTPException(status_code=400, detail="messages must be a list.")
+    from . import accounts  # noqa: PLC0415
+    if not accounts.feature_on(dev["person_key"], "imessage"):
+        broker._bump("feature_refused_imessage")
+        return JSONResponse(status_code=403, content={"error": "feature_off",
+                                                      "detail": "iMessage is switched off for this person."})
     out = store_batch(dev["person_key"], dev["device_id"], items, paired_at=dev["created_at"])
     broker._bump("imessage_batches")
     return out
@@ -270,6 +275,7 @@ def get_status(sess: dict = Depends(auth.current_session)):
 def get_mac_app(sess: dict = Depends(auth.current_session)):
     """Jarvis.app, zipped, pointed at this tenant. Any signed-in person."""
     _person(sess)
+    auth.require_feature(sess, "imessage")
     origin = config.public_origin()
     if not origin:
         raise HTTPException(status_code=503, detail="This Jarvis has no public address yet.")
@@ -281,7 +287,9 @@ def get_mac_app(sess: dict = Depends(auth.current_session)):
 
 @settings_router.post("/pair")
 def post_pair(sess: dict = Depends(auth.current_session)):
-    return new_code(_person(sess))
+    who = _person(sess)
+    auth.require_feature(sess, "imessage")
+    return new_code(who)
 
 
 @settings_router.delete("/devices/{device_id}")
@@ -301,6 +309,11 @@ async def post_broker_imessage(request: Request):
     if entry is None:
         return JSONResponse(status_code=403, content={"error": "no_turn", "detail": "No running chat turn."})
     person = str(entry["person_key"])
+    from . import accounts  # noqa: PLC0415
+    if not accounts.feature_on(person, "imessage"):
+        broker._bump("feature_refused_imessage")
+        return JSONResponse(status_code=403, content={"error": "feature_off",
+                                                      "detail": "iMessage is switched off for this person."})
     if not devices(person):
         return JSONResponse(status_code=409, content={"error": "no_mac", "detail": "No Mac is connected."})
     found = search(person, str(body.get("query") or "")[:200], str(body.get("contact") or "")[:200],

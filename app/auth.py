@@ -254,13 +254,39 @@ def current_session(
             headers={"WWW-Authenticate": "Cookie"},
         )
     try:
-        return _serializer().loads(jarvis_session, max_age=config.SESSION_MAX_AGE)
+        sess = _serializer().loads(jarvis_session, max_age=config.SESSION_MAX_AGE)
     except SignatureExpired:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             detail="Session expired.")
     except BadSignature:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             detail="Invalid session.")
+    return _live(sess)
+
+
+def _live(sess: dict) -> dict:
+    """The cookie says who; the accounts table says what they are NOW. A
+    role change or a removal from the team applies on the next request, not
+    when the cookie runs out."""
+    person = sess.get("person_key")
+    if not person:
+        return sess
+    from . import accounts  # noqa: PLC0415
+    try:
+        acct = accounts.get(person)
+    except Exception as exc:
+        _bump("session_accounts_unreadable")
+        log.error("session: accounts store unreadable (%s); refusing rather than trusting the cookie's role", exc)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="Sign-in is unavailable for a moment. Try again.")
+    if not acct or acct.get("disabled"):
+        _bump("session_refused_disabled")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Your access to this account was turned off.")
+    if acct["role"] != sess.get("role"):
+        _bump("session_role_refreshed")
+        sess = {**sess, "role": acct["role"]}
+    return sess
 
 
 # ── role gates ────────────────────────────────────────────────────────────────
@@ -403,5 +429,23 @@ def require_admin(sess: dict) -> dict:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only an admin or the owner can manage members.",
+        )
+    return sess
+
+
+def require_feature(sess: dict, feature: str) -> dict:
+    """A feature an admin can switch off per person (Settings → Team).
+
+    The break-glass operator is nobody, so it has no switches; the gates it
+    does have (require_bodies, require_person) still apply where they did."""
+    person = person_of(sess)
+    if person is None:
+        return sess
+    from . import accounts  # noqa: PLC0415
+    if not accounts.feature_on(person, feature):
+        _bump(f"feature_refused_{feature}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"{accounts.FEATURE_LABELS[feature]} is switched off for you. Ask an admin to turn it on.",
         )
     return sess

@@ -14,6 +14,7 @@ Environment=PYTHONUNBUFFERED=1
 Environment=JARVIS_SKILLS_ROOT={{SKILLS}}
 Environment=JARVIS_RUNTIME_CONFIG={{SKILLS}}/_shared/runtime.json
 Environment=JARVIS_IDENTITY_CONFIG={{SKILLS}}/_shared/identity.json
+Environment=JARVIS_TEAM_FILE={{HERMES_HOME}}/state/team.json
 Environment=JARVIS_TASKS_DB={{HERMES_HOME}}/state/jarvis_tasks.db
 Environment=JARVIS_THREADS_DB={{HERMES_HOME}}/state/jarvis_threads.db
 Environment=JARVIS_TASKS_SOURCE=store

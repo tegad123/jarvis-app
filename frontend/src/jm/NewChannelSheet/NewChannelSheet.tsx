@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '../Button/Button'
-import { ErrorLine, Field, Sheet } from '../shared/primitives'
+import { ErrorLine, Field, Select, Sheet, type SelectOption } from '../shared/primitives'
 
 export interface NewChannelSheetProps {
   mode?: 'create' | 'rename'
   initialValue?: string
-  onSubmit?: (name: string) => void
+  /** Create only: sections to file the channel under. '' is ungrouped. */
+  categories?: SelectOption[]
+  initialCategory?: string
+  onSubmit?: (name: string, category: string) => void
   onClose?: () => void
   busy?: boolean
   error?: string | null
@@ -19,7 +22,9 @@ export interface NewChannelSheetProps {
 export function NewChannelSheet(p: NewChannelSheetProps) {
   const rename = p.mode === 'rename'
   const [name, setName] = useState(p.initialValue ?? '')
+  const [category, setCategory] = useState(p.initialCategory ?? '')
   const ref = useRef<HTMLInputElement>(null)
+  const pickCategory = !rename && !!p.categories?.length
   useEffect(() => {
     if (!p.inline) ref.current?.focus()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -31,7 +36,7 @@ export function NewChannelSheet(p: NewChannelSheetProps) {
         onSubmit={(e) => {
           e.preventDefault()
           const t = name.trim()
-          if (t && !p.busy) p.onSubmit?.(t)
+          if (t && !p.busy) p.onSubmit?.(t, category)
         }}
       >
         <Field
@@ -45,6 +50,18 @@ export function NewChannelSheet(p: NewChannelSheetProps) {
           aria-invalid={p.error ? true : undefined}
           onChange={(e) => setName(e.target.value)}
         />
+        {pickCategory && (
+          <label className="flex items-center justify-between gap-jm-3 text-jm-body-sm text-jm-fg-secondary">
+            Category
+            <Select
+              label="Category"
+              value={category}
+              disabled={p.busy}
+              options={[{ value: '', label: 'No category' }, ...p.categories!]}
+              onChange={setCategory}
+            />
+          </label>
+        )}
         <Button type="submit" variant="primary" className="min-h-jm-touch w-full" disabled={p.busy || !name.trim()}>
           {p.busy ? 'Working…' : (p.submitLabel ?? (rename ? 'Save' : 'Create'))}
         </Button>

@@ -91,6 +91,7 @@ open(sys.argv[3], 'w').write(json.dumps(cfg, indent=2) + '\n')
   JARVIS_TASKS_DB="$SB/tasks.db" \
   JARVIS_THREADS_DB="$SB/threads.db" \
   JARVIS_ACCOUNTS_DB="$SB/accounts.db" \
+  JARVIS_TEAM_FILE="${VERIFY_TEAM_FILE-$SB/hermes/state/team.json}" \
   JARVIS_LEADS_DB="$SB/leads.db" \
   JARVIS_ACTIVITY_FEED="$SB/feed.jsonl" \
   JARVIS_TASKS_SOURCE="${TASKS_SOURCE:-store}" \

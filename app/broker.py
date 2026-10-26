@@ -697,6 +697,12 @@ async def post_google_person(request: Request):
             _bump("broker_google_person_read")
             _note_untrusted(ctx, api, method, out.get("result"))
         return out
+    from . import accounts  # noqa: PLC0415
+    if method == "users.messages.send" and not accounts.feature_on(person, "send"):
+        _bump("feature_refused_send")
+        log.warning("broker: personal gmail send refused for %s (sending switched off)", person)
+        return JSONResponse(status_code=403, content={"error": "feature_off",
+                                                      "detail": "Sending email is switched off for this person."})
     if entry.get("role") not in PERSON_WRITE_ROLES:
         _bump("broker_google_person_write_owner_only")
         log.warning("broker: personal %s %s refused for role %s (approvals are the owner's)", api, method,

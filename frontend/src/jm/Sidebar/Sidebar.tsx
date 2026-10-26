@@ -21,8 +21,13 @@ export interface SidebarProps {
   onNewChat?: () => void
   newChatLabel?: string
   direct?: ConversationRowProps & { id: string }
+  /** Ungrouped channels, under `channelsLabel`. */
   channels?: (ConversationRowProps & { id: string })[]
   channelsLabel?: string
+  /** Named sections (Listings, Buyers…), drawn above the ungrouped channels. */
+  sections?: SidebarSection[]
+  /** Admins: add a section. */
+  onNewSection?: () => void
   emptyLabel?: string
   person?: { name: string; role?: string }
   theme?: 'dark' | 'light'
@@ -32,10 +37,30 @@ export interface SidebarProps {
   className?: string
 }
 
+export interface SidebarSection {
+  id: string
+  label: string
+  channels: (ConversationRowProps & { id: string })[]
+  /** Admins: rename or remove this section. */
+  onEdit?: () => void
+}
+
+function SectionHeading({ label, onEdit, onAdd, addLabel }: { label: string; onEdit?: () => void; onAdd?: () => void; addLabel?: string }) {
+  return (
+    <div className="mb-jm-1 flex min-h-jm-control-sm items-center gap-jm-1 pl-jm-3">
+      <h3 className={cx('m-0 min-w-0 flex-1 text-jm-caption font-normal text-jm-fg-secondary', truncate)}>{label}</h3>
+      {onEdit && <Button variant="ghost" icon="more" aria-label={`Edit ${label}`} onClick={onEdit} />}
+      {onAdd && <Button variant="ghost" icon="plus" aria-label={addLabel ?? 'Add'} onClick={onAdd} />}
+    </div>
+  )
+}
+
 export function Sidebar(p: SidebarProps) {
   const nav = p.nav ?? []
   const channels = p.channels ?? []
+  const sections = p.sections ?? []
   const select = (id: string) => p.onSelect?.(id)
+  const anyChannel = channels.length > 0 || sections.some((s) => s.channels.length > 0)
 
   return (
     <nav
@@ -89,14 +114,30 @@ export function Sidebar(p: SidebarProps) {
             <ConversationRow {...p.direct} direct active={p.active === p.direct.id} onClick={() => select(p.direct!.id)} />
           </div>
         )}
-        <div className="grid grid-cols-[minmax(0,1fr)] gap-0.5">
-          <p className="m-0 mb-jm-1 px-jm-3 text-jm-caption text-jm-fg-secondary">{p.channelsLabel ?? 'Channels'}</p>
-          {channels.length ? (
-            channels.map((c) => <ConversationRow key={c.id} {...c} active={p.active === c.id} onClick={() => select(c.id)} />)
-          ) : (
-            <p className="m-0 px-jm-3 text-jm-body-sm text-jm-fg-secondary">{p.emptyLabel ?? 'When a new deal starts, Jarvis opens a channel for it.'}</p>
-          )}
-        </div>
+        {sections.map((s) => (
+          <section key={s.id} aria-label={s.label} className="grid grid-cols-[minmax(0,1fr)] gap-0.5">
+            <SectionHeading label={s.label} onEdit={s.onEdit} />
+            {s.channels.length ? (
+              s.channels.map((c) => <ConversationRow key={c.id} {...c} active={p.active === c.id} onClick={() => select(c.id)} />)
+            ) : (
+              <p className="m-0 px-jm-3 text-jm-body-sm text-jm-fg-secondary">No channels yet.</p>
+            )}
+          </section>
+        ))}
+        {(channels.length > 0 || !anyChannel || p.onNewSection) && (
+          <section aria-label={p.channelsLabel ?? 'Channels'} className="grid grid-cols-[minmax(0,1fr)] gap-0.5">
+            <SectionHeading
+              label={p.channelsLabel ?? 'Channels'}
+              onAdd={p.onNewSection}
+              addLabel="New category"
+            />
+            {channels.length ? (
+              channels.map((c) => <ConversationRow key={c.id} {...c} active={p.active === c.id} onClick={() => select(c.id)} />)
+            ) : !anyChannel ? (
+              <p className="m-0 px-jm-3 text-jm-body-sm text-jm-fg-secondary">{p.emptyLabel ?? 'When a new deal starts, Jarvis opens a channel for it.'}</p>
+            ) : null}
+          </section>
+        )}
       </div>
 
       {p.person && (

@@ -35,6 +35,10 @@ import type {
   MacStatus,
   SessionResponse,
   Attachment,
+  Category,
+  Feature,
+  TeamPerson,
+  TeamResponse,
   Thread,
   ThreadMember,
   ThreadsResponse,
@@ -467,13 +471,74 @@ export function getThreads(includeArchived = false): Promise<ThreadsResponse> {
   )
 }
 
-export async function createThread(name: string): Promise<Thread> {
+export async function createThread(name: string, categoryId: string | null = null): Promise<Thread> {
   const { ok, status, body } = await request<{ ok: boolean; thread: Thread }>(
     '/api/threads',
-    { method: 'POST', body: JSON.stringify({ name }) },
+    { method: 'POST', body: JSON.stringify({ name, category_id: categoryId }) },
   )
   if (ok && body?.thread) return body.thread
   throw new ApiError(detailOf(body) ?? 'Could not create that channel.', status)
+}
+
+export async function setThreadCategory(id: string, categoryId: string | null): Promise<Thread> {
+  const { ok, status, body } = await request<{ ok: boolean; thread: Thread }>(
+    `/api/threads/${encodeURIComponent(id)}/category`,
+    { method: 'PUT', body: JSON.stringify({ category_id: categoryId }) },
+  )
+  if (ok && body?.thread) return body.thread
+  throw new ApiError(detailOf(body) ?? 'Could not move that channel.', status)
+}
+
+/* ---------------------------------------------------------- categories */
+
+export async function createCategory(name: string): Promise<Category> {
+  const { ok, status, body } = await request<{ ok: boolean; category: Category }>('/api/categories', {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  })
+  if (ok && body?.category) return body.category
+  throw new ApiError(detailOf(body) ?? 'Could not add that category.', status)
+}
+
+export async function updateCategory(id: string, patch: { name?: string; position?: number }): Promise<Category> {
+  const { ok, status, body } = await request<{ ok: boolean; category: Category }>(
+    `/api/categories/${encodeURIComponent(id)}`,
+    { method: 'PATCH', body: JSON.stringify(patch) },
+  )
+  if (ok && body?.category) return body.category
+  throw new ApiError(detailOf(body) ?? 'Could not change that category.', status)
+}
+
+export async function deleteCategory(id: string): Promise<void> {
+  const { ok, status, body } = await request(`/api/categories/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  if (!ok) throw new ApiError(detailOf(body) ?? 'Could not remove that category.', status)
+}
+
+/* ------------------------------------------------------------------ team */
+
+export function getTeam(): Promise<TeamResponse> {
+  return requestOk<TeamResponse>('/api/team')
+}
+
+export async function invitePerson(input: { name: string; email: string; role: 'admin' | 'member' }): Promise<TeamPerson> {
+  const { ok, status, body } = await request<{ ok: boolean; person: TeamPerson }>('/api/team/invite', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+  if (ok && body?.person) return body.person
+  throw new ApiError(detailOf(body) ?? 'Could not invite them.', status)
+}
+
+export async function patchPerson(
+  key: string,
+  patch: { role?: 'admin' | 'member'; disabled?: boolean; features?: Partial<Record<Feature, boolean>> },
+): Promise<TeamPerson> {
+  const { ok, status, body } = await request<{ ok: boolean; person: TeamPerson }>(
+    `/api/team/${encodeURIComponent(key)}`,
+    { method: 'PATCH', body: JSON.stringify(patch) },
+  )
+  if (ok && body?.person) return body.person
+  throw new ApiError(detailOf(body) ?? 'That change did not save.', status)
 }
 
 export async function renameThread(id: string, name: string): Promise<Thread> {

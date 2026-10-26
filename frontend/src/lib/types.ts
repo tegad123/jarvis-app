@@ -76,6 +76,38 @@ export interface SessionResponse {
   /** Who is signed in. Null on a break-glass operator session. */
   person_key?: string | null
   role?: Role
+  /** This person's switches from Settings → Team. The API enforces each one. */
+  features?: Partial<Record<Feature, boolean>>
+}
+
+export type Feature = 'ask' | 'leads' | 'tasks' | 'send' | 'browser' | 'imessage'
+
+export interface TeamPerson {
+  person_key: string
+  name: string
+  full_name: string
+  title: string
+  role: 'owner' | 'admin' | 'member'
+  email: string | null
+  disabled: boolean
+  invited: boolean
+  has_account: boolean
+  last_login: string | null
+  features: Record<Feature, boolean>
+}
+
+export interface TeamResponse {
+  people: TeamPerson[]
+  features: Feature[]
+  feature_labels: Record<Feature, string>
+  can_invite_admins: boolean
+  invites_ready: boolean
+}
+
+export interface Category {
+  category_id: string
+  name: string
+  position: number
 }
 
 /** What a session may do. 'operator' is the shared break-glass passphrase:
@@ -155,6 +187,8 @@ export interface Thread {
   /** Person keys in this channel, from GET /api/threads. Empty for direct
    *  lines — a direct line is not a one-member channel (app/threads.py). */
   members?: string[]
+  /** The sidebar section this channel sits in; null is ungrouped. */
+  category_id?: string | null
 }
 
 export interface ThreadsResponse {
@@ -164,6 +198,8 @@ export interface ThreadsResponse {
   /** False for a break-glass operator session: rows and membership are listed,
    *  message content is not. The API enforces this; the UI reflects it. */
   bodies_visible?: boolean
+  /** Sidebar sections, in order. Membership still decides which channels show. */
+  categories?: Category[]
 }
 
 export interface ThreadMember {

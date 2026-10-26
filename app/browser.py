@@ -518,6 +518,11 @@ async def post_browser(request: Request):
     if entry is None:
         return JSONResponse(status_code=403, content={"error": "no_turn", "detail": "No running chat turn."})
     person = str(entry["person_key"])
+    from . import accounts  # noqa: PLC0415
+    if not accounts.feature_on(person, "browser"):
+        broker._bump("feature_refused_browser")
+        return JSONResponse(status_code=403, content={"error": "feature_off",
+                                                      "detail": "The web browser is switched off for this person."})
     if op not in ("status", "open", "read", "scroll", "back"):
         broker._require_sentinel()
     ctx = broker._context(request)
@@ -541,6 +546,7 @@ def _person(sess: dict) -> str:
     auth.require_person(sess)
     if not enabled():
         raise HTTPException(status_code=503, detail="browser_off: the browser isn't switched on for this tenant.")
+    auth.require_feature(sess, "browser")
     return str(auth.person_of(sess))
 
 

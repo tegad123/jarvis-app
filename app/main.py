@@ -105,6 +105,9 @@ app.include_router(imessage_mod.router)
 app.include_router(imessage_mod.settings_router)
 from app import model_proxy as model_proxy_mod  # noqa: E402
 app.include_router(model_proxy_mod.router)
+from app import team as team_mod  # noqa: E402
+app.include_router(team_mod.router)
+app.include_router(team_mod.categories_router)
 
 
 def _uvicorn_log_config() -> dict:
@@ -156,6 +159,13 @@ def _viewer(sess: dict):
     even from a session that sees everything else. See _thread_scope().
     """
     return None if auth.sees_everything(sess) else auth.person_of(sess)
+
+
+def _needs(feature: str):
+    """A session dependency that also requires a per-person feature."""
+    def dep(sess: dict = Depends(auth.current_session)) -> dict:
+        return auth.require_feature(sess, feature)
+    return dep
 
 
 def _tasks_writable() -> None:
@@ -419,6 +429,8 @@ def session(sess: dict = Depends(auth.current_session)):
     name = whoami.display_name_for(person) if person else None
     if name:
         body["display_name"] = name
+    # What the UI shows. The routes behind each one enforce the same switches.
+    body["features"] = accounts_mod.features(person) if person else {f: True for f in accounts_mod.FEATURES}
     return body
 
 
@@ -460,6 +472,7 @@ class ChatRequest(BaseModel):
 
 class ThreadCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
+    category_id: Optional[str] = Field(None, max_length=40)
 
 
 class ThreadRename(BaseModel):
@@ -473,6 +486,8 @@ def post_chat(body: ChatRequest, sess: dict = Depends(auth.current_session)):
     # be a suggestion rather than a state.
     auth.require_bodies(sess)
     thread = _reach_thread(body.thread_id, sess)
+    if thread["is_direct"]:
+        auth.require_feature(sess, "ask")
     if thread["archived"]:
         raise HTTPException(status_code=409, detail="That channel is archived.")
 
@@ -510,7 +525,8 @@ def get_chat_history(
 ):
     """Durable per-thread transcript. Survives reload AND service restart."""
     auth.require_bodies(sess)
-    _reach_thread(thread_id, sess)
+    if _reach_thread(thread_id, sess)["is_direct"]:
+        auth.require_feature(sess, "ask")
     messages = chat_mod.get_history(thread_id)
     # Resolve attachment ids to full records so a reload can re-render chips
     # without one request per attachment.
@@ -536,6 +552,8 @@ def get_threads(
     viewer, unscoped = _thread_scope(sess)
     items = threads_mod.list_threads(include_archived=include_archived,
                                      viewer=viewer, unscoped=unscoped)
+    if viewer and not accounts_mod.feature_on(viewer, "ask"):
+        items = [t for t in items if not t["is_direct"]]
     # The list screen shows a preview line per row; fetching it here keeps the
     # client to one request instead of one per channel.
     #
@@ -555,18 +573,43 @@ def get_threads(
         "messages": 0,
     }
     return {"threads": items, "count": len(items), "counts": counts,
-            "bodies_visible": bodies}
+            "bodies_visible": bodies, "categories": threads_mod.categories()}
 
 
 @app.post("/api/threads", status_code=201)
 def post_thread(body: ThreadCreate, sess: dict = Depends(auth.current_session)):
+    """Owner and admins open channels; members are added to them."""
+    auth.require_person(sess)
+    if auth.role_of(sess) not in ("owner", "admin"):
+        threads_mod.bump_counter("channel_create_refused")
+        raise HTTPException(status_code=403, detail="Only an admin or the owner can create channels.")
     try:
         # created_by='user' — the UI shows the spark mark only for channels
         # Jarvis opened, which is what that mark means.
         return {"ok": True, "thread": threads_mod.create_thread(
-            body.name, created_by="user", creator=auth.person_of(sess))}
+            body.name, created_by="user", creator=auth.person_of(sess), category_id=body.category_id)}
+    except threads_mod.CategoryNotFound:
+        raise HTTPException(status_code=422, detail="No such category.")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+
+class ThreadCategory(BaseModel):
+    category_id: Optional[str] = Field(None, max_length=40)
+
+
+@app.put("/api/threads/{thread_id}/category")
+def put_thread_category(thread_id: str, body: ThreadCategory, sess: dict = Depends(auth.current_session)):
+    """Move a channel into a section, or out of every section (null)."""
+    auth.require_person(sess)
+    auth.require_admin(sess)
+    _reach_thread(thread_id, sess)
+    try:
+        return {"ok": True, "thread": threads_mod.set_category(thread_id, body.category_id)}
+    except threads_mod.ThreadProtected as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except threads_mod.CategoryNotFound:
+        raise HTTPException(status_code=422, detail="No such category.")
 
 
 @app.patch("/api/threads/{thread_id}")
@@ -690,7 +733,6 @@ def post_approval(
         decision, scope, via = answer["decision"], answer["scope"], "signed_callback"
     if decision not in ("approved", "rejected"):
         raise HTTPException(status_code=422, detail="Send the card's signed callback or a decision.")
-
     try:
         updated = approvals_mod.decide(request_id, decision, decided_by, scope=scope, via=via,
                                        role=auth.role_of(sess))
@@ -764,7 +806,7 @@ class LeadPatch(BaseModel):
 
 
 @app.post("/api/leads", status_code=201)
-def create_lead(body: LeadCreate, sess: dict = Depends(auth.current_session)):
+def create_lead(body: LeadCreate, sess: dict = Depends(_needs("leads"))):
     """App-native only. Writing our own store is NOT a shared-surface write, so
     it needs no write-guard arming; exporting to a tenant's Sheet does, and that
     lives in the connector."""
@@ -782,7 +824,7 @@ def create_lead(body: LeadCreate, sess: dict = Depends(auth.current_session)):
 
 
 @app.patch("/api/leads/{lead_id}")
-def patch_lead(lead_id: str, body: LeadPatch, sess: dict = Depends(auth.current_session)):
+def patch_lead(lead_id: str, body: LeadPatch, sess: dict = Depends(_needs("leads"))):
     auth.require_person(sess)
     if leads_src.source() != "store":
         raise HTTPException(status_code=409, detail="Leads are sheet-backed for this tenant.")
@@ -796,7 +838,7 @@ def patch_lead(lead_id: str, body: LeadPatch, sess: dict = Depends(auth.current_
 
 
 @app.post("/api/leads/{lead_id}/archive")
-def archive_lead(lead_id: str, sess: dict = Depends(auth.current_session)):
+def archive_lead(lead_id: str, sess: dict = Depends(_needs("leads"))):
     auth.require_person(sess)
     if leads_src.source() != "store":
         raise HTTPException(status_code=409, detail="Leads are sheet-backed for this tenant.")
@@ -807,7 +849,7 @@ def archive_lead(lead_id: str, sess: dict = Depends(auth.current_session)):
 
 
 @app.get("/api/leads")
-def get_leads(sess: dict = Depends(auth.current_session)):
+def get_leads(sess: dict = Depends(_needs("leads"))):
     try:
         return leads_src.load(viewer=_viewer(sess))
     except leads_mod.LeadsUnavailable as exc:
@@ -860,7 +902,7 @@ class TaskStatus(BaseModel):
 
 
 @app.get("/api/tasks")
-def get_tasks(sess: dict = Depends(auth.current_session),
+def get_tasks(sess: dict = Depends(_needs("tasks")),
               status_: Optional[str] = Query(None, alias="status"),
               priority: Optional[str] = Query(None),
               assignee: Optional[str] = Query(None),
@@ -875,7 +917,7 @@ def get_tasks(sess: dict = Depends(auth.current_session),
 
 
 @app.post("/api/tasks", status_code=201)
-def create_task(body: TaskCreate, sess: dict = Depends(auth.current_session)):
+def create_task(body: TaskCreate, sess: dict = Depends(_needs("tasks"))):
     """Any person on the team may add to the shared list."""
     auth.require_person(sess)
     _tasks_writable()
@@ -890,7 +932,7 @@ def create_task(body: TaskCreate, sess: dict = Depends(auth.current_session)):
 
 
 @app.patch("/api/tasks/{task_id}")
-def patch_task(task_id: str, body: TaskPatch, sess: dict = Depends(auth.current_session)):
+def patch_task(task_id: str, body: TaskPatch, sess: dict = Depends(_needs("tasks"))):
     auth.require_person(sess)
     auth.require_task_admin(sess)
     _tasks_writable()
@@ -905,7 +947,7 @@ def patch_task(task_id: str, body: TaskPatch, sess: dict = Depends(auth.current_
 
 
 @app.post("/api/tasks/{task_id}/assign")
-def assign_task(task_id: str, body: TaskAssign, sess: dict = Depends(auth.current_session)):
+def assign_task(task_id: str, body: TaskAssign, sess: dict = Depends(_needs("tasks"))):
     auth.require_person(sess)
     auth.require_task_admin(sess)
     _tasks_writable()
@@ -921,7 +963,7 @@ def assign_task(task_id: str, body: TaskAssign, sess: dict = Depends(auth.curren
 
 @app.post("/api/tasks/{task_id}/status")
 def set_task_status(task_id: str, body: TaskStatus,
-                    sess: dict = Depends(auth.current_session)):
+                    sess: dict = Depends(_needs("tasks"))):
     _tasks_writable()
     task = _task_or_404(task_id)
     _may_change_status(sess, task)
@@ -935,7 +977,7 @@ def set_task_status(task_id: str, body: TaskStatus,
 
 
 @app.post("/api/tasks/{task_id}/archive")
-def archive_task(task_id: str, sess: dict = Depends(auth.current_session)):
+def archive_task(task_id: str, sess: dict = Depends(_needs("tasks"))):
     auth.require_person(sess)
     auth.require_task_admin(sess)
     _tasks_writable()

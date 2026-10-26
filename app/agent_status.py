@@ -84,13 +84,36 @@ def mac_connected(person_key: str) -> bool:
     return bool(imessage.devices(person_key))
 
 
+def feature_of(tool: str):
+    """The per-person feature (Settings → Team) a tool belongs to, or None."""
+    if tool in BROWSER_TOOLS:
+        return "browser"
+    if tool == "imessage_search":
+        return "imessage"
+    authz_action = TOOLS[tool]["authz"] or ""
+    if authz_action.startswith("task."):
+        return "tasks"
+    if authz_action == "email.send":
+        return "send"
+    return None
+
+
+def switched_off(person_key: str) -> set:
+    if not person_key:
+        return set()
+    from . import accounts  # noqa: PLC0415
+    feats = accounts.features(person_key)
+    return {n for n in TOOLS if feature_of(n) and not feats[feature_of(n)]}
+
+
 def status(role: str, person_key: str = "") -> dict:
     g = google_state(person_key)
     mode = "practice" if practice() else "live"
     hidden = set() if browser_on() else set(BROWSER_TOOLS)
     # Each person's browser is their own; someone who is nobody has none.
     barred = set() if person_key else set(PERSONAL_TOOLS) - hidden
-    mine = [n for n in permitted(person_key) if n not in hidden and n not in barred]
+    off = switched_off(person_key) - hidden
+    mine = [n for n in permitted(person_key) if n not in hidden and n not in barred and n not in off]
 
     def needs(n: str) -> bool:
         return "google" in TOOLS[n]["needs"] or (mode == "live" and n in LIVE_NEEDS_GOOGLE)
@@ -98,7 +121,8 @@ def status(role: str, person_key: str = "") -> dict:
             "can_connect": can_connect(role),
             "available": [n for n in mine if not needs(n) or g == "connected"],
             "needs_google": [n for n in mine if needs(n) and g != "connected"],
-            "owner_only": [n for n in TOOLS if n not in mine and n not in hidden]}
+            "switched_off": sorted(off),
+            "owner_only": [n for n in TOOLS if n not in mine and n not in hidden and n not in off]}
 
 
 _CAN = {
@@ -163,6 +187,10 @@ def render(st: dict, name: str) -> str:
     barred = [words[n] for n in st["owner_only"] if n in words]
     if barred:
         lines.append("- Not for this person (someone with more access has to): " + "; ".join(barred) + ".")
+    off = [words[n] for n in st.get("switched_off", []) if n in words]
+    if off:
+        lines.append("- Switched off for this person by an admin, so you cannot: " + "; ".join(off) +
+                     ". If they ask, say an admin turned it off in Settings → Team.")
     lines.append("When they ask what you can do, or whether you have access to something, answer from this status "
                  "only, in a sentence or two.")
     return "\n".join(lines)

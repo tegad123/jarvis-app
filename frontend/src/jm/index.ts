@@ -5,7 +5,7 @@
  * the Tailwind preset in ./preset.cjs with this folder in `content`.
  */
 export { Button, type ButtonProps } from './Button/Button'
-export { Sidebar, type SidebarProps, type SidebarNavItem } from './Sidebar/Sidebar'
+export { Sidebar, type SidebarProps, type SidebarNavItem, type SidebarSection } from './Sidebar/Sidebar'
 export { ConversationRow, type ConversationRowProps } from './ConversationRow/ConversationRow'
 export { MessageBubble, type MessageBubbleProps } from './MessageBubble/MessageBubble'
 export { SystemLine, type SystemLineProps } from './SystemLine/SystemLine'

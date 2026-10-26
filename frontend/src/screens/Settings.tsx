@@ -9,14 +9,18 @@ import {
   getBrowserStatus,
   getGoogleConnection,
   getMacStatus,
+  getTeam,
   getWebsiteLogins,
+  invitePerson,
   newMacCode,
+  patchPerson,
   saveWebsiteLogin,
 } from '../lib/api'
 import { Button, ErrorState, Field, PairingCode, SettingsSection, type SettingsSectionProps } from '../jm'
-import { canSeeSettings } from '../lib/roles'
+import { Select, cx, focus } from '../jm/shared/primitives'
+import { canManageTeam, canSeeSettings, ROLE_LABEL } from '../lib/roles'
 import { absoluteTime, relativeTime } from '../lib/time'
-import type { GoogleConnectionStatus, MacStatus, Role, WebsiteLogin } from '../lib/types'
+import type { Feature, GoogleConnectionStatus, MacStatus, Role, TeamPerson, TeamResponse, WebsiteLogin } from '../lib/types'
 
 /**
  * Settings — the signed-in person's own accounts. Any person; never the
@@ -32,6 +36,8 @@ import type { GoogleConnectionStatus, MacStatus, Role, WebsiteLogin } from '../l
 
 interface Props {
   role: Role
+  personKey?: string | null
+  features?: Partial<Record<Feature, boolean>>
   onUnauthorized: () => void
 }
 
@@ -60,7 +66,7 @@ function statusCopy(conn: GoogleConnectionStatus | null, phase: Phase): { status
   return { status: { tone: 'neutral', label: 'Never connected' }, time: null, timeAbs: null }
 }
 
-export default function Settings({ role, onUnauthorized }: Props) {
+export default function Settings({ role, personKey, features = {}, onUnauthorized }: Props) {
   const [conn, setConn] = useState<GoogleConnectionStatus | null>(null)
   const [error, setError] = useState<{ message: string; detail?: string } | null>(null)
   const [phase, setPhase] = useState<Phase>('idle')
@@ -169,9 +175,179 @@ export default function Settings({ role, onUnauthorized }: Props) {
         }
       />
 
-      {role !== 'operator' && <WebsiteLogins onUnauthorized={onUnauthorized} />}
-      {role !== 'operator' && <MacMessages onUnauthorized={onUnauthorized} />}
+      {role !== 'operator' && features.browser !== false && <WebsiteLogins onUnauthorized={onUnauthorized} />}
+      {role !== 'operator' && features.imessage !== false && <MacMessages onUnauthorized={onUnauthorized} />}
+      {canManageTeam(role) && <Team role={role} personKey={personKey ?? null} onUnauthorized={onUnauthorized} />}
     </Page>
+  )
+}
+
+/** Settings → Team. Who may change whom is the API's (app/team.py); this
+ *  only hides controls the API would refuse. */
+function Team({ role, personKey, onUnauthorized }: { role: Role; personKey: string | null; onUnauthorized: () => void }) {
+  const [team, setTeam] = useState<TeamResponse | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [newRole, setNewRole] = useState<'member' | 'admin'>('member')
+  const [notice, setNotice] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    try {
+      setTeam(await getTeam())
+    } catch (err) {
+      if (err instanceof Unauthorized) return onUnauthorized()
+      setError(err instanceof ApiError ? err.message : 'Could not read the team.')
+    }
+  }, [onUnauthorized])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  if (!team) return error ? <SettingsSection title="Team" error={error} /> : null
+
+  const owner = role === 'owner'
+  const manageable = (p: TeamPerson) =>
+    p.person_key !== personKey && p.role !== 'owner' && (owner || p.role === 'member')
+
+  async function change(p: TeamPerson, patch: Parameters<typeof patchPerson>[1]) {
+    setBusy(p.person_key)
+    setError(null)
+    setNotice(null)
+    try {
+      const next = await patchPerson(p.person_key, patch)
+      setTeam((t) => (t ? { ...t, people: t.people.map((x) => (x.person_key === next.person_key ? next : x)) } : t))
+    } catch (err) {
+      if (err instanceof Unauthorized) return onUnauthorized()
+      setError(err instanceof ApiError ? err.message : 'That change did not save.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function invite(e: React.FormEvent) {
+    e.preventDefault()
+    setBusy('invite')
+    setError(null)
+    setNotice(null)
+    try {
+      const p = await invitePerson({ name: name.trim(), email: email.trim(), role: newRole })
+      setName('')
+      setEmail('')
+      setNewRole('member')
+      setNotice(`${p.name} is on the team. Send them ${window.location.origin}: they sign in with Google using ${p.email}.`)
+      await load()
+    } catch (err) {
+      if (err instanceof Unauthorized) return onUnauthorized()
+      setError(err instanceof ApiError ? err.message : 'Could not invite them.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <SettingsSection
+      title="Team"
+      description="Invite people by email. They sign in with Google using that address. Switch a feature off for one person and both the app and Jarvis stop offering it to them."
+      error={error ?? undefined}
+    >
+      <ul className="m-0 grid list-none gap-jm-4 p-0" aria-label="Team members">
+        {team.people.map((p) => {
+          const can = manageable(p)
+          const off = p.disabled
+          return (
+            <li key={p.person_key} className="grid gap-jm-2 border-b border-jm-border pb-jm-4 last:border-b-0" aria-label={p.name}>
+              <div className="flex flex-wrap items-center gap-jm-2">
+                <span className="min-w-0 flex-1">
+                  <span className="block text-jm-label text-jm-fg">
+                    {p.full_name || p.name}
+                    {p.person_key === personKey ? ' (you)' : ''}
+                  </span>
+                  <span className="block text-jm-caption text-jm-fg-secondary">
+                    {[p.email, off ? 'Access off' : p.last_login ? `Signed in ${relativeTime(p.last_login)}` : 'Hasn’t signed in yet']
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </span>
+                </span>
+                {owner && can ? (
+                  <Select
+                    label={`Role for ${p.name}`}
+                    value={p.role}
+                    disabled={busy !== null}
+                    options={[
+                      { value: 'member', label: 'Member' },
+                      { value: 'admin', label: 'Admin' },
+                    ]}
+                    onChange={(v) => void change(p, { role: v as 'admin' | 'member' })}
+                  />
+                ) : (
+                  <span className="text-jm-caption text-jm-fg-secondary">{ROLE_LABEL[p.role]}</span>
+                )}
+                {can && (
+                  <Button variant="ghost" disabled={busy !== null} onClick={() => void change(p, { disabled: !off })}>
+                    {off ? 'Turn access back on' : 'Turn off access'}
+                  </Button>
+                )}
+              </div>
+              {p.role !== 'owner' && (
+                <fieldset className="m-0 flex flex-wrap gap-jm-2 border-0 p-0" disabled={!can || busy !== null}>
+                  <legend className="sr-only">Features for {p.name}</legend>
+                  {team.features.map((f) => (
+                    <label
+                      key={f}
+                      className={cx(
+                        'inline-flex cursor-pointer items-center gap-jm-1 rounded-jm-pill border px-jm-3 py-1 text-jm-caption',
+                        p.features[f] ? 'border-transparent bg-jm-accent-soft text-jm-accent-soft-text' : 'border-jm-border text-jm-fg-secondary line-through',
+                        !can && 'cursor-default opacity-jm-disabled',
+                      )}
+                    >
+                      <input
+                        type="checkbox"
+                        className={cx('m-0', focus)}
+                        aria-label={`${team.feature_labels[f]} for ${p.name}`}
+                        checked={p.features[f]}
+                        onChange={(e) => void change(p, { features: { [f]: e.target.checked } })}
+                      />
+                      {team.feature_labels[f]}
+                    </label>
+                  ))}
+                </fieldset>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+
+      {team.invites_ready ? (
+        <form onSubmit={(e) => void invite(e)} className="mt-jm-4 grid gap-jm-2 sm:grid-cols-[1fr_1fr_auto]" aria-label="Invite someone">
+          <Field value={name} onChange={(e) => setName(e.target.value)} placeholder="Their name" aria-label="Their name" required />
+          <Field
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="Their Google email"
+            aria-label="Their Google email"
+            autoComplete="off"
+            required
+          />
+          <Select
+            label="Role"
+            value={newRole}
+            disabled={!team.can_invite_admins}
+            options={[{ value: 'member', label: 'Member' }, ...(team.can_invite_admins ? [{ value: 'admin', label: 'Admin' }] : [])]}
+            onChange={(v) => setNewRole(v as 'admin' | 'member')}
+          />
+          <Button type="submit" variant="primary" disabled={busy !== null} className="sm:col-span-3 sm:justify-self-start">
+            {busy === 'invite' ? 'Inviting…' : 'Invite'}
+          </Button>
+          {notice && <p className="m-0 text-jm-body-sm text-jm-fg-secondary sm:col-span-3">{notice}</p>}
+        </form>
+      ) : (
+        <p className="m-0 mt-jm-4 text-jm-body-sm text-jm-fg-secondary">Inviting isn’t set up on this account yet.</p>
+      )}
+    </SettingsSection>
   )
 }
 
