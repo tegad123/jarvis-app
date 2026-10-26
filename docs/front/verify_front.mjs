@@ -228,9 +228,18 @@ print(json.dumps({"modes": out, "server": z.read("Jarvis.app/Contents/Resources/
   const code = (await apiJson(page, '/api/imessage/pair', { method: 'POST' })).body || {}
   const paired0 = counter('imessage_device_paired')
   const before = danaMessages()
+  const macCard = async () => {
+    await page.goto(`${ACCT}/`, { waitUntil: 'networkidle' })
+    await page.getByRole('button', { name: 'Settings', exact: true }).first().click()
+    const card = page.getByRole('region', { name: 'iMessage' })
+    await card.waitFor({ timeout: 10000 })
+    return { status: (await card.getByRole('status').first().innerText().catch(() => '')).trim(), text: await card.innerText() }
+  }
   let synced = -1
+  let paired = null
   try {
     core.pair(code.code, 'Fixture Mac')
+    paired = await macCard()
     synced = core.sync()
   } catch (e) {
     threw = e.message
@@ -246,12 +255,15 @@ print(json.dumps({"modes": out, "server": z.read("Jarvis.app/Contents/Resources/
       return -1
     }
   })()
+  const afterSync = await macCard()
+  ck('Settings says "Waiting for the Mac", not Connected, while a paired Mac has never synced', paired?.status === 'Waiting for the Mac' && /hasn’t synced yet/.test(paired?.text || ''), JSON.stringify(paired?.status))
+  ck('   and "Syncing" once a sync has landed', afterSync.status === 'Syncing' && /synced just now|synced \d/.test(afterSync.text), JSON.stringify(afterSync.status))
   ck('a second sync stores nothing new', again === 0 && danaMessages() === before + expected, `stored=${again}`)
   const sqls = calls.filter((c) => c.startsWith('/usr/bin/sqlite3 '))
   ck('every database read is sqlite3 -readonly', sqls.length > 0 && sqls.every((c) => c.startsWith('/usr/bin/sqlite3 -readonly -json ')), `${sqls.length} reads`)
   ck("   the body-only message was decoded (the attributedBody path)", core.bodyText(Buffer.from(execFileSync('python3', ['-c', `import sys; sys.path.insert(0, '${HERE}'); import mac_fixture; sys.stdout.buffer.write(mac_fixture.typedstream('abc é'))`])).toString('hex')) === 'abc é')
-  const plist = core.agentPlist('/Applications/Jarvis.app')
-  ck('the background sync reopens the app itself every 2 minutes', plist.includes('<string>/usr/bin/open</string>') && plist.includes('<string>/Applications/Jarvis.app</string>') && plist.includes('<integer>120</integer>'))
+  const plist = core.agentPlist('/Applications/Jarvis.app/Contents/MacOS/applet')
+  ck("the background sync runs the app's own executable every 2 minutes", plist.includes('<string>/Applications/Jarvis.app/Contents/MacOS/applet</string>') && plist.includes('<integer>120</integer>') && !plist.includes('/usr/bin/open'))
 
   const dev = (((await apiJson(page, '/api/imessage/status')).body || {}).devices || []).find((d) => d.name === 'Fixture Mac')
   if (dev) await api(page, `/api/imessage/devices/${dev.device_id}`, { method: 'DELETE' })

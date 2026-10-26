@@ -1,19 +1,58 @@
 #!/bin/bash
-# Jarvis for Mac. Runs Resources/helper.js with the osascript every Mac has.
-# Opened from Downloads (or anywhere but an Applications folder), it first
-# moves itself to Applications, so Full Disk Access and the background sync
-# point at a path that stays put.
-APP="$(cd "$(dirname "$0")/../.." && pwd -P)"
-case "$APP" in
-  /Applications/*|"$HOME"/Applications/*) ;;
-  *)
-    if [ "$1" != "sync" ]; then
-      DEST=/Applications
-      [ -w "$DEST" ] || { DEST="$HOME/Applications"; mkdir -p "$DEST"; }
-      rm -rf "$DEST/Jarvis.app"
-      /usr/bin/ditto "$APP" "$DEST/Jarvis.app"
-      /usr/bin/xattr -dr com.apple.quarantine "$DEST/Jarvis.app" 2>/dev/null
-      exec /usr/bin/open "$DEST/Jarvis.app"
-    fi ;;
-esac
-exec /usr/bin/osascript -l JavaScript "$APP/Contents/Resources/helper.js" "$APP" "$@"
+# Jarvis for Mac, as downloaded: an installer. macOS checks Full Disk Access
+# against the signed program that is running, and a bash script that hands
+# off to osascript is never "Jarvis" to it. So this builds the real app here:
+# osacompile turns Resources/helper.js into an applet, it is signed for this
+# Mac, and it replaces any older Jarvis in Applications. That applet is what
+# you open and what the background sync runs, so the Jarvis switch in Full
+# Disk Access is the one that counts.
+set -u
+SRC="$(cd "$(dirname "$0")/../.." && pwd -P)"
+RES="$SRC/Contents/Resources"
+ID=com.jarvis.messages
+AGENT="$HOME/Library/LaunchAgents/$ID.plist"
+LOG="$HOME/Library/Logs/Jarvis-install.log"
+mkdir -p "$HOME/Library/Logs"
+exec >>"$LOG" 2>&1
+echo "== $(date) install from $SRC"
+
+fail() {
+  echo "FAILED: $1"
+  /usr/bin/osascript -e 'on run argv' -e 'display dialog (item 1 of argv) buttons {"OK"} default button "OK" with title "Jarvis" with icon stop' -e 'end run' \
+    "Jarvis couldn't finish setting up: $1"$'\n\n'"Details are in ~/Library/Logs/Jarvis-install.log." >/dev/null 2>&1
+  exit 1
+}
+
+DEST=/Applications
+[ -w "$DEST" ] || { DEST="$HOME/Applications"; mkdir -p "$DEST"; }
+BUILD="$(mktemp -d "${TMPDIR:-/tmp}/jarvis-build.XXXXXX")" || fail "no scratch folder"
+APP="$BUILD/Jarvis.app"
+
+/usr/bin/osacompile -l JavaScript -o "$APP" "$RES/helper.js" || fail "osacompile could not build the app"
+cp "$RES/server.txt" "$APP/Contents/Resources/server.txt" || fail "no server address in the download"
+PL="$APP/Contents/Info.plist"
+/usr/bin/plutil -replace CFBundleIdentifier -string "$ID" "$PL" &&
+  /usr/bin/plutil -replace CFBundleName -string Jarvis "$PL" &&
+  /usr/bin/plutil -replace CFBundleDisplayName -string Jarvis "$PL" &&
+  /usr/bin/plutil -replace LSUIElement -bool true "$PL" || fail "could not name the app"
+/usr/bin/codesign --force --deep --sign - --identifier "$ID" "$APP" || fail "could not sign the app"
+/usr/bin/codesign --verify --deep "$APP" || fail "the signed app did not verify"
+
+# Stop whatever older Jarvis is running or scheduled before replacing it.
+/bin/launchctl bootout "gui/$(id -u)" "$AGENT" 2>/dev/null
+/usr/bin/pkill -f "Jarvis.app/Contents/Resources/helper.js" 2>/dev/null
+/usr/bin/pkill -f "$DEST/Jarvis.app/Contents/MacOS/applet" 2>/dev/null
+# An older Jarvis left a Full Disk Access entry that no longer matches what
+# is signed; it can show as switched on and still not work. Clear it so the
+# new Jarvis is added fresh. Older macOS may refuse; that only means the
+# person removes it with the minus button, which the app tells them.
+if /usr/bin/tccutil reset SystemPolicyAllFiles "$ID"; then echo "cleared the old Full Disk Access entry"
+else echo "WARNING: tccutil could not clear the old Full Disk Access entry"; fi
+
+rm -rf "$DEST/Jarvis.app.new"
+/usr/bin/ditto "$APP" "$DEST/Jarvis.app.new" || fail "could not copy Jarvis to $DEST"
+rm -rf "$DEST/Jarvis.app" && mv "$DEST/Jarvis.app.new" "$DEST/Jarvis.app" || fail "could not put Jarvis in $DEST"
+/usr/bin/xattr -dr com.apple.quarantine "$DEST/Jarvis.app" 2>/dev/null
+rm -rf "$BUILD"
+echo "installed $DEST/Jarvis.app"
+exec /usr/bin/open "$DEST/Jarvis.app"

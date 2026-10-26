@@ -2,9 +2,10 @@
 //
 // Opened by you: asks for the code from Jarvis Settings, walks you to Full
 // Disk Access, then syncs every two minutes in the background (a LaunchAgent
-// that reopens this app). Opened again: shows the connection, Sync now,
-// Disconnect. Only what ships with macOS: osascript, sqlite3 (read-only),
-// curl. It talks to one Jarvis (Resources/server.txt) and only ever calls
+// that runs this app's own executable). Opened again: shows the connection,
+// Sync now, Disconnect. Only what ships with macOS: osacompile and codesign
+// (at install), sqlite3 (read-only), curl. It talks to one Jarvis
+// (Resources/server.txt) and only ever calls
 // /api/mac/claim and /api/mac/messages.
 //
 // The logic below takes a `sys` (shell, files, dialogs), so the same file runs
@@ -13,6 +14,8 @@
 const DAYS = 30
 const BATCH = 500
 const LABEL = 'com.jarvis.messages'
+const MODE_VAR = 'JARVIS_MODE'
+const NO_ACCESS_NOTICE_MS = 6 * 3600 * 1000
 const APPLE_EPOCH_MS = Date.UTC(2001, 0, 1)
 
 function q(s) {
@@ -265,21 +268,24 @@ function makeCore(sys) {
     return sent
   }
 
-  function agentPlist(appPath) {
+  // launchd runs the signed app's own executable, not `open` or osascript,
+  // so Full Disk Access is checked against Jarvis itself.
+  function agentPlist(executable) {
     const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
     return '<?xml version="1.0" encoding="UTF-8"?>\n' +
       '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n' +
       '<plist version="1.0"><dict>' +
       '<key>Label</key><string>' + LABEL + '</string>' +
-      '<key>ProgramArguments</key><array><string>/usr/bin/open</string><string>-g</string><string>-j</string>' +
-      '<string>-a</string><string>' + esc(appPath) + '</string><string>--args</string><string>sync</string></array>' +
+      '<key>ProgramArguments</key><array><string>' + esc(executable) + '</string></array>' +
+      '<key>EnvironmentVariables</key><dict><key>' + MODE_VAR + '</key><string>sync</string></dict>' +
       '<key>RunAtLoad</key><true/><key>StartInterval</key><integer>120</integer>' +
+      '<key>StandardErrorPath</key><string>' + esc(home + '/Library/Logs/Jarvis-sync.log') + '</string>' +
       '</dict></plist>\n'
   }
 
-  function installAgent(appPath) {
+  function installAgent(executable) {
     sys.sh('/bin/mkdir -p ' + q(home + '/Library/LaunchAgents'))
-    sys.write(agentPath, agentPlist(appPath))
+    sys.write(agentPath, agentPlist(executable))
     const uid = sys.sh('/usr/bin/id -u').trim()
     sys.sh('/bin/launchctl bootout gui/' + uid + ' ' + q(agentPath) + ' >/dev/null 2>&1 || true')
     sys.sh('/bin/launchctl bootstrap gui/' + uid + ' ' + q(agentPath))
@@ -293,22 +299,24 @@ function makeCore(sys) {
 
   // ── what you see ──────────────────────────────────────────────────────────
 
+  // One dialog, then out of the way: macOS may quit Jarvis when the switch is
+  // turned on, and the background sync picks up within two minutes either way.
+  // Never wait here; a script waiting on access is a spinning wheel.
   function askForAccess() {
-    for (let round = 0; round < 3 && !canRead(); round++) {
-      const b = sys.dialog(
-        'Jarvis needs Full Disk Access to read your Messages.\n\n' +
-          'Click Open Settings, then turn on Jarvis in the list. If Jarvis isn’t there, click +, choose Applications, then Jarvis.',
-        ['Not now', 'Open Settings'],
-        'Open Settings',
-      )
-      if (b !== 'Open Settings') return false
-      sys.sh("/usr/bin/open 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles'")
-      for (let i = 0; i < 100 && !canRead(); i++) sys.sleep(3)
-    }
-    return canRead()
+    if (canRead()) return true
+    const b = sys.dialog(
+      'Jarvis needs Full Disk Access to read your Messages.\n\n' +
+        'Click Open Settings, then switch on Jarvis in the list. If Jarvis isn’t there, click +, choose Applications, then Jarvis. ' +
+        'If Jarvis is already switched on and you still see this, select it, click –, then add it again with +.\n\n' +
+        'You don’t need to reopen Jarvis: it starts syncing on its own within two minutes.',
+      ['Not now', 'Open Settings'],
+      'Open Settings',
+    )
+    if (b === 'Open Settings') sys.sh("/usr/bin/open 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles'")
+    return false
   }
 
-  function firstRun(appPath) {
+  function firstRun(executable) {
     let code = sys.ask('Type the code shown in Jarvis Settings → iMessage.', '')
     if (code === null) return
     for (;;) {
@@ -320,12 +328,8 @@ function makeCore(sys) {
         if (code === null) return
       }
     }
-    if (!askForAccess()) {
-      sys.dialog('Connected. Jarvis will start reading your Messages once Full Disk Access is on: open Jarvis again after you turn it on.', ['OK'], 'OK')
-      installAgent(appPath)
-      return
-    }
-    installAgent(appPath)
+    installAgent(executable)
+    if (!askForAccess()) return
     try {
       const n = sync()
       sys.dialog('All set. Jarvis read ' + n + ' message' + (n === 1 ? '' : 's') + ' from the last ' + DAYS +
@@ -335,20 +339,20 @@ function makeCore(sys) {
     }
   }
 
-  function status(appPath) {
+  function status(executable) {
+    installAgent(executable)
+    if (!askForAccess()) return
     const cfg = loadConfig()
     const when = cfg.last_sync ? new Date(cfg.last_sync).toLocaleString() : 'not yet'
     const b = sys.dialog('This Mac is connected to ' + cfg.server + '.\nLast sync: ' + when + '.',
       ['Disconnect this Mac', 'Sync now', 'OK'], 'OK')
     if (b === 'Sync now') {
-      if (!canRead() && !askForAccess()) return
       try {
         const n = sync()
         sys.dialog('Synced ' + n + ' new message' + (n === 1 ? '' : 's') + '.', ['OK'], 'OK')
       } catch (e) {
         sys.dialog(e.message, ['OK'], 'OK')
       }
-      installAgent(appPath)
     } else if (b === 'Disconnect this Mac') {
       forget()
       sys.dialog('This Mac stopped syncing. To delete the texts Jarvis already has, tap Disconnect in Jarvis Settings.', ['OK'], 'OK')
@@ -363,7 +367,13 @@ function makeCore(sys) {
         forget()
         sys.notify(e.message)
       } else if (e.noAccess) {
-        sys.notify('Jarvis can’t read your Messages: turn on Full Disk Access for Jarvis in System Settings.')
+        const cfg = loadConfig()
+        const last = Date.parse(cfg.no_access_notice_at || '') || 0
+        if (Date.now() - last >= NO_ACCESS_NOTICE_MS) {
+          sys.notify('Jarvis can’t read your Messages: turn on Full Disk Access for Jarvis in System Settings.')
+          cfg.no_access_notice_at = new Date().toISOString()
+          saveConfig(cfg)
+        }
       }
     }
   }
@@ -376,14 +386,16 @@ if (typeof module !== 'undefined') module.exports = { makeCore, q }
 
 // ── macOS ───────────────────────────────────────────────────────────────────
 
-// osascript calls run(argv): the launcher passes the app's path, then "sync"
-// when the LaunchAgent opened us.
-function run(argv) {
+// Built into an applet by the installer (Contents/MacOS/Jarvis). Opened by
+// you, it shows the dialogs; run by the LaunchAgent, JARVIS_MODE=sync makes it
+// sync quietly and quit.
+function run() {
   ObjC.import('Foundation')
   const app = Application.currentApplication()
   app.includeStandardAdditions = true
-  const appPath = String(argv[0])
-  const resources = appPath + '/Contents/Resources'
+  const bundle = $.NSBundle.mainBundle
+  const executable = bundle.executablePath.js
+  const resources = bundle.resourcePath.js
   const readFile = (p) => {
     const s = $.NSString.stringWithContentsOfFileEncodingError(p, $.NSUTF8StringEncoding, null)
     return s.isNil() ? '' : s.js
@@ -395,7 +407,6 @@ function run(argv) {
     read: readFile,
     write: (p, text) => $.NSString.stringWithString(text).writeToFileAtomicallyEncodingError(p, true, $.NSUTF8StringEncoding, null),
     tmp: (name) => $.NSTemporaryDirectory().js + name + '-' + Date.now() + '.json',
-    sleep: (s) => delay(s),
     computerName: () => app.doShellScript('/usr/sbin/scutil --get ComputerName || hostname'),
     dialog: (text, buttons, def) => {
       app.activate()
@@ -417,8 +428,8 @@ function run(argv) {
     notify: (text) => app.displayNotification(text, { withTitle: 'Jarvis' }),
   }
   const core = makeCore(sys)
-  const mode = argv.slice(1).filter((a) => !String(a).startsWith('-psn'))[0]
-  if (mode === 'sync') return core.background()
-  if (core.loadConfig().token) return core.status(appPath)
-  return core.firstRun(appPath)
+  const env = $.NSProcessInfo.processInfo.environment.objectForKey(MODE_VAR)
+  if (!env.isNil() && env.js === 'sync') return core.background()
+  if (core.loadConfig().token) return core.status(executable)
+  return core.firstRun(executable)
 }

@@ -36,7 +36,7 @@ export function SettingsSection(p: SettingsSectionProps) {
         </div>
         {st &&
           (tone === 'action' ? (
-            <span className="mt-0.5 shrink-0">
+            <span role="status" className="mt-0.5 shrink-0">
               <Tag tone="action">{st.label}</Tag>
             </span>
           ) : (

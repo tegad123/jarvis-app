@@ -20,7 +20,7 @@ import { Button, ErrorState, Field, PairingCode, SettingsSection, type SettingsS
 import { Select, cx, focus } from '../jm/shared/primitives'
 import { canManageTeam, canSeeSettings, ROLE_LABEL } from '../lib/roles'
 import { absoluteTime, relativeTime } from '../lib/time'
-import type { Feature, GoogleConnectionStatus, MacStatus, Role, TeamPerson, TeamResponse, WebsiteLogin } from '../lib/types'
+import type { Feature, GoogleConnectionStatus, MacDevice, MacStatus, Role, TeamPerson, TeamResponse, WebsiteLogin } from '../lib/types'
 
 /**
  * Settings — the signed-in person's own accounts. Any person; never the
@@ -352,6 +352,26 @@ function Team({ role, personKey, onUnauthorized }: { role: Role; personKey: stri
 }
 
 /** The read-only iMessage helper. Pairing is a one-time code the Mac claims. */
+/** The Mac syncs every two minutes; well past that, it has stopped. */
+const MAC_STALE_MS = 10 * 60 * 1000
+
+function macSyncing(lastSync: string | null): boolean {
+  return !!lastSync && Date.now() - Date.parse(lastSync) < MAC_STALE_MS
+}
+
+function macStatus(devices: MacDevice[]): { tone: 'done' | 'action' | 'neutral'; label: string } {
+  if (devices.length === 0) return { tone: 'neutral', label: 'Not connected' }
+  if (devices.some((d) => macSyncing(d.last_sync_at))) return { tone: 'done', label: 'Syncing' }
+  if (devices.every((d) => !d.last_sync_at)) return { tone: 'action', label: 'Waiting for the Mac' }
+  return { tone: 'action', label: 'Not syncing' }
+}
+
+function macDetail(lastSync: string | null): string {
+  if (!lastSync) return 'paired, but the Mac hasn’t synced yet: open Jarvis on it and turn on Full Disk Access'
+  if (macSyncing(lastSync)) return `synced ${relativeTime(lastSync)}`
+  return `last synced ${relativeTime(lastSync)}: open Jarvis on the Mac to see what’s wrong`
+}
+
 function MacMessages({ onUnauthorized }: { onUnauthorized: () => void }) {
   const [st, setSt] = useState<MacStatus | null>(null)
   const [code, setCode] = useState<{ code: string; expires_at: string } | null>(null)
@@ -418,19 +438,26 @@ function MacMessages({ onUnauthorized }: { onUnauthorized: () => void }) {
           a text. Disconnecting deletes everything it synced.
         </>
       }
-      status={st.devices.length > 0 ? { tone: 'done', label: 'Connected' } : { tone: 'neutral', label: 'Not connected' }}
+      status={macStatus(st.devices)}
       rows={st.devices.map((d) => ({
         id: d.device_id,
         title: d.name,
-        detail: `${st.messages} messages${d.last_sync_at ? ` · synced ${relativeTime(d.last_sync_at)}` : ' · waiting for the first sync'}`,
+        detail: `${st.messages} messages · ${macDetail(d.last_sync_at)}`,
         action: { label: 'Disconnect', disabled: busy, onClick: () => void remove(d.device_id) },
       }))}
       error={error ?? undefined}
       actions={
         !code && (
-          <Button variant="primary" disabled={busy} onClick={() => void pair()}>
-            {st.devices.length > 0 ? 'Connect another Mac' : 'Connect a Mac'}
-          </Button>
+          <>
+            <Button variant="primary" disabled={busy} onClick={() => void pair()}>
+              {st.devices.length > 0 ? 'Connect another Mac' : 'Connect a Mac'}
+            </Button>
+            {st.devices.length > 0 && st.mac_app && (
+              <Button variant="secondary" onClick={() => (window.location.href = '/api/imessage/mac-app')}>
+                Update the Mac app
+              </Button>
+            )}
+          </>
         )
       }
     >
