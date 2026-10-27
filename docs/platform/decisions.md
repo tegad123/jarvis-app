@@ -624,7 +624,14 @@ From the human's first real test on tega: plain-language persona, honest capabil
   - **Found there:** the real-tenant tests talk to Jarvis in a fresh channel, so after this change their message was posted and Jarvis never ran (`verify_tenant_chat` 8/16). They now send `@jarvis ...` (verify_tenant_chat, verify_agent_behaviour, verify_tenant_outbound, verify_tasks_chat). `verify_tenant_chat --slug isocheck` 18/18 after.
   - `docs/channels/verify_tenant_channel.py` 11/11 on the real gateway and model: no @jarvis, no model request (+0); with @jarvis the reply gives back a code posted earlier in the channel; +1 request, $0.0048.
   - Ledger on isocheck: messages 35 → 42 (+7: 1 from the failed run, 3 from the passing chat test, 3 from the channel test), 4 with an author, 0 of the 35 older rows; threads 13 → 16, one archived by the channel test.
-- **Not on eddie, blake, martin, tega or rehearsal.** For them it changes how existing channels behave: a message there no longer goes to Jarvis without `@jarvis`, unless an admin picks "every message" in Settings → Channels. The human decides when.
+- **Human yes (2026-10-27): "all tenants get it".** Live (8700) is excluded by AGENTS.md rule 5 and is not on the platform layout. On each tenant, under the lock, `--upgrade` to app ff895c1 (app identical to 548b1ff), skills b8c2d1f, then `prove_isolation.py` and the real `verify_tenant_chat.py` (now `@jarvis` in its channel, and it archives that channel):
+  - eddie: 124/124, chat 19/19; messages 115 → 118 (the test's question, reply, receipt), 1 with an author, 0 of the 115 older rows; tasks 0 → 0; actions shadowed 26 → 27 (the proof's probe).
+  - blake: 124/124, 19/19; messages 109 → 112; tasks 0 → 0; shadowed 22 → 23.
+  - martin: 124/124, 19/19; messages 106 → 109; tasks 0 → 0; shadowed 22 → 23.
+  - tega (live, live_writes approved, the owner's own Google connected; `--restart-approved` on the human's yes): posture before and after: writes armed on the app only. 121/121, chat 19/19 on loopback (public PIN sign-in is refused by `signin: google`, as designed); executed 13 → 13; denied 9 → 10 (the proof's probe, enforce mode); messages 332 → 335; tasks 0 → 0. `tega.yamin.io` serves the new bundle.
+  - Each tenant's existing channels now answer only on `@jarvis` (the default); an admin can pick "every message" in Settings → Channels.
+  - Snapshots: `/root/backups/<slug>/upgrade-20261027T*`.
+- **Rehearsal not yet:** it runs app 6d847b0 / skills 74c0fb1, 83 commits behind the others, with a real mailbox. Channels there means taking all of that, and a gateway restart onto the actor-reference Hermes (verify_hermes_actor_ref.py first). Asked the human separately.
 
 ## Decided (from the spec, recorded 2026-10-10)
 
