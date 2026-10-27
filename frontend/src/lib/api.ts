@@ -29,6 +29,8 @@ import type {
   GoogleConnectionStatus,
   HealthResponse,
   JarvisReplies,
+  LeadDetailResponse,
+  LeadTouchKind,
   LeadsError,
   LeadsResponse,
   Task,
@@ -346,6 +348,8 @@ export interface LeadInput {
   temperature?: string
   follow_up?: string
   next_touch_at?: string
+  /** Owner or admin only; the API refuses it from a member. */
+  owner_person?: string
 }
 
 export function createLead(input: LeadInput): Promise<{ ok: boolean }> {
@@ -361,6 +365,24 @@ export function patchLead(id: string, input: LeadInput): Promise<{ ok: boolean }
 
 export function archiveLead(id: string): Promise<{ ok: boolean }> {
   return requestOk('/api/leads/' + encodeURIComponent(id) + '/archive', { method: 'POST' })
+}
+
+export function getLead(id: string): Promise<LeadDetailResponse> {
+  return requestOk('/api/leads/' + encodeURIComponent(id))
+}
+
+export interface LeadTouchInput {
+  kind: LeadTouchKind
+  note?: string
+  reached?: boolean
+  next_touch_at?: string
+}
+
+export function logLeadTouch(id: string, input: LeadTouchInput): Promise<{ ok: boolean }> {
+  return requestOk('/api/leads/' + encodeURIComponent(id) + '/touches', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
 }
 
 /* ------------------------------------------------------------------- health */

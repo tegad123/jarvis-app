@@ -19,6 +19,12 @@ export interface LeadRowProps {
   /** One field per tap: { temperature } or { status }. */
   onChange?: (fields: { temperature?: string; status?: string }) => void
   onArchive?: () => void
+  /** Opens the lead (its timeline); the name becomes a button. */
+  onOpen?: () => void
+  /** "Follow up today", "Overdue · Oct 20", "Next · Nov 3". */
+  due?: string
+  /** Overdue or today: the due line is drawn as the action colour. */
+  dueNow?: boolean
   busy?: boolean
   className?: string
 }
@@ -96,11 +102,28 @@ export function LeadRow(p: LeadRowProps) {
     <li className={cx(rowBase, p.className)}>
       <div className="flex min-w-0 items-center gap-jm-2">
         {bars}
-        <span className={cx('min-w-0 flex-1 text-jm-body-sm text-jm-fg', truncate)}>{p.name}</span>
+        {p.onOpen ? (
+          <button
+            type="button"
+            onClick={p.onOpen}
+            className={cx(
+              'min-w-0 flex-1 cursor-pointer appearance-none border-0 bg-transparent p-0 text-left font-jm text-jm-body-sm text-jm-fg hover:underline',
+              truncate,
+              focus,
+            )}
+          >
+            {p.name}
+          </button>
+        ) : (
+          <span className={cx('min-w-0 flex-1 text-jm-body-sm text-jm-fg', truncate)}>{p.name}</span>
+        )}
         {p.byJarvis && <SparkGlyph label="Added by Jarvis" />}
         {statusNode}
       </div>
       {place && <p className={cx('m-0 text-jm-body-sm text-jm-fg-secondary', truncate)}>{place}</p>}
+      {p.due && (
+        <p className={cx('m-0 text-jm-caption', p.dueNow ? 'font-medium text-jm-accent-text' : 'text-jm-fg-secondary')}>{p.due}</p>
+      )}
       <div className="flex min-h-jm-control-sm min-w-0 items-center gap-jm-2 text-jm-caption text-jm-fg-secondary">
         <span className="flex min-w-0 flex-1 flex-wrap items-center gap-y-jm-1">{joinDots(meta)}</span>
         {p.canEdit && (
