@@ -104,6 +104,8 @@ from app import imessage as imessage_mod  # noqa: E402
 app.include_router(imessage_mod.broker_router)
 app.include_router(imessage_mod.router)
 app.include_router(imessage_mod.settings_router)
+from app import lead_tools as lead_tools_mod  # noqa: E402
+app.include_router(lead_tools_mod.broker_router)
 from app import model_proxy as model_proxy_mod  # noqa: E402
 app.include_router(model_proxy_mod.router)
 from app import team as team_mod  # noqa: E402
