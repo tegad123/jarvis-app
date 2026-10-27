@@ -44,6 +44,7 @@ from app import agent_status  # noqa: E402
 from app import google_connection as google_conn_mod  # noqa: E402
 from app import google_oauth  # noqa: E402
 from app import auth, chat as chat_mod, config, health, whoami  # noqa: E402
+from app import channels as channels_mod  # noqa: E402
 from app import feed as feed_mod  # noqa: E402
 from app import leads as leads_mod  # noqa: E402
 from app import leads_source as leads_src  # noqa: E402
@@ -108,6 +109,7 @@ app.include_router(model_proxy_mod.router)
 from app import team as team_mod  # noqa: E402
 app.include_router(team_mod.router)
 app.include_router(team_mod.categories_router)
+app.include_router(team_mod.channels_router)
 
 
 def _uvicorn_log_config() -> dict:
@@ -511,9 +513,18 @@ def post_chat(body: ChatRequest, sess: dict = Depends(auth.current_session)):
                 status_code=403, detail="That attachment belongs to another conversation."
             )
 
+    if thread["is_direct"]:
+        stream = chat_mod.stream_chat(body.thread_id, body.message, body.attachments,
+                                      person_key=auth.person_of(sess), role=auth.role_of(sess))
+    else:
+        # A team channel: people talk here, and Jarvis answers when called
+        # (app/channels.py). Posting needs a person — it is their message.
+        auth.require_person(sess)
+        stream = chat_mod.stream_channel_post(
+            thread, body.message, body.attachments, auth.person_of(sess), auth.role_of(sess),
+            can_ask=accounts_mod.feature_on(auth.person_of(sess), "ask"))
     return StreamingResponse(
-        chat_mod.stream_chat(body.thread_id, body.message, body.attachments,
-                             person_key=auth.person_of(sess), role=auth.role_of(sess)),
+        stream,
         media_type="application/x-ndjson",
         headers={
             "Cache-Control": "no-cache",
@@ -528,12 +539,15 @@ def post_chat(body: ChatRequest, sess: dict = Depends(auth.current_session)):
 def get_chat_history(
     sess: dict = Depends(auth.current_session),
     thread_id: str = Query(chat_mod.DIRECT_THREAD, min_length=1, max_length=64),
+    after: int = Query(0, ge=0, description="only messages newer than this id (a channel's poll)"),
 ):
     """Durable per-thread transcript. Survives reload AND service restart."""
     auth.require_bodies(sess)
-    if _reach_thread(thread_id, sess)["is_direct"]:
+    thread = _reach_thread(thread_id, sess)
+    if thread["is_direct"]:
         auth.require_feature(sess, "ask")
-    messages = chat_mod.get_history(thread_id)
+    people = channels_mod.directory()
+    messages = [chat_mod.public_message(m, people) for m in chat_mod.get_history(thread_id, after_id=after)]
     # Resolve attachment ids to full records so a reload can re-render chips
     # without one request per attachment.
     role = auth.role_of(sess)
@@ -544,7 +558,11 @@ def get_chat_history(
         m["actions"] = agent_status.live_actions(saved, role, auth.person_of(sess) or "") if saved else []
         if len(m["actions"]) < len(saved):
             threads_mod.bump_counter("chat_history_action_hidden")
-    return {"thread_id": thread_id, "messages": messages, "count": len(messages)}
+    # Whom Jarvis is answering in this channel right now, so the others see it working.
+    answering = [] if thread["is_direct"] else [
+        channels_mod.name_of(k, people) for k in channels_mod.answering(thread_id) if k]
+    return {"thread_id": thread_id, "messages": messages, "count": len(messages),
+            "last_id": threads_mod.max_message_id(thread_id), "jarvis_answering": answering}
 
 
 # ------------------------------------------------------------------- threads
@@ -567,11 +585,23 @@ def get_threads(
     # meet, so the operator gate applies to it too — an operator sees the row,
     # the name, the timestamp and the membership, and no text from inside.
     bodies = not auth.is_operator(sess)
+    people = channels_mod.directory()
+    # UNREAD IS ALSO CONTENT-ADJACENT (a mention count reads the text), so the
+    # operator gets none; it has no person to have read anything anyway.
+    unread = threads_mod.unread(viewer, [t["thread_id"] for t in items]) if bodies else {}
     for t in items:
         last = threads_mod.last_message(t["thread_id"]) if bodies else None
         t["preview"] = last["content"][:160] if last else None
         t["preview_role"] = last["role"] if last else None
+        t["preview_mine"] = bool(last and last.get("author") and last["author"] == viewer)
+        t["preview_author_name"] = (channels_mod.name_of(last["author"], people)
+                                    if last and last.get("author") else None)
         t["members"] = [m["person_key"] for m in threads_mod.members(t["thread_id"])]
+        u = unread.get(t["thread_id"])
+        t["unread"] = bool(u)
+        t["unread_count"] = u["count"] if u else 0
+        t["mentions"] = sum(1 for m in u["messages"] if m["role"] == "user"
+                            and channels_mod.mentioned(m["content"], people, among=[viewer])) if u else 0
     counts = threads_mod.counts() if unscoped else {
         "active": len(items),
         "archived": 0,
@@ -579,7 +609,8 @@ def get_threads(
         "messages": 0,
     }
     return {"threads": items, "count": len(items), "counts": counts,
-            "bodies_visible": bodies, "categories": threads_mod.categories()}
+            "bodies_visible": bodies, "categories": threads_mod.categories(),
+            "jarvis_replies": channels_mod.mode()}
 
 
 @app.post("/api/threads", status_code=201)
@@ -622,7 +653,7 @@ def put_thread_category(thread_id: str, body: ThreadCategory, sess: dict = Depen
 def patch_thread(
     thread_id: str, body: ThreadRename, sess: dict = Depends(auth.current_session)
 ):
-    _reach_thread(thread_id, sess)
+    _manage_channel(_reach_thread(thread_id, sess), sess, "rename")
     try:
         return {"ok": True, "thread": threads_mod.rename_thread(thread_id, body.name)}
     except threads_mod.ThreadProtected as exc:
@@ -640,13 +671,43 @@ def post_thread_archive(
     archived: bool = Query(True, description="false un-archives"),
 ):
     """Archive is a FLAG. Nothing is ever hard-deleted — see app/threads.py."""
-    _reach_thread(thread_id, sess)
+    _manage_channel(_reach_thread(thread_id, sess), sess, "archive")
     try:
         return {"ok": True, "thread": threads_mod.set_archived(thread_id, archived)}
     except threads_mod.ThreadProtected as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except threads_mod.ThreadNotFound:
         raise HTTPException(status_code=404, detail="No such conversation.")
+
+
+def _manage_channel(thread: dict, sess: dict, what: str) -> None:
+    """A team channel is shared, so renaming or archiving it changes it for
+    everyone in it: owner and admins only, like creating one and choosing who
+    is in it. The direct line keeps its own refusal (409, ThreadProtected)."""
+    if thread["is_direct"]:
+        return
+    if auth.role_of(sess) not in ("owner", "admin"):
+        threads_mod.bump_counter(f"channel_{what}_refused")
+        raise HTTPException(status_code=403, detail=f"Only an admin or the owner can {what} a channel.")
+
+
+class ReadMark(BaseModel):
+    last_id: int = Field(..., ge=0)
+
+
+@app.post("/api/threads/{thread_id}/read")
+def post_thread_read(thread_id: str, body: ReadMark, sess: dict = Depends(auth.current_session)):
+    """How far this person has read: the sidebar's unread dot goes out.
+
+    Only for threads that are theirs to have read: their direct line or a
+    channel they were added to. An admin looking into a channel they are not
+    in leaves no position, so it never starts counting unread for them."""
+    auth.require_person(sess)
+    thread = _reach_thread(thread_id, sess)
+    me = auth.person_of(sess)
+    if not (thread["direct_for"] == me or threads_mod.is_member(thread_id, me)):
+        return {"ok": True, "tracked": False, "last_read_id": None}
+    return {"ok": True, "tracked": True, "last_read_id": threads_mod.mark_read(thread_id, me, body.last_id)}
 
 
 class MemberAdd(BaseModel):

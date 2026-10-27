@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, type KeyboardEvent } from 'react'
 import { Button } from '../Button/Button'
 import { Icon } from '../shared/Icon'
 import { AttachmentChip, Dots, LiveDot, Tag, cx, type ChatAttachment } from '../shared/primitives'
@@ -33,7 +33,24 @@ export interface ComposerProps {
   /** While a reply streams; with onStop the send button becomes stop. */
   streaming?: boolean
   onStop?: () => void
+  /** Channels: who an @ can reach. Typing @ opens the list; Enter or Tab
+   *  puts "@Name " in the message. */
+  mentionables?: Mentionable[]
   className?: string
+}
+
+export interface Mentionable {
+  id: string
+  /** What gets typed after the @. */
+  name: string
+  /** A second line: "Assistant", a title. */
+  hint?: string
+}
+
+/** The @word the caret is in, if any: where it starts and what is typed so far. */
+function mentionAt(value: string, caret: number): { start: number; query: string } | null {
+  const m = value.slice(0, caret).match(/(^|[\s(])@([^\s@]*)$/)
+  return m ? { start: caret - m[2].length - 1, query: m[2] } : null
 }
 
 const clock = (sec = 0) => {
@@ -111,6 +128,10 @@ export function Composer(p: ComposerProps) {
   const controlled = p.value !== undefined
   const value = controlled ? (p.value as string) : internal
   const fileRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [caret, setCaret] = useState(0)
+  const [picked, setPicked] = useState(0)
+  const [closedAt, setClosedAt] = useState<number | null>(null)
   const atts = p.attachments ?? []
   const voice = p.voice ?? { phase: 'idle' as const }
   const recording = voice.phase === 'recording'
@@ -121,6 +142,45 @@ export function Composer(p: ComposerProps) {
     p.onChange?.(v)
     if (!controlled) setInternal(v)
   }
+
+  const at = p.mentionables?.length ? mentionAt(value, caret) : null
+  const q = at?.query.toLowerCase() ?? ''
+  const options =
+    at && closedAt !== at.start
+      ? (p.mentionables ?? [])
+          .filter((m) => !q || m.name.toLowerCase().split(/\s+/).some((w) => w.startsWith(q)) || m.name.toLowerCase().startsWith(q))
+          .slice(0, 6)
+      : []
+  const choice = Math.min(picked, Math.max(options.length - 1, 0))
+
+  const insert = (m: Mentionable) => {
+    if (!at) return
+    const text = `@${m.name} `
+    const next = value.slice(0, at.start) + text + value.slice(caret)
+    const pos = at.start + text.length
+    setValue(next)
+    setCaret(pos)
+    setPicked(0)
+    requestAnimationFrame(() => {
+      inputRef.current?.focus()
+      inputRef.current?.setSelectionRange(pos, pos)
+    })
+  }
+
+  const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (!options.length) return
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      setPicked((choice + (e.key === 'ArrowDown' ? 1 : options.length - 1)) % options.length)
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault()
+      insert(options[choice])
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      setClosedAt(at!.start)
+    }
+  }
+  const track = () => setCaret(inputRef.current?.selectionStart ?? value.length)
 
   return (
     <form
@@ -133,7 +193,36 @@ export function Composer(p: ComposerProps) {
       }}
     >
       <VoiceStrip voice={voice} maxSeconds={p.maxSeconds} onDismiss={p.onDismissVoice} />
-      <div className="box-border grid min-h-jm-composer gap-jm-2 rounded-jm-composer border border-jm-border bg-jm-panel p-jm-2 transition-colors duration-jm-press focus-within:border-jm-accent motion-reduce:transition-none">
+      <div className="relative box-border grid min-h-jm-composer gap-jm-2 rounded-jm-composer border border-jm-border bg-jm-panel p-jm-2 transition-colors duration-jm-press focus-within:border-jm-accent motion-reduce:transition-none">
+        {options.length > 0 && (
+          <ul
+            id="jm-mention-list"
+            role="listbox"
+            aria-label="People to mention"
+            className="absolute bottom-[calc(100%+var(--jm-space-2))] left-0 z-20 m-0 grid w-full max-w-[320px] list-none gap-0.5 rounded-jm-md border border-jm-border bg-jm-panel-raised p-jm-1 shadow-jm-float"
+          >
+            {options.map((m, i) => (
+              <li
+                key={m.id}
+                id={`jm-mention-${m.id}`}
+                role="option"
+                aria-selected={i === choice}
+                onPointerDown={(e) => {
+                  e.preventDefault()
+                  insert(m)
+                }}
+                onPointerEnter={() => setPicked(i)}
+                className={cx(
+                  'grid cursor-pointer rounded-jm-sm px-jm-3 py-jm-2',
+                  i === choice ? 'bg-jm-accent-soft text-jm-accent-soft-text' : 'text-jm-fg',
+                )}
+              >
+                <span className="text-jm-label">@{m.name}</span>
+                {m.hint && <span className="text-jm-caption text-jm-fg-secondary">{m.hint}</span>}
+              </li>
+            ))}
+          </ul>
+        )}
         {(atts.length > 0 || p.uploading) && (
           <div className="flex flex-wrap items-center gap-jm-3 px-jm-2 pt-jm-2">
             {atts.map((a, i) => (
@@ -169,11 +258,26 @@ export function Composer(p: ComposerProps) {
             />
           )}
           <input
+            ref={inputRef}
             value={value}
             placeholder={p.placeholder ?? 'Ask Jarvis…'}
             aria-label={p.label ?? 'Message Jarvis'}
             disabled={p.disabled || p.streaming}
-            onChange={(e) => setValue(e.target.value)}
+            role={p.mentionables?.length ? 'combobox' : undefined}
+            aria-expanded={p.mentionables?.length ? options.length > 0 : undefined}
+            aria-controls={options.length ? 'jm-mention-list' : undefined}
+            aria-activedescendant={options.length ? `jm-mention-${options[choice].id}` : undefined}
+            aria-autocomplete={p.mentionables?.length ? 'list' : undefined}
+            onKeyDown={onKeyDown}
+            onKeyUp={track}
+            onClick={track}
+            onSelect={track}
+            onChange={(e) => {
+              setValue(e.target.value)
+              setCaret(e.target.selectionStart ?? e.target.value.length)
+              setPicked(0)
+              setClosedAt(null)
+            }}
             className="h-jm-control min-w-0 flex-1 border-0 bg-transparent px-jm-2 font-jm text-jm-body text-jm-fg outline-none placeholder:text-jm-fg-secondary"
           />
           {p.onMic && (

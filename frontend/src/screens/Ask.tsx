@@ -8,6 +8,7 @@ import {
   bumpCounter,
   getChatHistory,
   getThreadMembers,
+  markThreadRead,
   removeThreadMember,
   streamChat,
   uploadAttachment,
@@ -19,10 +20,30 @@ import { stepName, truncateLabel } from '../lib/steps'
 import { silence, useSpeaker } from '../lib/useSpeaker'
 import { useMic } from '../lib/useMic'
 import { MAX_RECORD_SECONDS } from '../lib/voice'
-import { Button, Composer, MembersSheet, MessageBubble, StepList, SystemLine, type ChatAttachment, type Step } from '../jm'
-import type { Attachment, ChatMessage, Role, Thread, ThreadMember } from '../lib/types'
+import { Button, Composer, MembersSheet, MessageBubble, StepList, SystemLine, type ChatAttachment, type Mentionable, type Step } from '../jm'
+import type { Attachment, ChatHistoryResponse, ChatMessage, JarvisReplies, Role, Thread, ThreadMember } from '../lib/types'
 
 const EXAMPLE_PROMPTS = ['Which emails need me today?', "What's on the calendar this week?", 'Any warm leads I should chase?']
+
+/** How often an open channel asks for what the others wrote. */
+const POLL_MS = 3_000
+
+type Stored = ChatHistoryResponse['messages'][number]
+
+/** Server rows into the list by id: new ones in id order, nothing twice, and
+ *  what this screen is still sending (no id yet) left where it is. */
+function mergeById(cur: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
+  const have = new Set(cur.map((m) => m.id).filter((id): id is number => id !== undefined))
+  const add = incoming.filter((m) => m.id !== undefined && !have.has(m.id)).sort((a, b) => a.id! - b.id!)
+  if (!add.length) return cur
+  const out = [...cur]
+  for (const m of add) {
+    const at = out.findIndex((x) => x.id !== undefined && x.id > m.id!)
+    if (at < 0) out.push(m)
+    else out.splice(at, 0, m)
+  }
+  return out
+}
 
 interface Props {
   thread: Thread
@@ -31,6 +52,10 @@ interface Props {
   role: Role
   personKey: string | null
   people: Person[]
+  /** Settings → Channels: when Jarvis answers in a channel. */
+  jarvisReplies: JarvisReplies
+  /** This thread has been read up to its newest message. */
+  onRead: (threadId: string) => void
   /** Membership changed: the sidebar's rows carry it. */
   onThreadsChanged: () => void
   onUnauthorized: () => void
@@ -47,6 +72,7 @@ function AssistantMessage({
   streaming,
   stopped,
   actions,
+  from,
 }: {
   m: ChatMessage
   isLatest: boolean
@@ -54,12 +80,14 @@ function AssistantMessage({
   streaming: boolean
   stopped: boolean
   actions: ChatAction[]
+  from?: string
 }) {
   const { speech, onSpeak } = useSpeaker(m.content, isLatest, completedAt, bumpCounter)
   return (
     <>
       <AssistantText
         content={m.content}
+        from={from}
         streaming={streaming}
         partial={m.partial || stopped}
         partialLabel={stopped ? 'You stopped this answer.' : undefined}
@@ -71,20 +99,27 @@ function AssistantMessage({
   )
 }
 
-export default function Ask({ thread, role, personKey, people, onThreadsChanged, onUnauthorized }: Props) {
+export default function Ask({ thread, role, personKey, people, jarvisReplies, onRead, onThreadsChanged, onUnauthorized }: Props) {
   // An operator reaches every channel's structure and none of its content.
   // app/auth.py:require_bodies is what actually enforces this; the flag here
   // exists so the screen shows an honest explanation instead of a 403.
   const structureOnly = role === 'operator'
   const canManageMembers = role === 'owner' || role === 'admin'
+  // A team channel: people talk to each other here and Jarvis answers when
+  // called (app/channels.py). The direct line is the person and Jarvis only.
+  const channel = !thread.is_direct
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [draft, setDraft] = useState('')
   const [streaming, setStreaming] = useState(false)
   // The current turn's steps, shown above its reply; replaced by the next turn.
   const [steps, setSteps] = useState<Step[]>([])
   const [stepsOpen, setStepsOpen] = useState(true)
-  const [turnStart, setTurnStart] = useState<number | null>(null)
-  const [stoppedAt, setStoppedAt] = useState<number | null>(null)
+  // This turn's question and reply, by localId: other people's messages can
+  // land between them, so a position in the list would not stay true.
+  const [turn, setTurn] = useState<{ q: string; a: string; jarvis: boolean } | null>(null)
+  const [stoppedKey, setStoppedKey] = useState<string | null>(null)
+  // Whom Jarvis is answering in this channel for someone else, from the poll.
+  const [answering, setAnswering] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
   // Uploaded and waiting to be sent with the next message.
   const [pending, setPending] = useState<Attachment[]>([])
@@ -113,6 +148,15 @@ export default function Ask({ thread, role, personKey, people, onThreadsChanged,
   const pinnedRef = useRef(true)
   const onUnauthorizedRef = useRef(onUnauthorized)
   onUnauthorizedRef.current = onUnauthorized
+  const onReadRef = useRef(onRead)
+  onReadRef.current = onRead
+  // Where the next poll starts, and whether this screen's own turn is running
+  // (its reply arrives through the stream, so the poll leaves it alone).
+  const lastIdRef = useRef(0)
+  const streamingRef = useRef(false)
+  const readRef = useRef(0)
+  // Rows already on screen another way: a turn's receipt is the verified line.
+  const shownElsewhere = useRef(new Set<number>())
 
   const mic = useMic((text) => setDraft((cur) => (cur.trim() ? `${cur.trim()} ${text}` : text)))
 
@@ -132,12 +176,65 @@ export default function Ask({ thread, role, personKey, people, onThreadsChanged,
     // rather than the UI's rule and the server's being only accidentally the same.
     if (structureOnly) return
     void getChatHistory(thread.thread_id)
-      .then((r) => setMessages(r.messages.map((m) => ({ ...m, thread_id: thread.thread_id }))))
+      .then((r) => {
+        lastIdRef.current = r.last_id ?? 0
+        setAnswering(r.jarvis_answering ?? [])
+        setMessages(r.messages.map((m) => ({ ...m, thread_id: thread.thread_id })))
+      })
       .catch((err) => {
         // An empty thread is the normal case; only auth failures matter here.
         if (err instanceof Unauthorized) onUnauthorizedRef.current()
       })
   }, [thread.thread_id, thread.is_direct, structureOnly])
+
+  // CHANNELS: what the others wrote, every few seconds while you are looking.
+  // While your own turn streams, its reply and your own message come through
+  // the stream; the poll still brings everyone else's.
+  const poll = useCallback(async () => {
+    try {
+      const r = await getChatHistory(thread.thread_id, lastIdRef.current)
+      const fresh = r.messages
+        .map((m: Stored) => ({ ...m, thread_id: thread.thread_id }))
+        .filter((m) => !shownElsewhere.current.has(m.id))
+        .filter((m) => !streamingRef.current || (m.role === 'user' && m.author !== personKey))
+      if (!streamingRef.current) lastIdRef.current = Math.max(lastIdRef.current, r.last_id ?? 0)
+      setAnswering(r.jarvis_answering ?? [])
+      if (fresh.length) setMessages((cur) => mergeById(cur, fresh))
+    } catch (err) {
+      if (err instanceof Unauthorized) onUnauthorizedRef.current()
+    }
+  }, [thread.thread_id, personKey])
+
+  useEffect(() => {
+    if (!channel || structureOnly) return
+    const t = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void poll()
+    }, POLL_MS)
+    return () => window.clearInterval(t)
+  }, [channel, structureOnly, poll])
+
+  // Read as it arrives: the newest saved id goes to the server while the
+  // screen is in front of you, and the sidebar's dot goes out.
+  const markRead = useCallback(() => {
+    if (structureOnly || document.visibilityState !== 'visible') return
+    const newest = messagesRef.current.reduce((n, m) => (m.id !== undefined && m.id > n ? m.id : n), 0)
+    if (newest <= readRef.current) return
+    readRef.current = newest
+    void markThreadRead(thread.thread_id, newest)
+      .then(() => onReadRef.current(thread.thread_id))
+      .catch((err) => {
+        if (err instanceof Unauthorized) onUnauthorizedRef.current()
+      })
+  }, [thread.thread_id, structureOnly])
+
+  useEffect(() => {
+    markRead()
+  }, [messages, markRead])
+
+  useEffect(() => {
+    document.addEventListener('visibilitychange', markRead)
+    return () => document.removeEventListener('visibilitychange', markRead)
+  }, [markRead])
 
   // Abort any in-flight answer on leaving — dropping the connection tells the
   // gateway to interrupt the agent rather than keep working — and never let
@@ -201,27 +298,35 @@ export default function Ask({ thread, role, personKey, people, onThreadsChanged,
       setPending([])
       silence() // a new question supersedes the previous answer being read
       setStreaming(true)
+      streamingRef.current = true
       setSteps([])
       setStepsOpen(true)
-      setStoppedAt(null)
+      setStoppedKey(null)
       stoppedRef.current = false
       pinnedRef.current = true
       setVerified(null)
       setChatActions([])
 
-      // Where this turn's reply will sit: right after the question.
-      const start = messagesRef.current.length + 1
-      setMessages((m) => [...m, { thread_id: thread.thread_id, role: 'user', content: message, ts: Date.now() / 1000, attachments: sending }])
-      setTurnStart(start)
+      // This turn's question and reply, by handle. In a channel Jarvis may not
+      // be asked at all; the server says so in its first line ("posted").
+      const stamp = `${Date.now()}`
+      const q = `q-${stamp}`
+      const a = `a-${stamp}`
+      setMessages((m) => [
+        ...m,
+        { localId: q, thread_id: thread.thread_id, role: 'user', author: personKey, content: message, ts: Date.now() / 1000, attachments: sending },
+      ])
+      setTurn({ q, a, jarvis: !channel })
 
       let assistant = ''
       const ensureAssistant = () => {
         setMessages((m) => {
-          const last = m[m.length - 1]
-          if (last && last.role === 'assistant' && m.length - 1 >= start) {
-            return [...m.slice(0, -1), { ...last, content: assistant }]
-          }
-          return [...m, { thread_id: thread.thread_id, role: 'assistant' as const, content: assistant, ts: Date.now() / 1000 }]
+          const i = m.findIndex((x) => x.localId === a)
+          if (i >= 0) return m.map((x, j) => (j === i ? { ...x, content: assistant } : x))
+          // Right under its question, even if someone else wrote since.
+          const at = m.findIndex((x) => x.localId === q)
+          const reply = { localId: a, thread_id: thread.thread_id, role: 'assistant' as const, content: assistant, ts: Date.now() / 1000 }
+          return at < 0 ? [...m, reply] : [...m.slice(0, at + 1), reply, ...m.slice(at + 1)]
         })
       }
       const settle = (status: 'done' | 'error') =>
@@ -271,13 +376,25 @@ export default function Ask({ thread, role, personKey, people, onThreadsChanged,
             // Something was deliberately withheld (a document). Say so rather
             // than letting the user assume Jarvis read it.
             onNotice: (e) => setNotice(e.message),
+            // Channels: the message is saved and the others can see it.
+            onPosted: (e) => {
+              setMessages((m) => m.map((x) => (x.localId === q ? { ...x, id: e.message.id, author: e.message.author, author_name: e.message.author_name } : x)))
+              setTurn((t) => (t && t.q === q ? { ...t, jarvis: e.jarvis } : t))
+            },
+            // The rows this turn wrote: the reply gets its id, and a receipt
+            // (already on screen as the verified line) is not merged in again.
+            onSaved: (e) => {
+              const [replyId, ...rest] = e.ids
+              if (replyId !== undefined) setMessages((m) => m.map((x) => (x.localId === a ? { ...x, id: replyId } : x)))
+              rest.forEach((id) => shownElsewhere.current.add(id))
+            },
           },
           controller.signal,
           sending.map((a) => a.id),
         )
         if (stoppedRef.current) {
           settle('error')
-          if (assistant) setStoppedAt(start)
+          if (assistant) setStoppedKey(a)
           else setNotice('You stopped this answer.')
         }
       } catch (err) {
@@ -292,10 +409,14 @@ export default function Ask({ thread, role, personKey, people, onThreadsChanged,
         setPending(sending)
       } finally {
         setStreaming(false)
+        streamingRef.current = false
         abortRef.current = null
+        // Whatever the poll held back while this turn ran (someone else's
+        // Jarvis reply, say) comes in now, in order.
+        if (channel) void poll()
       }
     },
-    [thread.thread_id, streaming, pending],
+    [thread.thread_id, streaming, pending, channel, personKey, poll],
   )
 
   const stop = useCallback(() => {
@@ -342,7 +463,28 @@ export default function Ask({ thread, role, personKey, people, onThreadsChanged,
   const lastAssistant = messages.map((m) => m.role).lastIndexOf('assistant')
   const stepNode =
     steps.length > 0 ? <StepList steps={steps} open={stepsOpen} onOpenChange={setStepsOpen} /> : null
-  const waiting = streaming && turnStart !== null && messages.length <= turnStart
+  const hasReply = turn !== null && messages.some((m) => m.localId === turn.a)
+  // Dots while Jarvis works on THIS person's turn; in a channel only once the
+  // server has said Jarvis is answering it.
+  const waiting = streaming && turn !== null && turn.jarvis && !hasReply
+
+  // Channels: who an @ can reach, and how each person's names read.
+  const named = new Map(people.map((p) => [p.person_key, p]))
+  const me = personKey ? named.get(personKey) : undefined
+  const namesOf = (name?: string) => (name ? [name, name.split(/\s+/)[0]] : [])
+  const mentionNames = {
+    names: ['jarvis', 'assistant', ...(members ?? []).flatMap((m) => namesOf(named.get(m.person_key)?.name))],
+    self: namesOf(me?.name),
+  }
+  const mentionables: Mentionable[] = channel
+    ? [
+        { id: 'jarvis', name: 'jarvis', hint: 'Ask Jarvis' },
+        ...(members ?? [])
+          .filter((m) => m.person_key !== personKey && named.has(m.person_key))
+          .map((m) => ({ id: m.person_key, name: named.get(m.person_key)!.name, hint: named.get(m.person_key)!.title || undefined })),
+      ]
+    : []
+  const othersWaiting = channel && !streaming && answering.length > 0
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -374,6 +516,14 @@ export default function Ask({ thread, role, personKey, people, onThreadsChanged,
             >
               Operator access shows this channel and who is in it — not what was said in it.
             </SystemLine>
+          ) : messages.length === 0 && !streaming && channel ? (
+            <div className="grid gap-jm-2 py-jm-8">
+              <p className="m-0 text-jm-title text-jm-fg">This is the start of {thread.name}.</p>
+              <p className="m-0 text-jm-body text-jm-fg-secondary">
+                Everyone in this channel reads what is written here.{' '}
+                {jarvisReplies === 'mention' ? 'Type @jarvis when you want Jarvis to answer.' : 'Jarvis answers every message here.'}
+              </p>
+            </div>
           ) : messages.length === 0 && !streaming ? (
             <div className="grid gap-jm-4 py-jm-8">
               <p className="m-0 text-jm-title text-jm-fg">Ask Jarvis anything about your leads, email, or schedule.</p>
@@ -387,25 +537,41 @@ export default function Ask({ thread, role, personKey, people, onThreadsChanged,
             </div>
           ) : (
             <>
-              {messages.map((m, i) => (
-                <div key={i} className="grid gap-jm-3">
-                  {i === turnStart && stepNode}
-                  {m.role === 'user' ? (
-                    <MessageBubble role="user" text={m.content || undefined} attachments={(m.attachments ?? []).map(chip)} />
-                  ) : (
-                    <AssistantMessage
-                      m={m}
-                      isLatest={i === messages.length - 1}
-                      completedAt={i === messages.length - 1 ? replyDoneAt : undefined}
-                      streaming={streaming && i === messages.length - 1}
-                      stopped={stoppedAt === i}
-                      actions={i === lastAssistant ? chatActions : []}
-                    />
-                  )}
-                </div>
-              ))}
+              {messages.map((m, i) => {
+                const live = turn !== null && m.localId === turn.a
+                // In a channel someone else's message carries their name; one
+                // saved before authors were recorded says so instead of guessing.
+                const mine = !channel || m.author === personKey
+                return (
+                  <div key={m.id ?? m.localId ?? `i${i}`} className="grid gap-jm-3">
+                    {live && stepNode}
+                    {m.role === 'user' ? (
+                      <MessageBubble
+                        role="user"
+                        text={m.content || undefined}
+                        attachments={(m.attachments ?? []).map(chip)}
+                        from={mine ? undefined : m.author_name || 'Earlier message'}
+                        mentions={channel ? mentionNames : undefined}
+                      />
+                    ) : (
+                      <AssistantMessage
+                        m={m}
+                        from={channel ? 'Jarvis' : undefined}
+                        isLatest={i === messages.length - 1}
+                        completedAt={i === messages.length - 1 ? replyDoneAt : undefined}
+                        streaming={streaming && live}
+                        stopped={stoppedKey !== null && m.localId === stoppedKey}
+                        actions={i === lastAssistant ? chatActions : []}
+                      />
+                    )}
+                  </div>
+                )
+              })}
               {waiting && (stepNode ?? <MessageBubble role="assistant" typing />)}
-              {!streaming && !waiting && turnStart !== null && messages.length <= turnStart && stepNode}
+              {!streaming && !waiting && turn !== null && !hasReply && stepNode}
+              {othersWaiting && (
+                <MessageBubble role="assistant" typing from="Jarvis" typingLabel={`Jarvis is answering ${answering.join(' and ')}`} />
+              )}
             </>
           )}
 
@@ -442,8 +608,11 @@ export default function Ask({ thread, role, personKey, people, onThreadsChanged,
             value={draft}
             onChange={setDraft}
             onSubmit={(t) => void send(t)}
-            placeholder="Ask Jarvis…"
-            label="Message Jarvis"
+            placeholder={
+              !channel ? 'Ask Jarvis…' : jarvisReplies === 'mention' ? `Message ${thread.name} · @jarvis to ask Jarvis` : `Message ${thread.name}`
+            }
+            label={channel ? `Message ${thread.name}` : 'Message Jarvis'}
+            mentionables={mentionables}
             attachments={pending.map(chip)}
             onRemoveAttachment={(a) => setPending((cur) => cur.filter((x) => x.id !== a.id))}
             uploading={uploading}

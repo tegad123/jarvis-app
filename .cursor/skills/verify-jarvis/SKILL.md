@@ -120,6 +120,7 @@ Tabs `feed | ask | approvals | leads | tasks` (`frontend/src/components/TabBar.t
 | Feed | `app/feed.py` → `_shared/notify` | `verify_tasks_chat.py`, `verify_chat_honesty.py` | `feed.jsonl` (not SQLite) |
 | Ask / chat | `app/chat.py`, `POST /api/chat` | `verify_tasks_chat.py`, `verify_chat_honesty.py` | `threads.db` `messages`; chat tasks in `tasks.db` (`source='chat'`) |
 | Channels / members | `app/threads.py` | `verify_w3_scope.py` (8701) | `threads.db` `threads`, `thread_members` |
+| Team channels (people talk, @jarvis, unread, Settings → Channels) | `app/channels.py`, `app/chat.py` `stream_channel_post` | `docs/channels/verify_channels.py` (own sandbox :8713 + stub gateway), `docs/channels/verify_channels_ui.mjs` (:8714, two browsers) | `threads.db` `messages.author`, `thread_reads`, `channel_settings`, counters `channel_*` |
 | Leads | `app/leads_source.py` → `leads_store.py` | `docs/w1-shots/verify_leads_*.py`, `docs/lead-capture/verify_lead_capture.py` | `leads.db` `leads` |
 | Tasks | `app/tasks_source.py` → `tasks_store.py` | PROMPT 1, 2, 3, 3b | `tasks.db` `tasks`, `digest_map`, `digest_replies` |
 | Approvals | `app/approvals.py` | `verify_fullbody_fixture.py`, `phase5-shots/verify_config_apply.py` | `$SB/hermes/state/approvals*.jsonl`, `$SB/hermes/outbox/captured_mail.jsonl` |

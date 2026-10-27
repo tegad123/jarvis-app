@@ -7,11 +7,16 @@ export interface ConversationRowProps {
   name: string
   /** Last message snippet. */
   preview?: string | null
-  /** 'assistant' prefixes "Jarvis: ", 'user' prefixes "You: ". */
+  /** 'assistant' prefixes "Jarvis: "; 'user' prefixes "You: " when it is the
+   *  viewer's (previewMine, or any direct line) and the writer's name when not. */
   previewRole?: 'assistant' | 'user' | null
+  previewMine?: boolean
+  previewAuthor?: string | null
   /** Already relative: "12m", "2h", "3d". */
   time?: string
   unread?: boolean
+  /** Unread messages that @mention the viewer: the solid badge. */
+  mentions?: number
   /** last_message_at older than 48 hours. Shows "Quiet · {time}". */
   quiet?: boolean
   /** created_by === 'jarvis': the sparkle before the name. */
@@ -59,7 +64,17 @@ export function ConversationRow(p: ConversationRowProps) {
 
   let preview: string
   if (p.bodiesHidden) preview = 'Messages hidden for operator access'
-  else if (p.preview) preview = (p.previewRole === 'assistant' ? 'Jarvis: ' : p.previewRole === 'user' ? 'You: ' : '') + p.preview
+  else if (p.preview) {
+    const who =
+      p.previewRole === 'assistant'
+        ? 'Jarvis: '
+        : p.previewRole === 'user' && (p.previewMine || p.direct)
+          ? 'You: '
+          : p.previewRole === 'user' && p.previewAuthor
+            ? `${p.previewAuthor}: `
+            : ''
+    preview = who + p.preview
+  }
   else preview = p.direct ? 'Your direct line. Always here.' : 'No messages yet'
 
   const time = p.time ? (p.quiet ? `Quiet · ${p.time}` : p.time) : p.quiet ? 'Quiet' : null
@@ -99,13 +114,20 @@ export function ConversationRow(p: ConversationRowProps) {
               <span className={srOnly}>Opened by Jarvis: </span>
             </span>
           )}
-          <span className={cx('min-w-0 flex-1 text-jm-label', truncate)}>{p.name}</span>
+          <span className={cx('min-w-0 flex-1 text-jm-label', p.unread && 'font-semibold', truncate)}>{p.name}</span>
           {time && (
             <span className={cx('shrink-0 text-jm-caption text-jm-fg-secondary', hasMenu && 'group-hover:invisible group-focus-within:invisible')}>
               {time}
             </span>
           )}
-          {p.unread && <span role="img" aria-label="Unread" className="block h-1.5 w-1.5 shrink-0 rounded-full bg-jm-fg" />}
+          {p.mentions ? (
+            <span className="inline-grid h-5 min-w-5 shrink-0 place-items-center rounded-jm-pill bg-jm-accent px-1.5 text-jm-caption font-semibold tabular-nums text-jm-on-accent">
+              {p.mentions}
+              <span className={srOnly}> {p.mentions === 1 ? 'mention' : 'mentions'} of you</span>
+            </span>
+          ) : (
+            p.unread && <span role="img" aria-label="Unread" className="block h-1.5 w-1.5 shrink-0 rounded-full bg-jm-fg" />
+          )}
         </span>
         <span className={cx('mt-0.5 block text-jm-body-sm text-jm-fg-secondary', truncate)}>{preview}</span>
       </button>

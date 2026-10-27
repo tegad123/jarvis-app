@@ -154,6 +154,34 @@ def init() -> None:
         # reload can draw them again. Never model text.
         if "actions" not in cols:
             conn.execute("ALTER TABLE messages ADD COLUMN actions TEXT")
+        # messages.author: the person_key of whoever wrote a 'user' row (human
+        # approval 2026-10-27). NULL on assistant rows and on every row written
+        # before it existed. ASSIGN, NEVER GUESS: older rows stay NULL and the
+        # screen says "Earlier message" rather than naming someone who may not
+        # have written it.
+        if "author" not in cols:
+            conn.execute("ALTER TABLE messages ADD COLUMN author TEXT")
+
+        # How far each person has read each thread: the sidebar's unread dot.
+        # A position, not content — never a copy of what was said.
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS thread_reads (
+                   thread_id    TEXT NOT NULL REFERENCES threads(thread_id),
+                   person_key   TEXT NOT NULL,
+                   last_read_id INTEGER NOT NULL DEFAULT 0,
+                   updated_at   TEXT NOT NULL,
+                   PRIMARY KEY (thread_id, person_key)
+               )"""
+        )
+        # Workspace choices an admin makes for channels (app/channels.py).
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS channel_settings (
+                   key        TEXT PRIMARY KEY,
+                   value      TEXT NOT NULL,
+                   updated_by TEXT,
+                   updated_at TEXT NOT NULL
+               )"""
+        )
 
         # direct_for: the person whose private line this is; NULL for channels.
         # A direct line is not a channel with one member — membership is
@@ -191,6 +219,32 @@ def init() -> None:
         _initialised = True
         _migrate_to_owner(conn)
         _seed_categories(conn)
+        _seed_reads(conn)
+
+
+READS_SEEDED_FLAG = "thread_reads_seeded"
+
+
+def _seed_reads(conn: sqlite3.Connection) -> None:
+    """Once, when unread tracking arrives: everyone is caught up on what was
+    already there. Without this every old channel would light up as unread on
+    the first load after the upgrade, which says something that is not true."""
+    if conn.execute("SELECT 1 FROM counters WHERE name = ?", (READS_SEEDED_FLAG,)).fetchone():
+        return
+    now = _now()
+    with conn:
+        n = conn.execute(
+            """INSERT OR IGNORE INTO thread_reads (thread_id, person_key, last_read_id, updated_at)
+               SELECT m.thread_id, m.person_key,
+                      COALESCE((SELECT MAX(id) FROM messages WHERE thread_id = m.thread_id), 0), ?
+                 FROM thread_members m""", (now,)).rowcount
+        n += conn.execute(
+            """INSERT OR IGNORE INTO thread_reads (thread_id, person_key, last_read_id, updated_at)
+               SELECT t.thread_id, t.direct_for,
+                      COALESCE((SELECT MAX(id) FROM messages WHERE thread_id = t.thread_id), 0), ?
+                 FROM threads t WHERE t.direct_for IS NOT NULL""", (now,)).rowcount
+        conn.execute("INSERT INTO counters (name, value, updated_at) VALUES (?, 1, ?)", (READS_SEEDED_FLAG, now))
+    log.info("threads: unread tracking seeded %d read positions at the latest message", n)
 
 
 SEEDED_FLAG = "channel_categories_seeded"
@@ -465,10 +519,17 @@ def thread_exists(thread_id: str, *, allow_archived: bool = True) -> bool:
     return allow_archived or not t["archived"]
 
 
-def get_history(thread_id: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
-    """Oldest-first messages for a thread."""
+def get_history(thread_id: str, limit: Optional[int] = None,
+                after_id: int = 0) -> List[Dict[str, Any]]:
+    """Oldest-first messages for a thread; with after_id, only newer ones
+    (a channel's poll asks for what arrived since the last id it holds)."""
     conn = _ensure()
-    if limit:
+    if after_id:
+        rows = conn.execute(
+            "SELECT * FROM messages WHERE thread_id = ? AND id > ? ORDER BY id ASC",
+            (thread_id, int(after_id)),
+        ).fetchall()
+    elif limit:
         rows = conn.execute(
             "SELECT * FROM (SELECT * FROM messages WHERE thread_id = ? "
             "ORDER BY id DESC LIMIT ?) ORDER BY id ASC",
@@ -494,7 +555,9 @@ def get_history(thread_id: str, limit: Optional[int] = None) -> List[Dict[str, A
             acts = []
         out.append(
             {
+                "id": r["id"],
                 "thread_id": r["thread_id"],
+                "author": r["author"] if "author" in r.keys() else None,
                 "role": r["role"],
                 "content": r["content"],
                 "ts": r["ts"],
@@ -514,7 +577,75 @@ def last_message(thread_id: str) -> Optional[Dict[str, Any]]:
     ).fetchone()
     if not row:
         return None
-    return {"role": row["role"], "content": row["content"], "ts": row["ts"]}
+    return {"role": row["role"], "content": row["content"], "ts": row["ts"],
+            "author": row["author"] if "author" in row.keys() else None}
+
+
+def max_message_id(thread_id: str) -> int:
+    conn = _ensure()
+    row = conn.execute("SELECT COALESCE(MAX(id), 0) FROM messages WHERE thread_id = ?",
+                       (thread_id,)).fetchone()
+    return int(row[0])
+
+
+# --------------------------------------------------------------------- unread
+
+
+def mark_read(thread_id: str, person_key: str, upto_id: int) -> int:
+    """Move this person's read position forward, never back, and never past
+    the thread's own last message (an id from another thread means nothing
+    here). Returns the position now stored."""
+    conn = _ensure()
+    upto = max(0, min(int(upto_id), max_message_id(thread_id)))
+    with conn:
+        conn.execute(
+            """INSERT INTO thread_reads (thread_id, person_key, last_read_id, updated_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(thread_id, person_key) DO UPDATE SET
+                 last_read_id = MAX(last_read_id, excluded.last_read_id),
+                 updated_at = excluded.updated_at""",
+            (thread_id, person_key, upto, _now()),
+        )
+    row = conn.execute("SELECT last_read_id FROM thread_reads WHERE thread_id = ? AND person_key = ?",
+                       (thread_id, person_key)).fetchone()
+    return int(row["last_read_id"])
+
+
+def _set_read(conn: sqlite3.Connection, thread_id: str, person_key: str) -> None:
+    """Caught up as of now: a new member, a new channel, a new direct line."""
+    conn.execute(
+        """INSERT INTO thread_reads (thread_id, person_key, last_read_id, updated_at)
+           VALUES (?, ?, COALESCE((SELECT MAX(id) FROM messages WHERE thread_id = ?), 0), ?)
+           ON CONFLICT(thread_id, person_key) DO UPDATE SET
+             last_read_id = excluded.last_read_id, updated_at = excluded.updated_at""",
+        (thread_id, person_key, thread_id, _now()),
+    )
+
+
+def unread(person_key: Optional[str], thread_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+    """{thread_id: {"count", "messages"}} for the threads this person has a
+    read position in: what arrived after it, not written by them.
+
+    A thread with no position (an admin looking at a channel they are not in)
+    has nothing unread: unread belongs to the threads you are part of.
+    `messages` is the unread rows' text and author, newest last and capped, so
+    the caller can count mentions without a second query."""
+    if not person_key or not thread_ids:
+        return {}
+    conn = _ensure()
+    marks = ",".join("?" for _ in thread_ids)
+    pos = {r["thread_id"]: r["last_read_id"] for r in conn.execute(
+        f"SELECT thread_id, last_read_id FROM thread_reads WHERE person_key = ? AND thread_id IN ({marks})",
+        (person_key, *thread_ids))}
+    out: Dict[str, Dict[str, Any]] = {}
+    for tid, last in pos.items():
+        rows = conn.execute(
+            "SELECT role, content, author FROM messages WHERE thread_id = ? AND id > ? "
+            "AND (author IS NULL OR author != ?) ORDER BY id DESC LIMIT 200",
+            (tid, last, person_key)).fetchall()
+        if rows:
+            out[tid] = {"count": len(rows), "messages": [dict(r) for r in reversed(rows)]}
+    return out
 
 
 # ---------------------------------------------------------------- membership
@@ -571,11 +702,15 @@ def add_member(thread_id: str, person_key: str, added_by: Optional[str] = None) 
         raise ThreadProtected("A direct line cannot have members.")
     conn = _ensure()
     with conn:
-        conn.execute(
+        added = conn.execute(
             "INSERT OR IGNORE INTO thread_members (thread_id, person_key, added_by, added_at) "
             "VALUES (?, ?, ?, ?)",
             (thread_id, person_key, added_by, _now()),
-        )
+        ).rowcount
+        # They see the whole history (see the schema) but start caught up: being
+        # added is not a pile of unread messages someone else already handled.
+        if added:
+            _set_read(conn, thread_id, person_key)
     return {"thread_id": thread_id, "person_key": person_key, "members": members(thread_id)}
 
 
@@ -619,6 +754,7 @@ def ensure_direct(person_key: str) -> Dict[str, Any]:
             "VALUES (?, ?, 'jarvis', ?, 0, ?)",
             (thread_id, DIRECT_NAME, _now(), person_key),
         )
+        _set_read(conn, thread_id, person_key)
     return get_thread(thread_id)  # type: ignore[return-value]
 
 
@@ -668,6 +804,7 @@ def create_thread(name: str, created_by: str = "user",
                 "(thread_id, person_key, added_by, added_at) VALUES (?, ?, ?, ?)",
                 (thread_id, creator, creator, _now()),
             )
+            _set_read(conn, thread_id, creator)
     return get_thread(thread_id)  # type: ignore[return-value]
 
 
@@ -707,11 +844,13 @@ def set_archived(thread_id: str, archived: bool = True) -> Dict[str, Any]:
     return get_thread(thread_id)  # type: ignore[return-value]
 
 
-def append_messages(thread_id: str, *messages: Dict[str, Any]) -> None:
-    """Append a turn and bump the thread's activity clock, in one transaction."""
+def append_messages(thread_id: str, *messages: Dict[str, Any]) -> List[int]:
+    """Append a turn and bump the thread's activity clock, in one transaction.
+    Returns the new rows' ids, in order."""
     if not messages:
-        return
+        return []
     conn = _ensure()
+    ids: List[int] = []
     with conn:  # implicit transaction
         latest = None
         for m in messages:
@@ -721,9 +860,9 @@ def append_messages(thread_id: str, *messages: Dict[str, Any]) -> None:
 
             att = m.get("attachments") or []
             acts = m.get("actions") or []
-            conn.execute(
-                "INSERT INTO messages (thread_id, role, content, ts, partial, attachments, actions) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            cur = conn.execute(
+                "INSERT INTO messages (thread_id, role, content, ts, partial, attachments, actions, author) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     thread_id,
                     m["role"],
@@ -732,13 +871,17 @@ def append_messages(thread_id: str, *messages: Dict[str, Any]) -> None:
                     1 if m.get("partial") else 0,
                     _json.dumps(att) if att else None,
                     _json.dumps(acts) if acts else None,
+                    # Only a person writes a 'user' row; Jarvis is never an author.
+                    m.get("author") if m["role"] == "user" else None,
                 ),
             )
+            ids.append(int(cur.lastrowid))
         if latest:
             conn.execute(
                 "UPDATE threads SET last_message_at = ? WHERE thread_id = ?",
                 (latest, thread_id),
             )
+    return ids
 
 
 def counts() -> Dict[str, int]:

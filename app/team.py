@@ -1,4 +1,4 @@
-"""Settings → Team and the sidebar's channel categories.
+"""Settings → Team, the sidebar's channel categories, and Settings → Channels.
 
 WHO MAY DO WHAT
     owner   invites admins and members, changes anyone's role, switches any
@@ -18,10 +18,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from . import accounts, auth
+from . import channels as channels_mod
 from . import threads as threads_mod
 
 router = APIRouter(prefix="/api/team")
 categories_router = APIRouter(prefix="/api/categories")
+channels_router = APIRouter(prefix="/api/channels")
 
 
 def _manager(sess: dict) -> dict:
@@ -63,6 +65,19 @@ def get_team(sess: dict = Depends(auth.current_session)):
             "feature_labels": accounts.FEATURE_LABELS,
             "can_invite_admins": auth.role_of(sess) == "owner",
             "invites_ready": accounts.team_file() is not None}
+
+
+@router.get("/directory")
+def get_directory(sess: dict = Depends(auth.current_session)):
+    """Everyone on the team, for anyone signed in: the names in a channel, the
+    people an admin can add to one, the names an @ can reach.
+
+    Not /api/people: that is the sign-in picker and lists only people with a
+    PIN, so someone invited by email (Google sign-in, no PIN) was missing from
+    the members sheet and showed as a raw key. Same three fields, no emails,
+    no roles."""
+    return {"people": [{"person_key": p["person_key"], "name": p["name"], "title": p["title"]}
+                       for p in channels_mod.directory().values() if not p["disabled"]]}
 
 
 @router.post("/invite", status_code=201)
@@ -148,3 +163,21 @@ def delete_category(category_id: str, sess: dict = Depends(auth.current_session)
     except threads_mod.CategoryNotFound:
         raise HTTPException(status_code=404, detail="No such category.")
     return {"ok": True, "channels_ungrouped": moved}
+
+
+# ── Settings → Channels ──────────────────────────────────────────────────────
+
+class ChannelSettings(BaseModel):
+    jarvis_replies: str = Field(..., pattern="^(mention|every)$")
+
+
+@channels_router.get("/settings")
+def get_channel_settings(sess: dict = Depends(auth.current_session)):
+    """Readable by anyone signed in: the composer says how to reach Jarvis."""
+    return {**channels_mod.settings(), "can_change": auth.role_of(sess) in ("owner", "admin")}
+
+
+@channels_router.put("/settings")
+def put_channel_settings(body: ChannelSettings, sess: dict = Depends(auth.current_session)):
+    _manager(sess)
+    return {"ok": True, **channels_mod.set_mode(body.jarvis_replies, auth.person_of(sess)), "can_change": True}

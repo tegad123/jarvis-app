@@ -21,12 +21,14 @@ import type {
   BrowserInput,
   BrowserScreen,
   BrowserStatus,
+  ChannelSettings,
   ChatHistoryResponse,
   ChatStreamEvent,
   FeedResponse,
   FeedSummary,
   GoogleConnectionStatus,
   HealthResponse,
+  JarvisReplies,
   LeadsError,
   LeadsResponse,
   Task,
@@ -712,10 +714,39 @@ export async function removeThreadMember(
 
 export function getChatHistory(
   threadId: string = DIRECT_THREAD,
+  after = 0,
 ): Promise<ChatHistoryResponse> {
   return requestOk<ChatHistoryResponse>(
-    `/api/chat/history?thread_id=${encodeURIComponent(threadId)}`,
+    `/api/chat/history?thread_id=${encodeURIComponent(threadId)}` + (after ? `&after=${after}` : ''),
   )
+}
+
+/** Moves this person's read position forward; the sidebar's dot goes out. */
+export function markThreadRead(threadId: string, lastId: number): Promise<{ ok: boolean; last_read_id: number | null }> {
+  return requestOk(`/api/threads/${encodeURIComponent(threadId)}/read`, {
+    method: 'POST',
+    body: JSON.stringify({ last_id: lastId }),
+  })
+}
+
+/** Everyone on the team, for a signed-in session (names in channels, the
+ *  members sheet, @mentions). Unlike getPeople it includes people invited by
+ *  email, who sign in with Google and have no PIN. */
+export async function getDirectory(): Promise<Person[]> {
+  return (await requestOk<{ people: Person[] }>('/api/team/directory')).people
+}
+
+export function getChannelSettings(): Promise<ChannelSettings> {
+  return requestOk<ChannelSettings>('/api/channels/settings')
+}
+
+export async function setChannelSettings(jarvisReplies: JarvisReplies): Promise<ChannelSettings> {
+  const { ok, status, body } = await request<ChannelSettings>('/api/channels/settings', {
+    method: 'PUT',
+    body: JSON.stringify({ jarvis_replies: jarvisReplies }),
+  })
+  if (ok && body) return body
+  throw new ApiError(detailOf(body) ?? 'That setting did not save.', status)
 }
 
 export interface ChatHandlers {
@@ -727,6 +758,8 @@ export interface ChatHandlers {
   onNotice?: (e: Extract<ChatStreamEvent, { type: 'notice' }>) => void
   onVerified?: (e: Extract<ChatStreamEvent, { type: 'verified' }>) => void
   onAction?: (e: Extract<ChatStreamEvent, { type: 'action' }>) => void
+  onPosted?: (e: Extract<ChatStreamEvent, { type: 'posted' }>) => void
+  onSaved?: (e: Extract<ChatStreamEvent, { type: 'saved' }>) => void
 }
 
 /**
@@ -811,6 +844,12 @@ export async function streamChat(
         break
       case 'action':
         handlers.onAction?.(evt)
+        break
+      case 'posted':
+        handlers.onPosted?.(evt)
+        break
+      case 'saved':
+        handlers.onSaved?.(evt)
         break
     }
   }

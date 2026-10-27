@@ -31,5 +31,7 @@ run "auth_email_column       " $PY docs/auth/verify_email_column.py
 run "auth_pin_lockout        " $PY -W ignore docs/auth/verify_pin_lockout.py
 run "auth_google (sandbox)   " $PY docs/auth/verify_auth_google.py
 run "no_live_targets         " $PY docs/platform/verify_no_live_targets.py
+run "channels                " $PY docs/channels/verify_channels.py
+run "channels_ui             " node docs/channels/verify_channels_ui.mjs
 bash docs/tasks/tasks_sandbox.sh stop >/dev/null; K1=$(KH); echo "fixture (all files incl. sidecars) $K0 -> $K1 unchanged=$([ $K0 = $K1 ] && echo yes || echo NO)"; echo "/opt/testco exists: $([ -e /opt/testco ] && echo YES || echo no); live MainPID=$(systemctl show -p MainPID --value jarvis-app); /root/jarvis-app status_sha=$(git -C /root/jarvis-app status --porcelain | sha256sum | cut -c1-12)"
 echo "live tree files written during the gate (outside .git and .venv): $(find /root/jarvis-app -path /root/jarvis-app/.git -prune -o -path /root/jarvis-app/.venv -prune -o -newer /tmp/gate.start -print | wc -l)"

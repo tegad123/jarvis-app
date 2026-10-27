@@ -17,7 +17,7 @@ import {
   createThread,
   deleteCategory,
   getApprovals,
-  getPeople,
+  getDirectory,
   getSession,
   getThreads,
   logout,
@@ -30,7 +30,7 @@ import { EmptyState, NewChannelSheet, Sidebar, type SidebarNavItem, type Sidebar
 import { canManageTeam, canSeeSettings, ROLE_LABEL } from './lib/roles'
 import { applyTheme, initialTheme, type Theme } from './lib/theme'
 import { relativeTime } from './lib/time'
-import type { Category, Feature, Role, Thread } from './lib/types'
+import type { Category, Feature, JarvisReplies, Role, Thread } from './lib/types'
 
 type AuthState =
   | { status: 'checking' }
@@ -146,6 +146,7 @@ function Shell({
   const [view, setView] = useState<View>(null)
   const [threads, setThreads] = useState<Thread[] | null>(null)
   const [categories, setCategories] = useState<Category[]>([])
+  const [jarvisReplies, setJarvisReplies] = useState<JarvisReplies>('mention')
   const [catSheet, setCatSheet] = useState<(CategorySheetMode & { threadId?: string }) | null>(null)
   const [threadsError, setThreadsError] = useState<string | null>(null)
   const [people, setPeople] = useState<Person[]>([])
@@ -159,9 +160,10 @@ function Shell({
 
   // The roster is needed by ANYONE who can open the members sheet, not just
   // by someone who can edit it: without it the sheet renders raw person keys
-  // instead of names. It is the same unauthenticated list the login picker uses.
+  // instead of names. The signed-in directory, not the login picker's list:
+  // that one leaves out everyone invited by email (no PIN).
   useEffect(() => {
-    void getPeople().then(setPeople).catch(() => setPeople([]))
+    void getDirectory().then(setPeople).catch(() => setPeople([]))
   }, [])
 
   const loadThreads = useCallback(async () => {
@@ -169,6 +171,7 @@ function Shell({
       const r = await getThreads()
       setThreads(r.threads)
       setCategories(r.categories ?? [])
+      if (r.jarvis_replies) setJarvisReplies(r.jarvis_replies)
       setThreadsError(null)
       return r.threads
     } catch (err) {
@@ -180,7 +183,19 @@ function Shell({
 
   useEffect(() => {
     void loadThreads()
+    // Channels are shared now: someone else's message is what lights a row up,
+    // so the list keeps itself current while the app is in front of you.
+    const t = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void loadThreads()
+    }, 10_000)
+    return () => window.clearInterval(t)
   }, [loadThreads])
+
+  // The open conversation has been read up to here; clear its row now rather
+  // than waiting for the next refresh.
+  const onRead = useCallback((threadId: string) => {
+    setThreads((cur) => cur && cur.map((t) => (t.thread_id === threadId ? { ...t, unread: false, unread_count: 0, mentions: 0 } : t)))
+  }, [])
 
   // The sidebar's Approvals count. The server decides what each person sees
   // (approvals.may_see); the operator sees none, so it does not ask.
@@ -292,8 +307,12 @@ function Shell({
     name: t.name,
     preview: t.preview,
     previewRole: t.preview_role,
+    previewMine: t.preview_mine,
+    previewAuthor: t.preview_author_name,
     time: t.last_message_at ? relativeTime(t.last_message_at) : undefined,
-    unread: t.unread,
+    // The one you are looking at is being read as it arrives.
+    unread: t.unread && t.thread_id !== openThread?.thread_id,
+    mentions: t.thread_id !== openThread?.thread_id ? t.mentions : 0,
     quiet: !t.is_direct && isQuiet(t),
     byJarvis: t.created_by === 'jarvis',
     bodiesHidden: structureOnly,
@@ -307,9 +326,11 @@ function Shell({
     ...(canSeeSettings(role) ? [{ id: 'settings', label: 'Settings', icon: 'settings' as const }] : []),
   ]
 
+  // Renaming, moving and archiving change a shared channel for everyone in it:
+  // owner and admins only, like the API (main._manage_channel).
   const channelRow = (t: Thread) => ({
     ...row(t),
-    menu: [
+    menu: !manager ? [] : [
       {
         label: 'Rename',
         onSelect: () => {
@@ -358,6 +379,8 @@ function Shell({
         role={role}
         personKey={personKey}
         people={people}
+        jarvisReplies={jarvisReplies}
+        onRead={onRead}
         onThreadsChanged={() => void loadThreads()}
         onUnauthorized={unauthorized}
       />

@@ -8,6 +8,7 @@ import {
   disconnectMac,
   sendReplyReminder,
   getBrowserStatus,
+  getChannelSettings,
   getGoogleConnection,
   getMacStatus,
   getTeam,
@@ -16,12 +17,25 @@ import {
   newMacCode,
   patchPerson,
   saveWebsiteLogin,
+  setChannelSettings,
 } from '../lib/api'
 import { Button, ErrorState, Field, PairingCode, SettingsSection, type SettingsSectionProps } from '../jm'
 import { Select, cx, focus } from '../jm/shared/primitives'
 import { canManageTeam, canSeeSettings, ROLE_LABEL } from '../lib/roles'
 import { absoluteTime, relativeTime } from '../lib/time'
-import type { Feature, GoogleConnectionStatus, MacDevice, MacStatus, ReplyReminder, Role, TeamPerson, TeamResponse, WebsiteLogin } from '../lib/types'
+import type {
+  ChannelSettings,
+  Feature,
+  GoogleConnectionStatus,
+  JarvisReplies,
+  MacDevice,
+  MacStatus,
+  ReplyReminder,
+  Role,
+  TeamPerson,
+  TeamResponse,
+  WebsiteLogin,
+} from '../lib/types'
 
 /**
  * Settings — the signed-in person's own accounts. Any person; never the
@@ -179,6 +193,7 @@ export default function Settings({ role, personKey, features = {}, onUnauthorize
       {role !== 'operator' && features.browser !== false && <WebsiteLogins onUnauthorized={onUnauthorized} />}
       {role !== 'operator' && features.imessage !== false && <MacMessages onUnauthorized={onUnauthorized} />}
       {canManageTeam(role) && <Team role={role} personKey={personKey ?? null} onUnauthorized={onUnauthorized} />}
+      {canManageTeam(role) && <Channels onUnauthorized={onUnauthorized} />}
     </Page>
   )
 }
@@ -348,6 +363,80 @@ function Team({ role, personKey, onUnauthorized }: { role: Role; personKey: stri
       ) : (
         <p className="m-0 mt-jm-4 text-jm-body-sm text-jm-fg-secondary">Inviting isn’t set up on this account yet.</p>
       )}
+    </SettingsSection>
+  )
+}
+
+const REPLY_CHOICES: { value: JarvisReplies; label: string; detail: string }[] = [
+  {
+    value: 'mention',
+    label: 'Only when someone types @jarvis',
+    detail: 'People talk to each other; Jarvis joins in when it’s called.',
+  },
+  { value: 'every', label: 'Every message', detail: 'Jarvis answers everything anyone writes in a channel.' },
+]
+
+/** Settings → Channels. Owner and admins; the API refuses anyone else
+ *  (app/team.py put_channel_settings). */
+function Channels({ onUnauthorized }: { onUnauthorized: () => void }) {
+  const [st, setSt] = useState<ChannelSettings | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    void getChannelSettings()
+      .then(setSt)
+      .catch((err) => {
+        if (err instanceof Unauthorized) return onUnauthorized()
+        setError(err instanceof ApiError ? err.message : 'Could not read the channel settings.')
+      })
+  }, [onUnauthorized])
+
+  async function choose(v: JarvisReplies) {
+    if (!st || v === st.jarvis_replies) return
+    setBusy(true)
+    setError(null)
+    try {
+      setSt(await setChannelSettings(v))
+    } catch (err) {
+      if (err instanceof Unauthorized) return onUnauthorized()
+      setError(err instanceof ApiError ? err.message : 'That setting did not save.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!st) return error ? <SettingsSection title="Channels" error={error} /> : null
+  return (
+    <SettingsSection
+      title="Channels"
+      description="When Jarvis answers in a team channel. Your own Ask Jarvis line always answers."
+      error={error ?? undefined}
+    >
+      <fieldset className="m-0 grid gap-jm-2 border-0 p-0" disabled={busy || !st.can_change}>
+        <legend className="sr-only">When Jarvis answers in channels</legend>
+        {REPLY_CHOICES.map((c) => (
+          <label
+            key={c.value}
+            className={cx(
+              'flex cursor-pointer items-start gap-jm-3 rounded-jm-md border px-jm-3 py-jm-2',
+              st.jarvis_replies === c.value ? 'border-jm-accent bg-jm-accent-soft' : 'border-jm-border',
+            )}
+          >
+            <input
+              type="radio"
+              name="jarvis-replies"
+              className={cx('mt-1', focus)}
+              checked={st.jarvis_replies === c.value}
+              onChange={() => void choose(c.value)}
+            />
+            <span className="grid">
+              <span className="text-jm-label text-jm-fg">{c.label}</span>
+              <span className="text-jm-caption text-jm-fg-secondary">{c.detail}</span>
+            </span>
+          </label>
+        ))}
+      </fieldset>
     </SettingsSection>
   )
 }

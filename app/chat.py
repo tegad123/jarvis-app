@@ -54,7 +54,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 import httpx
 
-from . import actor_refs, agent_status, attachments, config, threads, whoami
+from . import actor_refs, agent_status, attachments, channels, config, threads, whoami
 
 log = logging.getLogger("jarvis.chat")
 
@@ -78,13 +78,13 @@ TIMEOUT = httpx.Timeout(connect=10.0, read=None, write=30.0, pool=10.0)
 # in main.py unchanged and give one place to swap the store again if needed.
 
 
-def get_history(thread_id: str) -> List[Dict]:
-    """The stored transcript for a thread, oldest first."""
-    return threads.get_history(thread_id)
+def get_history(thread_id: str, after_id: int = 0) -> List[Dict]:
+    """The stored transcript for a thread, oldest first; newer than after_id if given."""
+    return threads.get_history(thread_id, after_id=after_id)
 
 
-def append_messages(thread_id: str, *messages: Dict) -> None:
-    threads.append_messages(thread_id, *messages)
+def append_messages(thread_id: str, *messages: Dict) -> List[int]:
+    return threads.append_messages(thread_id, *messages)
 
 
 def _now() -> str:
@@ -412,9 +412,24 @@ def _ndjson(obj: Dict) -> bytes:
 # ----------------------------------------------------------------- streaming
 
 
+def _channel_history(thread_id: str, people: Dict[str, Dict[str, Any]]) -> Tuple[List[Dict], int]:
+    """The whole channel, labelled by who said each line (app/channels.py)."""
+    history = get_history(thread_id)
+    for m in history:
+        ids = m.get("attachments") or []
+        m["attachment_names"] = [r["filename"] for r in attachments.get_many(ids)] if ids else []
+    msgs, dropped = channels.upstream(history, people)
+    if dropped:
+        _bump("channel_context_trimmed")
+        log.warning("chat: channel %s too long for one call; the oldest %d message(s) were left out",
+                    thread_id, dropped)
+    return msgs, dropped
+
+
 async def stream_chat(
     thread_id: str, message: str, attachment_ids: Optional[List[str]] = None,
     person_key: Optional[str] = None, role: str = "member",
+    channel: Optional[Dict[str, Any]] = None,
 ) -> AsyncIterator[bytes]:
     """
     Proxy one turn. Yields NDJSON lines:
@@ -425,11 +440,23 @@ async def stream_chat(
         {"type":"verified","ok":true|false,"message":"...","task_ids":[...]}
         {"type":"action","action":"connect_google","label":"..."}
         {"type":"error","message":"..."}
+        {"type":"saved","ids":[...]}                (channel turns: the rows written)
+
+    CHANNEL TURNS (`channel` set, app/channels.py) differ in three ways: the
+    caller has ALREADY saved the person's message (others in the channel see it
+    while Jarvis works), so only the reply is written here; the context is the
+    whole channel with names; and the status block says where Jarvis is.
+    `channel` is {"thread": ..., "how": "mention"|"every", "members": [...]}.
 
     Always yields at least one line — an empty stream would render as a silent
     failure, which is the thing the feed's error state exists to prevent.
     """
-    history = get_history(thread_id)[-UPSTREAM_TURNS:]
+    people = channels.directory() if channel else {}
+    if channel:
+        upstream_msgs, _ = _channel_history(thread_id, people)
+    else:
+        upstream_msgs = [{"role": m["role"], "content": m["content"]}
+                         for m in get_history(thread_id)[-UPSTREAM_TURNS:]]
 
     # Attachments: IMAGES are inlined as base64 data URLs so the model can
     # actually see them; DOCUMENTS are deliberately not sent (the gateway
@@ -438,13 +465,16 @@ async def stream_chat(
     attachment_ids = list(attachment_ids or [])
     image_parts, skipped = attachments.inline_image_parts(attachment_ids)
 
+    # In a channel the turn being answered is the last one built from the
+    # store (it already holds this message); elsewhere it is this message.
+    prompt_text = upstream_msgs.pop()["content"] if channel and upstream_msgs else message
     if image_parts:
         # Native OpenAI vision shape; the gateway's _normalize_multimodal_content
         # takes this verbatim and the Anthropic adapter turns it into real image
         # blocks. Text first, then images, mirroring how a person would send it.
-        user_content: Any = ([{"type": "text", "text": message}] if message else []) + image_parts
+        user_content: Any = ([{"type": "text", "text": prompt_text}] if prompt_text else []) + image_parts
     else:
-        user_content = message
+        user_content = prompt_text
 
     # Only the CURRENT turn carries images. Replaying every past image on every
     # turn would multiply the bill and quickly exceed the 10 MB body cap; the
@@ -452,10 +482,7 @@ async def stream_chat(
     payload = {
         # The persona is the tenant's SOUL.md (provisioner template); the app
         # adds only what it alone knows: who is signed in and the status block.
-        "messages": [
-            {"role": m["role"], "content": m["content"]} for m in history
-        ]
-        + [{"role": "user", "content": user_content}],
+        "messages": upstream_msgs + [{"role": "user", "content": user_content}],
         "stream": True,
     }
     headers = {
@@ -480,6 +507,10 @@ async def stream_chat(
         log.warning("chat turn without a signed-in person: tools get no verified actor")
     try:
         status_block = agent_status.render(agent_status.status(role, person_key or ""), name)
+        if channel:
+            status_block += "\n" + channels.status_lines(
+                channel["thread"], person_key, channel.get("members") or [], people, channel.get("how") or "mention")
+            _bump("chat_turn_channel")
         _bump("chat_turn_status_block")
     except Exception as exc:
         status_block = ("STATUS FROM THE APP: unavailable this turn. Do not say what is connected or what you can "
@@ -489,11 +520,31 @@ async def stream_chat(
     payload["messages"].insert(0, {"role": "system", "content": status_block + (
         "\nThe app knows who is signed in and tells your tools itself; never ask who is speaking.")})
 
-    assistant_text: List[str] = []
-    finished_cleanly = False
     # Stamped BEFORE the upstream call, so anything the turn writes falls
     # inside the window even if the model calls the tool on its first token.
     turn_started = _now()
+
+    if channel:
+        channels.turn_started(thread_id, person_key)
+    try:
+        async for line in _turn(thread_id, message, attachment_ids, person_key, role, channel,
+                                payload, headers, actor_ref, turn_started, skipped):
+            yield line
+    finally:
+        if channel:
+            channels.turn_ended(thread_id, person_key)
+
+
+async def _turn(thread_id, message, attachment_ids, person_key, role, channel,
+                payload, headers, actor_ref, turn_started, skipped) -> AsyncIterator[bytes]:
+    """The body of stream_chat, split out so a channel's "Jarvis is answering"
+    marker is cleared however the turn ends."""
+    assistant_text: List[str] = []
+    finished_cleanly = False
+    # The person's message, unless the caller already saved it (a channel).
+    asked = [] if channel else [
+        {"role": "user", "content": message, "ts": _now(), "attachments": attachment_ids, "author": person_key}]
+    saved: List[int] = []
 
     if skipped:
         # Honest, never a silent drop.
@@ -519,14 +570,14 @@ async def stream_chat(
             yield _ndjson({"type": "done", "finish_reason": "stop", "usage": {}})
             yield _ndjson({"type": "verified", "ok": ok, "message": text,
                            "task_ids": [r["task_id"] for r in rows]})
-            append_messages(
-                thread_id,
-                {"role": "user", "content": message, "ts": _now(), "attachments": attachment_ids},
-                {"role": "assistant", "content": text, "ts": _now()},
-            )
+            saved += append_messages(
+                thread_id, *asked, {"role": "assistant", "content": text, "ts": _now()})
+            _read_own_turn(thread_id, person_key, channel, saved)
             _bump("meeting_ask_turns")
             if actor_ref:
                 actor_refs.end(actor_ref)
+            if channel:
+                yield _ndjson({"type": "saved", "ids": saved})
             return
 
     try:
@@ -539,6 +590,8 @@ async def stream_chat(
                     yield _ndjson(
                         {"type": "error", "message": _upstream_error(resp.status_code, body)}
                     )
+                    if channel:
+                        yield _ndjson({"type": "saved", "ids": saved})
                     return
 
                 buffer = ""
@@ -606,6 +659,8 @@ async def stream_chat(
                 "detail": exc.__class__.__name__,
             }
         )
+        if channel:
+            yield _ndjson({"type": "saved", "ids": saved})
         return
     except asyncio.CancelledError:
         # The browser went away. The gateway hard-interrupts its agent run when
@@ -633,14 +688,9 @@ async def stream_chat(
     # partial text is still worth keeping so the next question has context.
     reply = "".join(assistant_text).strip()
     if reply:
-        append_messages(
+        saved += append_messages(
             thread_id,
-            {
-                "role": "user",
-                "content": message,
-                "ts": _now(),
-                "attachments": attachment_ids,
-            },
+            *asked,
             {"role": "assistant", "content": reply, "ts": _now(), "partial": not finished_cleanly,
              "actions": shown},
         )
@@ -655,10 +705,77 @@ async def stream_chat(
     if verdict:
         yield _ndjson(verdict)
         if reply:
-            append_messages(
+            saved += append_messages(
                 thread_id,
                 {"role": "assistant", "content": verdict["message"], "ts": _now()},
             )
+    _read_own_turn(thread_id, person_key, channel, saved)
+    if channel:
+        yield _ndjson({"type": "saved", "ids": saved})
+
+
+def _read_own_turn(thread_id: str, person_key: Optional[str], channel: Optional[Dict[str, Any]],
+                   saved: List[int]) -> None:
+    """The direct line: the person watched this reply arrive, so it is not
+    unread to them. (A channel's screen marks it itself from `saved`; the
+    others in the channel have not read it.)"""
+    if channel or not person_key or not saved:
+        return
+    try:
+        threads.mark_read(thread_id, person_key, saved[-1])
+    except Exception as exc:
+        log.error("chat: could not mark the direct line read (%s)", type(exc).__name__)
+        _bump("chat_direct_read_failed")
+
+
+def public_message(m: Dict[str, Any], people: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """A stored message as a channel shows it: who wrote it, by name."""
+    return {**m, "author_name": channels.name_of(m.get("author"), people) if m.get("author") else None}
+
+
+async def stream_channel_post(
+    thread: Dict[str, Any], message: str, attachment_ids: List[str],
+    person_key: str, role: str, can_ask: bool,
+) -> AsyncIterator[bytes]:
+    """A message in a team channel. Saved FIRST, so the others see it while
+    Jarvis works (or when Jarvis is not asked at all); then Jarvis answers only
+    when the channel's setting says to: an @jarvis, or every message.
+
+    First line, always:
+        {"type":"posted","message":{...},"jarvis":true|false}
+    then, when jarvis is true, the turn's own lines (stream_chat)."""
+    thread_id = thread["thread_id"]
+    ids = append_messages(thread_id, {"role": "user", "content": message, "ts": _now(),
+                                      "attachments": attachment_ids, "author": person_key})
+    _bump("channel_message_posted")
+    # Your own message is not unread to you. Only members keep a position
+    # (main.post_thread_read), so an admin posting from outside starts none.
+    if threads.is_member(thread_id, person_key):
+        threads.mark_read(thread_id, person_key, ids[-1])
+    how = channels.mode()
+    wants = how == "every" or channels.calls_jarvis(message)
+    people = channels.directory()
+    saved = next((m for m in get_history(thread_id, after_id=ids[-1] - 1) if m["id"] == ids[-1]), None)
+    posted = public_message(saved or {"id": ids[-1], "author": person_key, "role": "user",
+                                      "content": message, "attachments": attachment_ids}, people)
+    posted["attachments"] = attachments.public_many(posted.get("attachments") or [])
+    yield _ndjson({"type": "posted", "message": posted, "jarvis": bool(wants and can_ask)})
+    if not wants:
+        _bump("channel_message_no_jarvis")
+        return
+    if not can_ask:
+        # Said, not swallowed: they asked for Jarvis and an admin switched it off.
+        _bump("channel_jarvis_refused_feature_off")
+        yield _ndjson({"type": "notice", "message": "Jarvis didn't answer: Ask Jarvis is switched off for you. "
+                                                    "An admin can turn it on in Settings → Team."})
+        return
+    _bump("channel_jarvis_called" if how == "mention" else "channel_jarvis_every")
+    async for line in stream_chat(
+        thread_id, message, attachment_ids, person_key=person_key, role=role,
+        channel={"thread": thread, "how": "mention" if how == "mention" else "every",
+                 "members": [m["person_key"] for m in threads.members(thread_id)]},
+    ):
+        yield line
 
 
 def _upstream_error(status: int, body: str) -> str:

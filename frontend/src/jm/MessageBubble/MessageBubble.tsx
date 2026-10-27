@@ -24,7 +24,47 @@ export interface MessageBubbleProps {
   speech?: 'off' | 'on' | 'speaking' | 'unavailable'
   onSpeak?: () => void
   time?: string
+  /** Channels: who wrote it, shown above the bubble. A 'user' message with
+   *  `from` is someone else's, so it sits on the left like a reply does. */
+  from?: string
+  /** Channels: names an @ can reach (without the @); matches are highlighted,
+   *  and `self` (the viewer's own names) more strongly. */
+  mentions?: { names: string[]; self?: string[] }
   className?: string
+}
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** Highlight @name the way the server reads one (app/channels.py): not glued
+ *  to a word before it, not running on into more letters after it. */
+function Mentioned({ text, names, self = [], onBlue }: { text: string; names: string[]; self?: string[]; onBlue?: boolean }) {
+  const all = [...new Set([...names, ...self])].filter(Boolean).sort((a, b) => b.length - a.length)
+  if (!all.length || !text.includes('@')) return <>{text}</>
+  const re = new RegExp(`(?<![\\w@.])@(${all.map(escapeRe).join('|')})(?![\\w-])`, 'gi')
+  const mine = new Set(self.map((n) => n.toLowerCase()))
+  const out: ReactNode[] = []
+  let at = 0
+  for (const m of text.matchAll(re)) {
+    const i = m.index ?? 0
+    if (i > at) out.push(text.slice(at, i))
+    out.push(
+      <span
+        key={i}
+        data-mention={mine.has(m[1].toLowerCase()) ? 'self' : 'other'}
+        className={
+          // Inside your own blue bubble a tinted chip would vanish: weight and an underline instead.
+          onBlue
+            ? 'font-semibold underline underline-offset-2'
+            : cx('rounded-jm-sm px-0.5', mine.has(m[1].toLowerCase()) ? 'bg-jm-accent text-jm-on-accent' : 'bg-jm-accent-soft text-jm-accent-soft-text')
+        }
+      >
+        {m[0]}
+      </span>,
+    )
+    at = i + m[0].length
+  }
+  if (at < text.length) out.push(text.slice(at))
+  return <>{out}</>
 }
 
 /**
@@ -60,7 +100,8 @@ function StreamText({ text }: { text: string }) {
 }
 
 export function MessageBubble(p: MessageBubbleProps) {
-  const user = p.role === 'user'
+  // "user" here means "on the right, in the blue bubble": the viewer's own.
+  const user = p.role === 'user' && !p.from
   const text = p.text !== undefined ? p.text : p.children
   const hasText = text !== undefined && text !== null && text !== ''
   const bubbleBase = 'm-0 box-border max-w-jm-bubble whitespace-pre-wrap break-words rounded-jm-xl px-jm-4 py-jm-3'
@@ -79,7 +120,13 @@ export function MessageBubble(p: MessageBubbleProps) {
   } else if (hasText) {
     bubble = (
       <p aria-busy={p.streaming || undefined} className={cx(bubbleBase, bubbleTone, 'text-jm-body')}>
-        {p.streaming && typeof text === 'string' ? <StreamText text={text} /> : text}
+        {p.streaming && typeof text === 'string' ? (
+          <StreamText text={text} />
+        ) : p.mentions && typeof text === 'string' ? (
+          <Mentioned text={text} names={p.mentions.names} self={p.mentions.self} onBlue={user} />
+        ) : (
+          text
+        )}
       </p>
     )
   }
@@ -111,6 +158,7 @@ export function MessageBubble(p: MessageBubbleProps) {
   const actions = p.actions ?? []
   return (
     <div className={cx('flex flex-col gap-jm-2', user ? 'items-end' : 'items-start', p.className)}>
+      {p.from && <span className="-mb-jm-1 px-jm-1 text-jm-caption font-semibold text-jm-fg-secondary">{p.from}</span>}
       {atts.length > 0 && (
         <div className={cx('flex max-w-jm-bubble flex-wrap gap-jm-2', user && 'justify-end')}>
           {atts.map((a, i) => (

@@ -182,8 +182,15 @@ export interface Thread {
    *  the backend never sets this, so the badge row collapses in production.
    *  Declared so the design exists and a future unread-counter has a target. */
   badges?: string[]
-  /** Unread indicator. Same: no producer yet, dot simply does not render. */
+  /** Something arrived since this person last read the thread, not written
+   *  by them (threads.thread_reads). Only threads they are part of count. */
   unread?: boolean
+  unread_count?: number
+  /** Unread messages that @mention this person by name. */
+  mentions?: number
+  /** Who wrote the preview line: the viewer themself, or someone by name. */
+  preview_mine?: boolean
+  preview_author_name?: string | null
   /** Person keys in this channel, from GET /api/threads. Empty for direct
    *  lines — a direct line is not a one-member channel (app/threads.py). */
   members?: string[]
@@ -200,6 +207,18 @@ export interface ThreadsResponse {
   bodies_visible?: boolean
   /** Sidebar sections, in order. Membership still decides which channels show. */
   categories?: Category[]
+  /** Settings → Channels: when Jarvis answers in a channel. */
+  jarvis_replies?: JarvisReplies
+}
+
+/** 'mention': only a message that says @jarvis; 'every': every message. */
+export type JarvisReplies = 'mention' | 'every'
+
+export interface ChannelSettings {
+  jarvis_replies: JarvisReplies
+  updated_by: string | null
+  updated_at: string | null
+  can_change: boolean
 }
 
 export interface ThreadMember {
@@ -227,9 +246,17 @@ export const DIRECT_THREAD = 'direct'
 
 /** As stored by the backend's in-memory history and replayed by /api/chat/history. */
 export interface ChatMessage {
+  /** The stored row's id; absent until the server has saved it. */
+  id?: number
+  /** This screen's own handle for a message it is still sending or streaming. */
+  localId?: string
   thread_id: string
   role: 'user' | 'assistant'
   content: string
+  /** Who wrote a 'user' message. Null on Jarvis's replies and on messages
+   *  saved before authors were recorded (never guessed). */
+  author?: string | null
+  author_name?: string | null
   /** Unix seconds from the server; absent on messages created optimistically. */
   ts?: number
   /** True when the turn ended before the model finished. */
@@ -247,14 +274,21 @@ export interface SavedChatAction {
 export interface ChatHistoryResponse {
   thread_id: string
   messages: Array<{
+    id: number
     role: 'user' | 'assistant'
     content: string
+    author?: string | null
+    author_name?: string | null
     ts?: number
     partial?: boolean
     attachments?: Attachment[]
     actions?: SavedChatAction[]
   }>
   count: number
+  /** The thread's newest message id: where the next poll starts. */
+  last_id?: number
+  /** Channels: whom Jarvis is answering right now, by name. */
+  jarvis_answering?: string[]
 }
 
 /* --------------------------------------------------------------- approvals */
@@ -515,3 +549,8 @@ export type ChatStreamEvent =
   | { type: 'verified'; ok: boolean; message: string; task_ids?: string[] }
   /** One of the app's own controls, asked for by the agent and drawn by the app. */
   | { type: 'action'; action: string; label?: string }
+  /** Channels: the person's message is saved (first line, always), and
+   *  whether Jarvis is answering it. */
+  | { type: 'posted'; message: ChatHistoryResponse['messages'][number]; jarvis: boolean }
+  /** Channels: the rows this turn wrote (Jarvis's reply and any receipt). */
+  | { type: 'saved'; ids: number[] }
