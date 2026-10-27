@@ -175,4 +175,5 @@ def load(viewer: Optional[str] = None) -> Dict[str, Any]:
                        "new": sum(1 for l in screen if l["is_new"]),
                    }),
         "source": "store",
+        "today": leads_store.today_local().isoformat(),
     }

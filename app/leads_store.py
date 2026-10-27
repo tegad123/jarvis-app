@@ -39,7 +39,7 @@ import secrets
 import sys
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -141,6 +141,21 @@ def init() -> None:
             -- shows up once a tenant is busy.
             CREATE INDEX IF NOT EXISTS idx_leads_email ON leads(email);
             CREATE INDEX IF NOT EXISTS idx_leads_name  ON leads(name);
+
+            -- The timeline: every call, text, meeting and note, oldest first.
+            -- Append-only; the lead row carries the current state, this
+            -- carries how it got there.
+            CREATE TABLE IF NOT EXISTS lead_touches (
+                touch_id       TEXT PRIMARY KEY,
+                lead_id        TEXT NOT NULL REFERENCES leads(lead_id),
+                at             TEXT NOT NULL,
+                by_person      TEXT,
+                kind           TEXT NOT NULL,
+                note           TEXT,
+                reached        INTEGER,
+                next_touch_at  TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_touches_lead ON lead_touches(lead_id, at);
             """
         )
         conn.commit()
@@ -376,6 +391,157 @@ def query(status: Optional[str] = None, temperature: Optional[str] = None,
     sql.append("ORDER BY COALESCE(next_touch_at, last_activity_at, created_at) DESC")
     rows = _ensure().execute(" ".join(sql), args).fetchall()
     return [_row(r) for r in rows]
+
+
+def find_by_phone(phone: str, archived: bool = False) -> List[Dict[str, Any]]:
+    """Leads whose phone has the same last ten digits. "(512) 555-0101" and
+    "+1 512.555.0101" are one number; formatting is never identity."""
+    import re as _re
+    key = _re.sub(r"\D", "", phone or "")[-10:]
+    if len(key) < 7:
+        return []
+    return [r for r in query(archived=archived)
+            if _re.sub(r"\D", "", r.get("phone") or "")[-10:] == key]
+
+
+# ── follow-up cadence and the timeline ───────────────────────────────────────
+
+# A contact is something that happened between the agent and the lead; a note
+# is the agent writing something down. Only contacts move the cadence.
+CONTACT_KINDS = ("call", "text", "email", "met", "showing")
+TOUCH_KINDS = CONTACT_KINDS + ("note", "created", "imported")
+
+# Days to the next follow-up. The first one by temperature (a hot lead is
+# called tomorrow); after each logged contact, the next step of the ladder.
+CADENCE_FIRST = {"hot": 1, "warm": 2}
+CADENCE_FIRST_OTHER = 3
+CADENCE_LATER = (7, 14, 30)
+
+
+def cadence_days(temperature: Optional[str], contacts_logged: int) -> int:
+    if contacts_logged <= 0:
+        return CADENCE_FIRST.get((temperature or "").strip().lower(), CADENCE_FIRST_OTHER)
+    return CADENCE_LATER[min(contacts_logged, len(CADENCE_LATER)) - 1]
+
+
+def today_local() -> date:
+    """Today in the tenant's timezone — a follow-up date is a day on the
+    agent's calendar, not a UTC instant. Falls back to UTC, counted."""
+    from zoneinfo import ZoneInfo  # noqa: PLC0415
+    try:
+        if str(config.SHARED) not in sys.path:
+            sys.path.insert(0, str(config.SHARED))
+        import tenant_config as tc  # noqa: PLC0415
+        return datetime.now(ZoneInfo(tc.timezone_name())).date()
+    except Exception as exc:
+        from . import threads as threads_mod  # noqa: PLC0415
+        threads_mod.bump_counter("leads_timezone_fallback")
+        import logging  # noqa: PLC0415
+        logging.getLogger("app.leads_store").warning(
+            "leads: no usable tenant timezone (%s); follow-up dates use UTC", type(exc).__name__)
+        return datetime.now(timezone.utc).date()
+
+
+def _date_after(days: int, today: Optional[date] = None) -> str:
+    return ((today or today_local()) + timedelta(days=days)).isoformat()
+
+
+def add_touch(lead_id: str, by: Optional[str], kind: str, note: Optional[str] = None,
+              reached: Optional[bool] = None, next_touch_at: Optional[str] = None) -> Dict[str, Any]:
+    if kind not in TOUCH_KINDS:
+        raise LeadError(f"kind must be one of {', '.join(TOUCH_KINDS)}.")
+    if get(lead_id) is None:
+        raise LeadNotFound(lead_id)
+    touch_id = "lt_" + secrets.token_hex(6)
+    conn = _ensure()
+    conn.execute(
+        "INSERT INTO lead_touches (touch_id, lead_id, at, by_person, kind, note, reached, next_touch_at) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (touch_id, lead_id, _now(), by, kind, (note or "").strip() or None,
+         None if reached is None else (1 if reached else 0), next_touch_at),
+    )
+    conn.commit()
+    r = conn.execute("SELECT * FROM lead_touches WHERE touch_id = ?", (touch_id,)).fetchone()
+    return _touch_row(r)
+
+
+def _touch_row(r: sqlite3.Row) -> Dict[str, Any]:
+    d = dict(r)
+    d["reached"] = None if d["reached"] is None else bool(d["reached"])
+    return d
+
+
+def touches(lead_id: str) -> List[Dict[str, Any]]:
+    rows = _ensure().execute(
+        "SELECT * FROM lead_touches WHERE lead_id = ? ORDER BY at ASC, rowid ASC", (lead_id,)).fetchall()
+    return [_touch_row(r) for r in rows]
+
+
+def contacts_logged(lead_id: str) -> int:
+    marks = ",".join("?" * len(CONTACT_KINDS))
+    return _ensure().execute(
+        f"SELECT COUNT(*) FROM lead_touches WHERE lead_id = ? AND kind IN ({marks})",
+        (lead_id, *CONTACT_KINDS)).fetchone()[0]
+
+
+def create_with_cadence(name: str, by: Optional[str], created_by: str = "user", today=None,
+                        **fields: Any) -> Dict[str, Any]:
+    """A new lead as an agent adds one: owner, a first follow-up date by
+    temperature when none was given, and a 'created' entry on its timeline."""
+    if not fields.get("next_touch_at"):
+        fields["next_touch_at"] = _date_after(cadence_days(fields.get("temperature"), 0), today)
+    lead = create(name, created_by=created_by, **fields)
+    add_touch(lead["lead_id"], by, "created", note=fields.get("notes"),
+              next_touch_at=lead.get("next_touch_at"))
+    return get(lead["lead_id"])
+
+
+def log_contact(lead_id: str, by: Optional[str], kind: str, note: Optional[str] = None,
+                reached: bool = True, next_touch_at: Optional[str] = None,
+                today=None) -> Dict[str, Any]:
+    """Record a call, text, email or meeting, and move the lead on.
+
+    Reaching them makes a New or No Response lead Responded; trying and not
+    reaching a New lead makes it No Response. The next follow-up is the date
+    given, or the next step of the cadence; a Not Interested lead gets none
+    unless one is given. A note is written down and moves nothing.
+    """
+    lead = get(lead_id)
+    if lead is None:
+        raise LeadNotFound(lead_id)
+    if kind == "note":
+        touch = add_touch(lead_id, by, "note", note=note)
+        return {"lead": lead, "touch": touch}
+    if kind not in CONTACT_KINDS:
+        raise LeadError(f"kind must be one of {', '.join(CONTACT_KINDS + ('note',))}.")
+    status = lead.get("status") or "New"
+    if reached and status in ("New", "No Response"):
+        status = "Responded"
+    elif not reached and status == "New":
+        status = "No Response"
+    if next_touch_at:
+        nxt = next_touch_at[:10]
+    elif status == "Not Interested":
+        nxt = None
+    else:
+        nxt = _date_after(cadence_days(lead.get("temperature"), contacts_logged(lead_id) + 1), today)
+    touch = add_touch(lead_id, by, kind, note=note, reached=reached, next_touch_at=nxt)
+    updated = update(lead_id, status=status, next_touch_at=nxt, last_activity_at=_now())
+    return {"lead": updated, "touch": touch}
+
+
+def due(owner_person: Optional[str] = None, today=None) -> List[Dict[str, Any]]:
+    """Leads whose follow-up date is today or earlier, oldest date first.
+    Not Interested and archived leads are never due."""
+    day = (today or today_local()).isoformat()
+    sql = ["SELECT * FROM leads WHERE archived = 0 AND status != 'Not Interested' "
+           "AND next_touch_at IS NOT NULL AND next_touch_at != '' AND substr(next_touch_at, 1, 10) <= ?"]
+    args: List[Any] = [day]
+    if owner_person:
+        sql.append("AND owner_person = ?"); args.append(owner_person)
+    sql.append("ORDER BY substr(next_touch_at, 1, 10) ASC, CASE temperature WHEN 'Hot' THEN 0 "
+               "WHEN 'Warm' THEN 1 ELSE 2 END, name ASC")
+    return [_row(r) for r in _ensure().execute(" ".join(sql), args).fetchall()]
 
 
 def counts() -> Dict[str, int]:
