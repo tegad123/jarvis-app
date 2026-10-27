@@ -631,7 +631,7 @@ From the human's first real test on tega: plain-language persona, honest capabil
   - tega (live, live_writes approved, the owner's own Google connected; `--restart-approved` on the human's yes): posture before and after: writes armed on the app only. 121/121, chat 19/19 on loopback (public PIN sign-in is refused by `signin: google`, as designed); executed 13 → 13; denied 9 → 10 (the proof's probe, enforce mode); messages 332 → 335; tasks 0 → 0. `tega.yamin.io` serves the new bundle.
   - Each tenant's existing channels now answer only on `@jarvis` (the default); an admin can pick "every message" in Settings → Channels.
   - Snapshots: `/root/backups/<slug>/upgrade-20261027T*`.
-- **Rehearsal not yet:** it runs app 6d847b0 / skills 74c0fb1, 83 commits behind the others, with a real mailbox. Channels there means taking all of that, and a gateway restart onto the actor-reference Hermes (verify_hermes_actor_ref.py first). Asked the human separately.
+- **Rehearsal not yet:** it runs app 6d847b0 / skills 74c0fb1, 83 commits behind the others, with a real mailbox. Channels there means taking all of that, and a gateway restart onto the actor-reference Hermes (verify_hermes_actor_ref.py first). **Human, 2026-10-27: leave rehearsal as is.** It stays at 6d847b0 without team channels.
 
 ## Decided (from the spec, recorded 2026-10-10)
 
