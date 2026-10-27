@@ -53,7 +53,8 @@ def pg(dbname: str, sql: str, args=()) -> list:
 
 
 def chat(c: httpx.Client, tid: str, message: str) -> None:
-    with c.stream("POST", "/api/chat", json={"thread_id": tid, "message": message}) as resp:
+    # A team channel answers only when called (app/channels.py), as a person would call it.
+    with c.stream("POST", "/api/chat", json={"thread_id": tid, "message": f"@jarvis {message}"}) as resp:
         for _ in resp.iter_lines():
             pass
 

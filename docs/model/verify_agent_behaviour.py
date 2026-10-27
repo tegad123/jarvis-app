@@ -134,7 +134,8 @@ class Tenant:
 
     def ask(self, tid: str, message: str) -> dict:
         text, steps, actions, errors = "", [], [], []
-        with self.c.stream("POST", "/api/chat", json={"thread_id": tid, "message": message}) as resp:
+        # A team channel answers only when called (app/channels.py), as a person would call it.
+        with self.c.stream("POST", "/api/chat", json={"thread_id": tid, "message": f"@jarvis {message}"}) as resp:
             for line in resp.iter_lines():
                 if not line.strip():
                     continue

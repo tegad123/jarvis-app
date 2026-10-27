@@ -135,7 +135,8 @@ else:
 
     if tid:
         started = time.time()
-        code, _ = call("/api/chat", "POST", {"thread_id": tid, "message": PHRASE}, raw=True)
+        # A team channel answers only when called (app/channels.py), as a person would call it.
+        code, _ = call("/api/chat", "POST", {"thread_id": tid, "message": f"@jarvis {PHRASE}"}, raw=True)
         ck("the message was accepted", code == 200, f"HTTP {code}")
         found = None
         while time.time() - started < args.timeout:

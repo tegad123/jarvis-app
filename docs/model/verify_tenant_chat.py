@@ -190,7 +190,8 @@ def main() -> int:
 
     started = time.time()
     events, text, verified = [], "", []
-    with c.stream("POST", "/api/chat", json={"thread_id": tid, "message": phrase}) as resp:
+    # A team channel answers only when called (app/channels.py), as a person would call it.
+    with c.stream("POST", "/api/chat", json={"thread_id": tid, "message": f"@jarvis {phrase}"}) as resp:
         check(f"the message is accepted (HTTP {resp.status_code})", resp.status_code == 200)
         for line in resp.iter_lines():
             if line.strip():
