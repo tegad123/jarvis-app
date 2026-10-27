@@ -1,0 +1,145 @@
+# isocheck: the on-host scratch tenant (AGENTS.md topology). Not a person's Jarvis.
+# Kept here from 2026-10-27; before that its manifest lived only in /tmp. Rebuilt from
+# /tmp/isocheck-r1.yaml (2026-10-14) with: app and skills at the commits it was upgraded
+# to, the owner's internal role (the provisioner requires it), and no switches block (all
+# on, which is what its units ran; r1's 'sentinel: off' was a canary step).
+slug: isocheck
+display_name: Isolation Check Brokerage
+business_description: a scratch tenant used to prove the two-user layout
+timezone: America/Chicago
+assistant_address: aria@isocheck.invalid
+agent_display_name: Iris
+mailbox_strategy: dedicated_account
+ports:
+  app: 8740
+  gateway: 8682
+  hooks: 18794
+public_origin: http://127.0.0.1:8740
+sheet_id: ''
+boundary_domains:
+- isocheck.invalid
+outbound_suffix_policy: production
+skill_loadout: base
+skill_loadout_optional: []
+skills_origin_sha: b8c2d1f164b6e2fd97f4dc6347b2ad4230c3388e
+app_origin_sha: 548b1ff92610f3cbfb4be25d1b581547e64bef76
+curator_packs: omit
+writes_posture: blocked
+agent_model: claude-sonnet-5-5
+background_model: claude-haiku-5-5
+venv: platform
+isolation: two_user
+sentinel_mode: shadow
+backup:
+  destination: /root/backups/isocheck
+  keep_daily: 3
+digest:
+  times_local:
+  - 05:00
+  - '15:00'
+  default_assignee: ''
+sweeps:
+  stale_email_hours: 24
+  email_grace_days: 2
+  task_quiet_hours: 24
+  task_escalate_after: 3
+  lead_quiet_days: 3
+  hot_lead_quiet_days: 1
+  lead_nudge_backoff_days: 3
+  min_interval_minutes: 30
+schedule:
+  digest_tick_seconds: 300
+  sweep_tick_seconds: 1800
+  metrics_calendar: '*-*-* 08:30:00'
+  digest_on_boot_sec: 120
+  sweep_on_boot_sec:
+  - 180
+  - 240
+  - 300
+  digest_accuracy_sec: 30
+  sweep_accuracy_sec: 60
+  metrics_accuracy: 5m
+email_router:
+  lookback_days: 7
+  recording_subject_prefix: 'PLAUD:'
+  deal_channel_prefix: deals-
+email_monitor:
+  lookback_days: 14
+gmail_push_trigger:
+  webhook_port: 18794
+  mailbox: ''
+  gcp_project: ''
+  pubsub_topic: ''
+  pubsub_subscription: ''
+  tunnel_hostname: ''
+cost_guard:
+  spend_warn_usd: 5
+  spend_pause_usd: 10
+leads:
+  source: store
+  export_enabled: false
+  export_sheet_id: ''
+tasks:
+  source: store
+lead_reply:
+  sheet_id: ''
+  exclude_tabs:
+  - SEND LOG
+  - OLD LEADS
+google_calendar:
+  default_calendar_id: ''
+email_to_calendar:
+  calendar_id: ''
+  always_attendee: ''
+meeting_briefing:
+  owner_person: ''
+owner_email_voice:
+  voice_corpus_path: ''
+feed:
+  team_destinations:
+  - ops
+  - deals
+safety:
+  outbound_recipient_suffix: []
+  allow_writes: false
+gateway:
+  base_url: http://127.0.0.1:8682
+paths:
+  app_root: /opt/isocheck/jarvis-app
+platform:
+  primary: discord
+  discord:
+    guild_id: '888111222333444555'
+people:
+  owner:
+    name: Owner
+    display_name: Owner
+    title: owner
+    roles:
+    - owner
+    - internal
+    email:
+    - owner@isocheck.invalid
+    platform_ids:
+      discord:
+      - '888111222333444999'
+  assistant:
+    name: Iris
+    display_name: Aria
+    title: assistant
+    roles:
+    - assistant
+    email:
+    - aria@isocheck.invalid
+    platform_ids:
+      discord: []
+destinations:
+  ops:
+    name: ops
+    discord: '888111222333444001'
+  tasks:
+    name: tasks
+    discord: '888111222333444002'
+  assistant:
+    name: assistant
+    discord: '888111222333444003'
