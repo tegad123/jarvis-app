@@ -25,6 +25,8 @@ before and after:
 
 --canary: the 2-hour floor is set to 0, so the 30-minute-old conversation is
 listed; "not the 30-minute-old one" must FAIL.
+--canary-escape: the HTML stops escaping; "a text's own markup is shown as
+text" must FAIL.
 
 Never :8700. Prints no message text beyond the fixture's own made-up lines.
 """
@@ -138,8 +140,16 @@ out["tick1"] = text_followup.tick(now)
 m = sent[0] if sent else None
 body = (m.get_payload(decode=True) or b"").decode() if m is not None and not m.is_multipart() else \
     (next((p.get_payload(decode=True) for p in m.walk() if p.get_content_type() == "text/plain"), b"").decode() if m else "")
+page = (next((p.get_payload(decode=True) for p in m.walk() if p.get_content_type() == "text/html"), b"") or b"").decode() if m else ""
 out["mail1"] = {"n": len(sent), "to": m and m.get_all("To"), "from": m and m.get("From"), "cc": m and m.get_all("Cc"),
-                "bcc": m and m.get_all("Bcc"), "subject": m and m.get("Subject"), "body": body}
+                "bcc": m and m.get_all("Bcc"), "subject": m and m.get("Subject"), "body": body,
+                "type": m and m.get_content_type(), "html": page}
+if os.environ.get("CANARY") == "escape":
+    text_followup._esc = lambda s: s
+_, _, hostile = text_followup.compose([{"chat": "Eve <b>Bold</b>", "sender": "Eve <b>Bold</b>", "sent_at": now.isoformat(),
+                                        "line": "hi <script>alert(1)</script> & bye"}], "7 AM", now, tz)
+out["hostile_html"] = {"raw_tags": "<script>" in hostile or "<b>Bold" in hostile,
+                       "escaped": "&lt;script&gt;" in hostile and "&lt;b&gt;Bold" in hostile and "&amp; bye" in hostile}
 L1, P1 = ledger(), pending()
 out["ledger1"] = L1[len(L0):]
 out["pending1"] = P1 - P0
@@ -249,6 +259,8 @@ def child() -> dict:
     })
     if "--canary" in sys.argv:
         env["CANARY"] = "1"
+    if "--canary-escape" in sys.argv:
+        env["CANARY"] = "escape"
     p = subprocess.run([sys.executable, "-c", CHILD], env=env, cwd=str(APP_ROOT),
                        capture_output=True, text=True, timeout=180)
     line = [ln for ln in p.stdout.splitlines() if ln.startswith("RESULT ")]
@@ -309,6 +321,17 @@ def main() -> int:
     ck("   not the 30-minute-old one", "Cara New" not in b and "TOO-NEW" not in b)
     ck("   not the 9-day-old one", "Dan Old" not in b and "TOO-OLD" not in b)
     ck("   not another person's texts", "OMAR" not in b and "Omar Client" not in b)
+    h = m.get("html") or ""
+    ck(f"   sent as text + HTML, like the task digest ({m.get('type')})",
+       m.get("type") == "multipart/alternative" and "Texts Waiting for Your Reply" in h)
+    ck("   HTML lists Jane's line and the group chat with who wrote it",
+       "Can we see the Elm St house Thursday?" in h and "Land deals team" in h and "Priya &middot; group chat" in h
+       and "Waiting less than a day (2)" in h)
+    ck("   HTML leaves out the answered, too-new, too-old and other person's conversations",
+       all(x not in h for x in ("Bob Seller", "ANSWERED-BOB", "Cara New", "TOO-NEW", "Dan Old", "TOO-OLD", "OMAR")))
+    hh = r.get("hostile_html") or {}
+    ck(f"   a text's own markup is shown as text, never as HTML ({hh})",
+       hh.get("escaped") is True and hh.get("raw_tags") is False)
     ck(f"ledger: 2 rows for her (allowed, executed), to her address only ({r['ledger1']})",
        r["ledger1"] == [["allowed", [OWN]], ["executed", [OWN]]])
     ck(f"   no approval was filed ({r['pending1']})", r["pending1"] == 0)

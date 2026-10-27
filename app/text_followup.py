@@ -14,6 +14,7 @@ all once it is more than GRACE old (the app was down). Which slot each person
 was served is a small JSON file beside the accounts database.
 """
 import fcntl
+import html
 import json
 import logging
 import os
@@ -131,11 +132,81 @@ def _ago(sent: datetime, now: datetime) -> str:
     return f"{hours // 24}d ago"
 
 
-def compose(items: List[Dict[str, Any]], slot_label: str, now: datetime, tz) -> Tuple[str, str]:
+FOOTNOTE = "Jarvis reads your texts to make this list; it can't send one."
+SECTIONS = (("Waiting less than a day", "#e3f2fd", 0, 24, "under a day"),
+            ("Waiting 1–3 days", "#fff9c4", 24, 72, "for 1–3 days"),
+            ("Waiting 3+ days", "#fce4ec", 72, None, "for 3+ days"))
+_esc = html.escape
+
+
+def _who_html(it: Dict[str, Any]) -> str:
+    if it["sender"] and it["sender"] != it["chat"]:
+        return (f'<strong>{_esc(it["chat"])}</strong><br>'
+                f'<small style="color:#888;">{_esc(it["sender"])} &middot; group chat</small>')
+    return f'<strong>{_esc(it["chat"])}</strong>'
+
+
+def _table_html(rows, header_color: str, now: datetime, tz, position: int) -> Tuple[str, int]:
+    out = (f'<table border="1" cellpadding="8" cellspacing="0" '
+           f'style="border-collapse:collapse;width:100%;margin-bottom:20px;border-color:#ddd;">'
+           f'<thead style="background-color:{header_color};"><tr>'
+           f'<th align="center" style="width:6%;font-size:0.85em;">#</th>'
+           f'<th align="left" style="width:62%;">Conversation</th>'
+           f'<th align="left" style="width:20%;">Received</th>'
+           f'<th align="left" style="width:12%;">Waiting</th>'
+           f'</tr></thead><tbody>')
+    for it in rows:
+        sent = datetime.fromisoformat(it["sent_at"])
+        line = (f'<br><em style="color:#555;">&ldquo;{_esc(it["line"])}&rdquo;</em>' if it["line"] else "")
+        out += (f'<tr><td align="center" style="font-weight:bold;color:#555;">#{position}</td>'
+                f'<td>{_who_html(it)}{line}</td>'
+                f'<td>{_esc(sent.astimezone(tz).strftime("%a %-I:%M %p"))}</td>'
+                f'<td>{_esc(_ago(sent, now))}</td></tr>')
+        position += 1
+    return out + "</tbody></table>", position
+
+
+def _html(items: List[Dict[str, Any]], slot_label: str, now: datetime, tz) -> str:
+    n = len(items)
+    day = now.astimezone(tz).strftime("%A, %b %-d")
+    head = (f'<h1 style="color:#1565c0;font-size:22px;">&#128172; Texts Waiting for Your Reply '
+            f'&mdash; {_esc(slot_label)}, {_esc(day)}</h1>')
+    if not items:
+        body = ('<p style="font-size:16px;"><strong>You\'re all caught up.</strong> '
+                'No conversation is waiting on a reply from you.</p>')
+    else:
+        ages = [(now - datetime.fromisoformat(it["sent_at"])).total_seconds() / 3600 for it in items]
+        counts = [sum(1 for a in ages if lo <= a and (hi is None or a < hi)) for _, _, lo, hi, _ in SECTIONS]
+        parts = [f"{c} {short}" for (_, _, _, _, short), c in zip(SECTIONS, counts) if c]
+        body = (f'<p style="font-size:16px;"><strong>{n} conversation{"s" if n != 1 else ""}</strong> '
+                f'waiting for your reply &middot; {_esc(" · ".join(parts))}</p>'
+                f'<hr style="border:none;border-top:2px solid #eee;margin:20px 0;">')
+        listed = list(zip(items[:MAX_LISTED], ages))
+        position = 1
+        for name, color, lo, hi, _ in SECTIONS:
+            rows = [it for it, a in listed if lo <= a and (hi is None or a < hi)]
+            if not rows:
+                continue
+            body += f'<h2 style="font-size:17px;margin:16px 0 8px;">{_esc(name)} ({len(rows)})</h2>'
+            table, position = _table_html(rows, color, now, tz, position)
+            body += table
+        if n > MAX_LISTED:
+            body += (f'<p style="color:#888;font-style:italic;">&hellip;and {n - MAX_LISTED} more, '
+                     f'waiting longest.</p>')
+    return (f'<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;max-width:760px;'
+            f'margin:0 auto;padding:16px;color:#222;">{head}{body}'
+            f'<hr style="border:none;border-top:1px solid #ddd;margin:20px 0;">'
+            f'<p style="color:#666;font-size:13px;">Reply from your phone or your Mac. {_esc(FOOTNOTE)}</p>'
+            f'<p style="color:#888;font-size:0.85em;">Jarvis reply reminders &mdash; '
+            f'{_esc(now.astimezone(tz).strftime("%Y-%m-%d %-I:%M %p"))}</p></body></html>')
+
+
+def compose(items: List[Dict[str, Any]], slot_label: str, now: datetime, tz) -> Tuple[str, str, str]:
+    """Subject, plain text, and the HTML version of the same list."""
+    page = _html(items, slot_label, now, tz)
     if not items:
         return (f"{slot_label}: you're all caught up on texts",
-                "No conversation is waiting on a reply from you.\n\n"
-                "Jarvis reads your texts to make this list; it can't send one.\n")
+                f"No conversation is waiting on a reply from you.\n\n{FOOTNOTE}\n", page)
     n = len(items)
     lines = [f"{n} conversation{'s' if n != 1 else ''} {'are' if n != 1 else 'is'} waiting for your reply:", ""]
     for it in items[:MAX_LISTED]:
@@ -148,8 +219,8 @@ def compose(items: List[Dict[str, Any]], slot_label: str, now: datetime, tz) -> 
             lines.append(f"  “{it['line']}”")
     if n > MAX_LISTED:
         lines.append(f"…and {n - MAX_LISTED} more.")
-    lines += ["", "Reply from your phone or your Mac. Jarvis reads your texts to make this list; it can't send one."]
-    return f"{slot_label}: {n} text{'s' if n != 1 else ''} waiting for your reply", "\n".join(lines) + "\n"
+    lines += ["", f"Reply from your phone or your Mac. {FOOTNOTE}"]
+    return f"{slot_label}: {n} text{'s' if n != 1 else ''} waiting for your reply", "\n".join(lines) + "\n", page
 
 
 def send_now(person: str, now: Optional[datetime] = None, kind: str = "now",
@@ -157,8 +228,8 @@ def send_now(person: str, now: Optional[datetime] = None, kind: str = "now",
     tz, _ = _zone()
     now = now or datetime.now(timezone.utc)
     items = waiting(person, now)
-    subject, body = compose(items, label((slot or now).astimezone(tz)), now, tz)
-    status, content = broker.send_to_self(person, subject, body, kind)
+    subject, body, page = compose(items, label((slot or now).astimezone(tz)), now, tz)
+    status, content = broker.send_to_self(person, subject, body, kind, html=page)
     result = "sent" if status == 200 else (content.get("error") or f"http_{status}")
     threads_mod.bump_counter("text_followup_sent" if status == 200 else f"text_followup_{result}")
     if status != 200:

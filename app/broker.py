@@ -463,7 +463,8 @@ def gate_google(api, version, method, params, ctx, approval: Optional[Dict[str, 
 SELF_SKILL = "text-followup"
 
 
-def send_to_self(person: str, subject: str, text: str, kind: str) -> Tuple[int, Dict[str, Any]]:
+def send_to_self(person: str, subject: str, text: str, kind: str,
+                 html: Optional[str] = None) -> Tuple[int, Dict[str, Any]]:
     """An email the app wrote, from a person's own Gmail to that same address
     and nobody else. The one personal send that needs no tap (human yes
     2026-10-26: the twice-daily texts reminder). Never routed: no agent, chat
@@ -484,6 +485,8 @@ def send_to_self(person: str, subject: str, text: str, kind: str) -> Tuple[int, 
     msg = EmailMessage()
     msg["To"], msg["From"], msg["Subject"] = addr, addr, subject
     msg.set_content(text)
+    if html:
+        msg.add_alternative(html, subtype="html")
     params = {"userId": "me", "body": {"raw": base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")}}
     addrs, refusal = _recipients(params)
     if sorted({a.lower() for a in addrs}) != [addr.lower()]:
