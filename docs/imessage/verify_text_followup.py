@@ -12,8 +12,8 @@ before and after:
   word is someone else's, 2h-7d old; not the one she answered, not the
   30-minute-old one, not the 9-day-old one, not omar's texts.
 - omar (Mac, no Google) is skipped as not_connected: no email, no approval.
-- the same slot again sends nothing; at 5:05 PM with everything answered dana
-  gets "all caught up".
+- the same slot again sends nothing; at 5:05 PM what she still hasn't answered
+  is listed again; once everything is answered she gets "all caught up".
 - send switched off for omar (now connected): nothing; dana still gets hers.
 - a slot more than 2h late is skipped, not sent.
 - practice mode, a policy block, and a second recipient each send nothing and
@@ -27,6 +27,8 @@ before and after:
 listed; "not the 30-minute-old one" must FAIL.
 --canary-escape: the HTML stops escaping; "a text's own markup is shown as
 text" must FAIL.
+--canary-carry: texts drop out after about 11 hours, as if one email had
+cleared them; "carried over" must FAIL.
 
 Never :8700. Prints no message text beyond the fixture's own made-up lines.
 """
@@ -74,6 +76,9 @@ google_connection.person_credentials = lambda person_key: object()
 if os.environ.get("CANARY") == "1":
     real_settings = text_followup.settings
     text_followup.settings = lambda: {**real_settings(), "older_than_hours": 0}
+if os.environ.get("CANARY") == "carry":
+    real_settings = text_followup.settings
+    text_followup.settings = lambda: {**real_settings(), "lookback_days": 0.45}
 
 PEOPLE = ("dana", "omar")
 OWN = os.environ["OWN"]
@@ -157,6 +162,13 @@ out["counters1"] = {k: counter(k) - v for k, v in C0.items()}
 
 out["tick_again"] = [text_followup.tick(at(7, 10)), len(sent)]
 
+carry = text_followup.send_now("dana", at(17, 5), kind="carry", slot=at(17, 0))
+cm = sent[-1] if len(sent) == 2 else None
+def part(mm, kind):
+    return (next((p.get_payload(decode=True) for p in mm.walk() if p.get_content_type() == kind), b"") or b"").decode() if mm else ""
+out["carry"] = {"result": carry["result"], "n": len(sent), "subject": cm and cm.get("Subject"),
+                "text": part(cm, "text/plain"), "html": part(cm, "text/html")}
+
 imessage._now = lambda: at(16, 0)
 imessage.store_batch("dana", "tf-dana", [
     {"guid": "tf-a3", "chat": "Jane Buyer", "sender": "me", "is_from_me": True, "sent_at": at(16, 0).isoformat(), "text": "Yes, 2pm"},
@@ -165,7 +177,7 @@ imessage.store_batch("dana", "tf-dana", [
 ])
 imessage._now = real_now
 out["tick_pm"] = text_followup.tick(at(17, 5))
-pm = sent[-1] if len(sent) == 2 else None
+pm = sent[-1] if len(sent) == 3 else None
 out["mail_pm"] = {"n": len(sent), "subject": pm and pm.get("Subject"), "to": pm and pm.get_all("To")}
 
 google_connection.put_person("omar", google_email="omar.own@example.com",
@@ -261,6 +273,8 @@ def child() -> dict:
         env["CANARY"] = "1"
     if "--canary-escape" in sys.argv:
         env["CANARY"] = "escape"
+    if "--canary-carry" in sys.argv:
+        env["CANARY"] = "carry"
     p = subprocess.run([sys.executable, "-c", CHILD], env=env, cwd=str(APP_ROOT),
                        capture_output=True, text=True, timeout=180)
     line = [ln for ln in p.stdout.splitlines() if ln.startswith("RESULT ")]
@@ -343,9 +357,17 @@ def main() -> int:
 
     print("\n── the same slot, then 5 PM ──")
     ck(f"the same slot again sends nothing ({r['tick_again']})", r["tick_again"] == [{}, 1])
+    cy = r["carry"]
+    ct, chh = cy["text"], cy["html"]
+    ck(f"5:05 PM, still unanswered: the next email lists them again ({cy['result']}, {cy['subject']})",
+       cy["result"] == "sent" and cy["n"] == 2 and (cy["subject"] or "").startswith("5 PM: 3 texts"))
+    ck("   Jane's and the group chat's texts carried over, in text and HTML",
+       all("Can we see the Elm St house Thursday?" in x and "walking the lot" in x for x in (ct, chh)))
+    ck("   Cara's, now over 2 hours old, joins them; Bob's (answered) still doesn't",
+       "TOO-NEW" in ct and "Bob Seller" not in ct and "Bob Seller" not in chh)
     pm = r["mail_pm"]
     ck(f"5:05 PM with everything answered: one 'all caught up' email ({pm['subject']})",
-       pm["n"] == 2 and pm["subject"] == "5 PM: you're all caught up on texts" and pm["to"] == [OWN])
+       pm["n"] == 3 and pm["subject"] == "5 PM: you're all caught up on texts" and pm["to"] == [OWN])
 
     print("\n── switches, late slots, refusals ──")
     ck(f"send switched off for omar: nothing for him, dana still gets hers ({r['tick_off']}, {r['off_sends']})",
