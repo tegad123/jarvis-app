@@ -40,7 +40,6 @@ from . import config, leads_store
 if str(config.SHARED) not in sys.path:
     sys.path.insert(0, str(config.SHARED))
 
-import google_creds  # noqa: E402
 import identity  # noqa: E402
 import tenant_config as tc  # noqa: E402
 
@@ -100,6 +99,7 @@ def run(dry_run: bool = True) -> int:
         return 2
     exclude = {t.strip().upper() for t in tc.get("skills.lead-reply.exclude_tabs", []) or []}
 
+    import google_creds  # noqa: PLC0415  (only this live-sheet path needs it; the upload importer must not)
     gc = google_creds.gspread_client()
     sh = gc.open_by_key(sheet_id)
 

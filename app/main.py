@@ -23,7 +23,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -964,6 +964,37 @@ def log_lead_touch(lead_id: str, body: LeadTouch, sess: dict = Depends(_needs("l
     except leads_store.LeadError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     return {"ok": True, "lead": leads_src._to_screen_row(res["lead"]), "touch": res["touch"]}
+
+
+class LeadImportRun(BaseModel):
+    token: str = Field(..., max_length=64)
+    #: Each agent name the team list couldn't place -> a person key, or null for nobody.
+    agents: Dict[str, Optional[str]] = Field(default_factory=dict)
+
+
+@app.post("/api/leads/import/preview")
+async def preview_lead_import(file: UploadFile = File(...), sess: dict = Depends(auth.current_session)):
+    """Owner only: read an uploaded tracker and say what importing it would do.
+    Writes nothing."""
+    auth.require_owner(sess)
+    _leads_writable()
+    from app import leads_upload  # noqa: PLC0415
+    data = await file.read(leads_upload.MAX_BYTES + 1)
+    try:
+        return leads_upload.preview(auth.person_of(sess), file.filename or "", data)
+    except leads_upload.UploadError as exc:
+        return JSONResponse(status_code=422, content={"error": exc.error, "detail": exc.detail})
+
+
+@app.post("/api/leads/import/run")
+def run_lead_import(body: LeadImportRun, sess: dict = Depends(auth.current_session)):
+    auth.require_owner(sess)
+    _leads_writable()
+    from app import leads_upload  # noqa: PLC0415
+    try:
+        return leads_upload.run(auth.person_of(sess), body.token, body.agents, accounts_mod.known_people())
+    except leads_upload.UploadError as exc:
+        return JSONResponse(status_code=422, content={"error": exc.error, "detail": exc.detail})
 
 
 @app.patch("/api/leads/{lead_id}")

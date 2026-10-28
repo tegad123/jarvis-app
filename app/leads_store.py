@@ -219,7 +219,7 @@ def _emit(headline: str, detail: str, kind: str,
         pass
 
 
-def create(name: str, created_by: str = "user", **fields: Any) -> Dict[str, Any]:
+def create(name: str, created_by: str = "user", emit: bool = True, **fields: Any) -> Dict[str, Any]:
     name = (name or "").strip()
     if not name:
         raise LeadError("A lead needs a name.")
@@ -259,8 +259,9 @@ def create(name: str, created_by: str = "user", **fields: Any) -> Dict[str, Any]
                              (data.get("source") or "").strip().title())
     who = "Jarvis" if created_by == "jarvis" else "You"
     headline = f"New lead: {name}" + (f" from {src}" if src else "")
-    _emit(headline, f"{lead_id} · added by {who}", "lead.created",
-          owner_person=data.get("owner_person"), lead_id=lead_id)
+    if emit:
+        _emit(headline, f"{lead_id} · added by {who}", "lead.created",
+              owner_person=data.get("owner_person"), lead_id=lead_id)
     return get(lead_id)
 
 
@@ -296,7 +297,7 @@ def set_archived(lead_id: str, archived: bool = True) -> Dict[str, Any]:
     return get(lead_id)
 
 
-def upsert_external(external_ref: str, **fields: Any) -> Dict[str, Any]:
+def upsert_external(external_ref: str, emit: bool = True, **fields: Any) -> Dict[str, Any]:
     """Import path: create by external_ref, or refresh the existing row.
 
     This is what makes re-running the importer safe — the second run updates
@@ -307,7 +308,7 @@ def upsert_external(external_ref: str, **fields: Any) -> Dict[str, Any]:
                        (external_ref,)).fetchone()
     if row:
         return update(row["lead_id"], **fields)
-    return create(created_by=fields.pop("created_by", "user"),
+    return create(created_by=fields.pop("created_by", "user"), emit=emit,
                   external_ref=external_ref, **fields)
 
 

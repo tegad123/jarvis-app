@@ -519,6 +519,20 @@ export interface LeadTouch {
   next_touch_at: string | null
 }
 
+export interface LeadImportPreview {
+  token: string
+  leads: number
+  new: number
+  already_imported: number
+  due_now: number
+  bad_dates: number
+  co_listed: number
+  tabs: { tab: string; leads: number; skipped?: string; unmatched_headers?: string[] }[]
+  /** One per agent name in the file; person_key null = the team list can't place it. */
+  agents: { name: string; leads: number; person_key: string | null }[]
+  collisions: { ref: string; first: string; second: string }[]
+}
+
 export interface LeadDetailResponse {
   lead: Lead & { email: string; phone: string; source: string; owner_person: string; notes: string }
   timeline: LeadTouch[]
