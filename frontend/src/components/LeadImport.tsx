@@ -131,7 +131,7 @@ export default function LeadImport({ onUnauthorized }: { onUnauthorized: () => v
           {unplaced.map((a) => (
             <label key={a.name} className="flex flex-wrap items-center justify-between gap-jm-3 text-jm-fg">
               <span>
-                “{a.name}” isn’t on the team list ({a.leads} leads). Whose are they?
+                “{a.name}” isn’t on the team list ({a.leads} lead{a.leads === 1 ? '' : 's'}). Whose {a.leads === 1 ? 'is it' : 'are they'}?
               </span>
               <Select
                 label={`Agent for ${a.name}`}
