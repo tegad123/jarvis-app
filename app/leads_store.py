@@ -215,8 +215,15 @@ def _emit(headline: str, detail: str, kind: str,
             att = [rec]
         notify.notify("leads", headline, headline=headline, detail=detail,
                       kind=kind, skill="leads", attachments=att)
-    except Exception:
-        pass
+    except Exception as exc:
+        try:
+            from . import threads as threads_mod  # noqa: PLC0415
+            threads_mod.bump_counter("leads_feed_emit_failed")
+        except Exception:
+            pass
+        import logging  # noqa: PLC0415
+        logging.getLogger("app.leads_store").warning(
+            "leads: feed event %s not posted (%s)", kind, type(exc).__name__)
 
 
 def create(name: str, created_by: str = "user", emit: bool = True, **fields: Any) -> Dict[str, Any]:
