@@ -324,6 +324,24 @@ def text_followup(manifest: dict) -> dict:
             "older_than_hours": hours, "lookback_days": days}
 
 
+def lead_followup(manifest: dict) -> dict:
+    """`lead_followup: {enabled, time_local, suggest}`: each agent with leads
+    due gets one morning email from their own Gmail to themselves, with a
+    suggested message per lead. Off unless enabled: true."""
+    v = manifest.get("lead_followup") or {}
+    if not isinstance(v, dict):
+        die("lead_followup must be a mapping")
+    unknown = set(v) - {"enabled", "time_local", "suggest"}
+    if unknown:
+        die(f"lead_followup has unknown keys: {sorted(unknown)}")
+    t = v.get("time_local", "07:00")
+    if not isinstance(t, str) or not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", t):
+        die("lead_followup.time_local must be a time like '07:00'")
+    if "suggest" in v and not isinstance(v["suggest"], bool):
+        die("lead_followup.suggest must be true or false")
+    return {"enabled": v.get("enabled") is True, "time_local": t, "suggest": v.get("suggest", True)}
+
+
 def browser_unit_names(slug: str) -> List[str]:
     return [f"{slug}-browser.socket", f"{slug}-browser.service", f"{slug}-egress.socket", f"{slug}-egress.service"]
 
@@ -905,6 +923,7 @@ def build_client_config(manifest: dict, paths: dict, shipped: List[str], loadout
             "imessage": {"history_days": imessage_history_days(manifest)},
             "channels": {"categories": channel_categories(manifest)},
             "text_followup": text_followup(manifest),
+            "lead_followup": lead_followup(manifest),
         },
         "schedule": schedule,
         "credentials": {},

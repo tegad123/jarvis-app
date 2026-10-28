@@ -143,6 +143,12 @@ def _start_text_followup() -> None:
     text_followup.start()
 
 
+@app.on_event("startup")
+def _start_lead_followup() -> None:
+    from app import lead_followup  # noqa: PLC0415
+    lead_followup.start()
+
+
 class LoginRequest(BaseModel):
     """Either a per-person sign-in, or the break-glass operator passphrase.
 
