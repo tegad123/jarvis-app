@@ -500,6 +500,43 @@ export interface LeadsResponse {
   sheet_id: string
   sheet_title: string
   counts: { all: number; needs_touch: number; hot: number; new: number }
+  /** YYYY-MM-DD in the tenant's zone (store only): what "due today" means. */
+  today?: string
+}
+
+export type LeadTouchKind = 'call' | 'text' | 'email' | 'met' | 'showing' | 'note'
+
+export interface LeadTouch {
+  touch_id: string
+  lead_id: string
+  at: string
+  by_person: string | null
+  by_name: string
+  kind: LeadTouchKind | 'created' | 'imported'
+  /** Null on an operator session: the server withheld it. */
+  note: string | null
+  reached: boolean | null
+  next_touch_at: string | null
+}
+
+export interface LeadImportPreview {
+  token: string
+  leads: number
+  new: number
+  already_imported: number
+  due_now: number
+  bad_dates: number
+  co_listed: number
+  tabs: { tab: string; leads: number; skipped?: string; unmatched_headers?: string[] }[]
+  /** One per agent name in the file; person_key null = the team list can't place it. */
+  agents: { name: string; leads: number; person_key: string | null }[]
+  collisions: { ref: string; first: string; second: string }[]
+}
+
+export interface LeadDetailResponse {
+  lead: Lead & { email: string; phone: string; source: string; owner_person: string; notes: string }
+  timeline: LeadTouch[]
+  today: string
 }
 
 /** 503 body when the sheet cannot be read. */

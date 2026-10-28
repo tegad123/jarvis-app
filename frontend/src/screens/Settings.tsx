@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import Page from '../components/Page'
+import LeadImport from '../components/LeadImport'
 import {
   ApiError,
   Unauthorized,
@@ -194,6 +195,7 @@ export default function Settings({ role, personKey, features = {}, onUnauthorize
       {role !== 'operator' && features.imessage !== false && <MacMessages onUnauthorized={onUnauthorized} />}
       {canManageTeam(role) && <Team role={role} personKey={personKey ?? null} onUnauthorized={onUnauthorized} />}
       {canManageTeam(role) && <Channels onUnauthorized={onUnauthorized} />}
+      {role === 'owner' && features.leads !== false && <LeadImport onUnauthorized={onUnauthorized} />}
     </Page>
   )
 }

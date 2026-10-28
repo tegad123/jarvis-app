@@ -25,7 +25,8 @@ SPEC = json.loads(SPEC_PATH.read_text())
 TOOLS: Dict[str, dict] = {t["name"]: t for t in SPEC["tools"]}
 ALLOWED = frozenset(TOOLS)
 BROWSER_TOOLS = frozenset(n for n, t in TOOLS.items() if "browser" in t["needs"])
-PERSONAL_TOOLS = BROWSER_TOOLS | {"imessage_search"}
+LEAD_TOOLS = frozenset({"add_lead", "log_lead_contact", "list_my_followups"})
+PERSONAL_TOOLS = BROWSER_TOOLS | {"imessage_search"} | LEAD_TOOLS
 CONNECT_ROLES = ("owner", "admin", "member")
 CHAT_ACTIONS = ("connect_google",)
 WORKING = "Working on it"
@@ -90,6 +91,8 @@ def feature_of(tool: str):
         return "browser"
     if tool == "imessage_search":
         return "imessage"
+    if tool in LEAD_TOOLS:
+        return "leads"
     authz_action = TOOLS[tool]["authz"] or ""
     if authz_action.startswith("task."):
         return "tasks"
@@ -136,6 +139,9 @@ _CAN = {
     "browser_open": "open and read any public website in their own browser",
     "imessage_search": "read their own iMessages and texts, synced from their Mac (reading only, never sending)",
     "browser_click": "show what you would click and type on a website (practice mode: nothing is clicked)",
+    "add_lead": "add a lead to their lead tracker",
+    "log_lead_contact": "log a call, text or meeting with a lead and set the next follow-up",
+    "list_my_followups": "list the leads they're due to follow up with",
 }
 _CAN_LIVE = {
     "add_calendar_event": "put things on their calendar, each one only after they tap Approve in the Approvals tab",
@@ -181,6 +187,10 @@ def render(st: dict, name: str) -> str:
                                        "days. You cannot send texts; say so if asked." if st.get("mac")
                                        else "their Mac isn't connected yet. If they ask about their texts, tell them to "
                                             "open Settings, find iMessage, and tap Connect a Mac. You cannot send texts."))
+    if "add_lead" in st["available"]:
+        lines.append("- Leads: when they tell you about someone they met (an open house visitor, a call), add them "
+                     "with add_lead; when they say they reached or tried a lead, use log_lead_contact. Leave the "
+                     "follow-up date out unless they gave one; the tracker picks it.")
     lines.append("- You can do right now: " + ("; ".join(can) if can else "nothing yet") + ".")
     if later:
         lines.append("- Once Google is connected you could also: " + "; ".join(later) + ".")
