@@ -431,6 +431,49 @@ def logout(response: Response):
     return {"ok": True}
 
 
+class DeletionRequestBody(BaseModel):
+    confirm: str = Field(..., max_length=80)
+    pin: str = Field(..., min_length=1, max_length=64)
+    person_key: Optional[str] = Field(None, max_length=64)
+
+
+@app.post("/api/account/deletion-request")
+def post_deletion_request(body: DeletionRequestBody, sess: dict = Depends(auth.current_session)):
+    """Turn off one person's sign-in and record a pending deletion request.
+
+    Re-checks the caller's PIN first. A member may ask only for themselves.
+    An owner or admin may ask for someone else. Shared leads, tasks, and
+    messages are left in place. The response's deleted field is false.
+    """
+    auth.require_person(sess)
+    if body.confirm != "request-account-deletion":
+        raise HTTPException(
+            status_code=422,
+            detail="Type request-account-deletion to confirm. This turns off sign-in. "
+                   "It does not delete leads, tasks, or messages.",
+        )
+    caller = auth.person_of(sess)
+    if not auth.verify_pin(caller, body.pin):
+        raise HTTPException(status_code=401, detail="That PIN is not right.")
+    target = body.person_key or caller
+    if target != caller and auth.role_of(sess) not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="You can only turn off your own sign-in.")
+    try:
+        rec = accounts_mod.request_deletion(target, caller)
+    except accounts_mod.AccountError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {
+        "ok": True,
+        "deleted": False,
+        "deactivated": True,
+        "deletion": "pending",
+        "person_key": rec["person_key"],
+        "request_id": rec["request_id"],
+        "detail": "Sign-in is turned off and a deletion request is recorded. "
+                  "Leads, tasks, and messages were not deleted.",
+    }
+
+
 @app.get("/api/session")
 def session(sess: dict = Depends(auth.current_session)):
     body = {"ok": True, "authenticated": True, "issued_at": sess.get("iat"),

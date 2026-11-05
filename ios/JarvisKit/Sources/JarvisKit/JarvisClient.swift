@@ -196,6 +196,22 @@ public final class JarvisClient {
         return try APIDecoding.decode(SessionInfo.self, from: data)
     }
 
+    /// Turns off this person's sign-in and records a pending deletion request.
+    /// Refuses a body that claims the account was deleted.
+    public func requestAccountDeletion(pin: String) async throws -> DeletionReceipt {
+        let body = try JSONSerialization.data(withJSONObject: [
+            "confirm": AIDisclosure.confirmPhrase,
+            "pin": pin,
+        ])
+        let data = try await send(method: "POST", path: "/api/account/deletion-request", body: body, acceptError: false)
+        let receipt = try APIDecoding.decode(DeletionReceipt.self, from: data)
+        if receipt.deleted || receipt.deletion != "pending" || !receipt.deactivated {
+            throw JarvisError.http(502, "The server's reply did not match a pending request. Nothing here was treated as deleted.")
+        }
+        if let host = origin?.host { cookies.clear(host: host) }
+        return receipt
+    }
+
     public func logout() async {
         _ = try? await send(method: "POST", path: "/api/logout", body: nil, acceptError: true)
         if let host = origin?.host { cookies.clear(host: host) }

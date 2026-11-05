@@ -25,12 +25,19 @@ cd ios/JarvisKit
 swift test
 ```
 
-## Account deletion
+## Sign-in off, deletion still pending
 
-Not implemented. A person shares channels, leads, and sign-in records with the
-tenant, and signup creates a whole tenant. There is no API that deletes only
-one person without guessing what else goes. That is a release blocker. Settings
-says so and does not pretend a button does it.
+`POST /api/account/deletion-request` with the caller's PIN and the words
+`request-account-deletion` disables that person, clears the PIN, and writes a
+`deletion_requests` row whose status is `pending`. The JSON `deleted` field is
+false. Leads, tasks, and messages stay. The only owner is refused. This is not
+account deletion. Removing the person and their shared history is still a
+release blocker because those records belong to the tenant, not only to them.
+
+## Privacy policy
+
+`site/privacy.md` describes the Yamin service at yamin.io. The phone does not
+link to it, because the address the person typed may be a different tenant.
 
 ## Store login
 

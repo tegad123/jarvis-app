@@ -324,6 +324,9 @@ struct ApprovalsView: View {
 
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
+    @State private var closurePIN = ""
+    @State private var closureBusy = false
+    @State private var closureNote: String?
 
     var body: some View {
         NavigationStack {
@@ -340,11 +343,20 @@ struct SettingsView: View {
                 }
                 Section("Privacy") {
                     Text(AIDisclosure.text).font(.footnote)
-                    Link("Privacy policy", destination: AIDisclosure.policyURL)
-                        .accessibilityHint("Opens the Yamin privacy policy")
-                    Text("Account deletion is not in this build. Removing one person touches shared channels, leads, and sign-in records, and there is no API that does only that. It is a release blocker, not a button.")
+                    Text("The written policy in the repo (site/privacy.md) describes the Yamin service at yamin.io. It is not automatically the policy of the tenant address above, so this screen does not link there.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                }
+                Section("Sign-in") {
+                    Text("This turns off your sign-in and records a deletion request. It does not delete leads, tasks, or messages. The only owner cannot do this to themselves.")
+                        .font(.footnote)
+                    SecureField("PIN again", text: $closurePIN)
+                        .accessibilityLabel("PIN to confirm turning off sign-in")
+                    Button("Turn off my sign-in") { Task { await requestClosure() } }
+                        .disabled(closurePIN.isEmpty || closureBusy)
+                    if let closureNote {
+                        Text(closureNote).font(.footnote)
+                    }
                 }
                 Section("Store login") {
                     Text("This build signs in with a PIN only. Google sign-in is still how some tenants sign in on the web. Leaving it off this screen does not, by itself, settle App Store guideline 4.8.")
@@ -356,6 +368,20 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
+        }
+    }
+
+    private func requestClosure() async {
+        closureBusy = true
+        defer { closureBusy = false; closurePIN = "" }
+        do {
+            let receipt = try await model.client.requestAccountDeletion(pin: closurePIN)
+            closureNote = receipt.detail
+            model.session = nil
+        } catch JarvisError.http(_, let message) {
+            closureNote = message
+        } catch {
+            closureNote = "That request did not go through."
         }
     }
 }

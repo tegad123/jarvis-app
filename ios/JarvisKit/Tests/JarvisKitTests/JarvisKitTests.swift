@@ -151,6 +151,25 @@ final class JarvisKitTests: XCTestCase {
         XCTAssertEqual(decision?["decision"] as? String, "approved")
     }
 
+    func testDeletionRequestStaysPending() async throws {
+        let fake = FakeTransport()
+        fake.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/account/deletion-request")
+            let body = try JSONSerialization.jsonObject(with: request.httpBody ?? Data()) as? [String: Any]
+            XCTAssertEqual(body?["confirm"] as? String, "request-account-deletion")
+            XCTAssertEqual(body?["pin"] as? String, "again")
+            XCTAssertNil(body?["passphrase"])
+            let json = "{\"ok\":true,\"deleted\":false,\"deactivated\":true,\"deletion\":\"pending\",\"person_key\":\"omar\",\"detail\":\"Sign-in is turned off and a deletion request is recorded. Leads, tasks, and messages were not deleted.\"}"
+            return (200, "", Data(json.utf8))
+        }
+        let client = JarvisClient(transport: fake)
+        try client.useOrigin("https://team.example.com")
+        let receipt = try await client.requestAccountDeletion(pin: "again")
+        XCTAssertFalse(receipt.deleted)
+        XCTAssertEqual(receipt.deletion, "pending")
+        XCTAssertEqual(client.cookieNamesForTests(), [])
+    }
+
     func testFeatureFlagDoesNotStopTheRequest() async throws {
         let fake = FakeTransport()
         fake.handler = { _ in (200, "", Data("{\"tasks\":[{\"task_id\":\"t1\",\"title\":\"Call back\"}]}".utf8)) }

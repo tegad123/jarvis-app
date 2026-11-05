@@ -131,8 +131,19 @@ public enum JarvisError: Error, Equatable {
 /// app/model_proxy.py: the server posts the turn to Anthropic.
 public enum AIDisclosure {
     public static let text = "Messages you send in Ask go to this Jarvis server, which sends them to Anthropic to write the reply. Saying yes here covers only those messages. It does not change reminders, imports, or other jobs the server already runs."
-    /// site/privacy.md, published for the Yamin service. Confirmed responding
-    /// when this client was written. A tenant with a different policy replaces
-    /// this before release.
-    public static let policyURL = URL(string: "https://yamin.io/privacy")!
+    public static let confirmPhrase = "request-account-deletion"
+}
+
+public struct DeletionReceipt: Decodable, Equatable {
+    public var ok: Bool
+    public var deleted: Bool
+    public var deactivated: Bool
+    public var deletion: String
+    public var personKey: String
+    public var detail: String
+
+    enum CodingKeys: String, CodingKey {
+        case ok, deleted, deactivated, deletion, detail
+        case personKey = "person_key"
+    }
 }
