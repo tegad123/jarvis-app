@@ -97,6 +97,10 @@ def _col_letter(i: int) -> str:
 
 
 def run(dry_run: bool = True) -> int:
+    from . import tenant_delete  # noqa: PLC0415
+    if tenant_delete.closed():
+        print("This team was deleted. The sheet import did not run.", file=sys.stderr)
+        return 3
     sheet_id = tc.get("skills.lead-reply.sheet_id", "")
     if not sheet_id:
         print("No skills.lead-reply.sheet_id configured — nothing to import.", file=sys.stderr)

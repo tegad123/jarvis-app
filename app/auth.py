@@ -247,6 +247,10 @@ def current_session(
     jarvis_session: Optional[str] = Cookie(default=None, alias=config.COOKIE_NAME),
 ) -> dict:
     """FastAPI dependency. Raises 401 unless a valid, unexpired cookie is present."""
+    from . import tenant_delete  # noqa: PLC0415
+    if tenant_delete.closed():
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="This team was deleted. Sign-in is off.")
     if not jarvis_session:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

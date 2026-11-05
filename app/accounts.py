@@ -175,6 +175,16 @@ def init() -> None:
                 set_at      TEXT NOT NULL,
                 PRIMARY KEY (person_key, feature)
             );
+
+            -- A request that sign-in be removed later. status stays 'pending'.
+            -- Writing a row does not delete leads, tasks, or messages.
+            CREATE TABLE IF NOT EXISTS deletion_requests (
+                request_id    TEXT PRIMARY KEY,
+                person_key    TEXT NOT NULL,
+                requested_by  TEXT NOT NULL,
+                requested_at  TEXT NOT NULL,
+                status        TEXT NOT NULL CHECK (status = 'pending')
+            );
             """
         )
         conn.commit()
@@ -445,6 +455,55 @@ def set_disabled(person_key: str, disabled: bool = True) -> Dict[str, Any]:
     conn.commit()
     write_team_file()
     return get(person_key)
+
+
+def request_deletion(person_key: str, requested_by: str) -> Dict[str, Any]:
+    """Turn off one person's sign-in and record that deletion was asked for.
+
+    This does not delete the account row, the identity registry entry, or any
+    lead, task, or message. The only owner cannot be turned off. The PIN is
+    cleared so the old secret cannot be used again; an owner has to issue a
+    new one to restore access. That is deactivation plus a pending request,
+    not deletion.
+    """
+    acct = get(person_key)
+    if acct is None:
+        raise AccountError(f"'{person_key}' has no account.")
+    if acct.get("role") == "owner":
+        owners = [r["person_key"] for r in _ensure().execute(
+            "SELECT person_key FROM accounts WHERE role='owner' AND disabled=0")]
+        if owners == [person_key]:
+            raise AccountError("Refusing to turn off the only owner.")
+    set_disabled(person_key, True)
+    conn = _ensure()
+    conn.execute(
+        "UPDATE accounts SET pin_hash=NULL, pin_salt=NULL, updated_at=? WHERE person_key=?",
+        (_now(), person_key),
+    )
+    try:
+        from . import google_connection  # noqa: PLC0415
+        google_connection.clear_person(person_key)
+    except Exception:
+        log.warning("accounts: could not clear %s's personal Google row", person_key)
+    request_id = "adr_" + secrets.token_hex(8)
+    now = _now()
+    conn.execute(
+        "INSERT INTO deletion_requests (request_id, person_key, requested_by, requested_at, status) "
+        "VALUES (?,?,?,?, 'pending')",
+        (request_id, person_key, requested_by, now),
+    )
+    conn.commit()
+    from . import threads as threads_mod  # noqa: PLC0415
+    threads_mod.bump_counter("account_deletion_requested")
+    return {
+        "request_id": request_id,
+        "person_key": person_key,
+        "requested_by": requested_by,
+        "requested_at": now,
+        "status": "pending",
+        "deleted": False,
+        "deactivated": True,
+    }
 
 
 def verify(person_key: str, pin: str) -> Optional[Dict[str, Any]]:

@@ -85,8 +85,8 @@ def cmd_disable(args) -> int:
     except accounts.AccountError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
-    print(f"{args.person_key} disabled. Existing sessions stay valid until they expire — "
-          f"the account simply cannot sign in again.")
+    print(f"{args.person_key} disabled. The next request with an old session is refused, "
+          f"and they cannot sign in again.")
     return 0
 
 
