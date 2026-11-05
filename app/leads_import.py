@@ -40,7 +40,6 @@ from . import config, leads_store
 if str(config.SHARED) not in sys.path:
     sys.path.insert(0, str(config.SHARED))
 
-import google_creds  # noqa: E402
 import identity  # noqa: E402
 import tenant_config as tc  # noqa: E402
 
@@ -59,7 +58,11 @@ HEADER_FIELDS: Dict[str, Tuple[str, ...]] = {
     "email": ("email", "e-mail", "email address"),
     "phone": ("phone", "phone number", "mobile"),
     "external_ref": ("lead id", "leadid", "id"),
-    "last_activity_at": ("date", "created", "date added"),
+    # "Date" is the open-house day, not last activity and not Last Nudge Date.
+    "capture_date": ("date", "date added", "created"),
+    "last_nudge_at": ("last nudge date",),
+    "nudge_count": ("nudge count",),
+    "internal_email": ("internal agent email",),
     "thread_id": ("thread id", "channel id"),
 }
 
@@ -100,6 +103,7 @@ def run(dry_run: bool = True) -> int:
         return 2
     exclude = {t.strip().upper() for t in tc.get("skills.lead-reply.exclude_tabs", []) or []}
 
+    import google_creds  # noqa: PLC0415  (only this live-sheet path needs it; the upload importer must not)
     gc = google_creds.gspread_client()
     sh = gc.open_by_key(sheet_id)
 

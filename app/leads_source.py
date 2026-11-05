@@ -91,13 +91,19 @@ def _to_screen_row(lead: Dict[str, Any]) -> Dict[str, Any]:
         "temperature_rank": TEMPERATURE_RANK.get(temp.lower(), 0),
         "status": status,
         "follow_up": lead.get("follow_up") or "",
+        "pipeline": lead.get("pipeline") or "",
         "next_follow_up": (lead.get("next_touch_at") or "")[:10],
-        "last_nudge": "",
+        "capture_date": (lead.get("capture_date") or "")[:10],
+        "external_ref": lead.get("external_ref") or "",
+        "nudge_count": lead.get("nudge_count"),
+        "last_nudge": (lead.get("last_nudge_at") or "")[:10],
+        "archive_bucket": lead.get("archive_bucket") or "",
+        "internal_email": lead.get("internal_email") or "",
         "agent": _display_name(lead.get("owner_person")),
         # `tab` stays the KEY: it is the grouping value, and grouping on a
         # display name would merge two people who share one.
         "tab": lead.get("owner_person") or "",
-        "is_new": status == "New",
+        "is_new": (lead.get("pipeline") or "") == "New",
         "is_hot": temp.lower() == "hot",
         "needs_touch": status == "No Response",
         # Fields the sheet has no notion of, carried so the UI can grow into
@@ -106,6 +112,21 @@ def _to_screen_row(lead: Dict[str, Any]) -> Dict[str, Any]:
         "thread_id": lead.get("thread_id"),
         "archived": bool(lead.get("archived")),
     }
+
+
+def person_key_for(raw: str) -> Optional[str]:
+    """"Martin", "martin@…", "martin" -> the person key, or None when the
+    registry can't say. Never a guess."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    try:
+        if str(config.SHARED) not in sys.path:
+            sys.path.insert(0, str(config.SHARED))
+        import identity as _identity
+        return _identity.resolve(raw) or None
+    except Exception:
+        return None
 
 
 def _owned_by(row: Dict[str, Any], viewer: str) -> bool:
@@ -128,7 +149,7 @@ def _owned_by(row: Dict[str, Any], viewer: str) -> bool:
         return False
 
 
-def load(viewer: Optional[str] = None) -> Dict[str, Any]:
+def load(viewer: Optional[str] = None, archive_bucket: Optional[str] = None) -> Dict[str, Any]:
     """The screen's payload, from whichever source is configured.
 
     `viewer=None` is an unscoped session (owner, admin, break-glass operator).
@@ -155,7 +176,7 @@ def load(viewer: Optional[str] = None) -> Dict[str, Any]:
 
     # THE WHERE CLAUSE. owner_person=None means no filter, which is what
     # leads_store.query() already does for an unscoped session.
-    rows = leads_store.query(owner_person=viewer)
+    rows = leads_store.query(owner_person=viewer, archive_bucket=archive_bucket or None)
     screen = [_to_screen_row(r) for r in rows]
     screen.sort(key=lambda l: (-l["temperature_rank"], not l["needs_touch"], l["date"]))
     counts = leads_store.counts()
@@ -175,4 +196,7 @@ def load(viewer: Optional[str] = None) -> Dict[str, Any]:
                        "new": sum(1 for l in screen if l["is_new"]),
                    }),
         "source": "store",
+        "today": leads_store.today_local().isoformat(),
+        # In-app default (or app.lead_cadence). Not a reading of the original workbook.
+        "cadence": leads_store.cadence_settings(),
     }

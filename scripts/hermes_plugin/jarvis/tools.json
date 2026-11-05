@@ -210,6 +210,132 @@
       }
     },
     {
+      "name": "add_lead",
+      "authz": null,
+      "label": "Adding the lead",
+      "needs": [],
+      "description": "Add one lead to the lead tracker for the person you are talking to, e.g. someone they met at an open house. If a lead with the same email, phone or name is already there, nothing is added and the match is returned: ask them whether it is the same person before calling again with add_anyway.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The lead's name as they said it."
+          },
+          "phone": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "property": {
+            "type": "string",
+            "description": "The property they saw or asked about, e.g. '1109 E 24th St'."
+          },
+          "price_point": {
+            "type": "string",
+            "description": "Budget or price range, if they said one."
+          },
+          "source": {
+            "type": "string",
+            "description": "Where they came from. Defaults to 'Open house'."
+          },
+          "temperature": {
+            "type": "string",
+            "enum": [
+              "Hot",
+              "Warm",
+              "Cold"
+            ]
+          },
+          "notes": {
+            "type": "string",
+            "description": "What they want, in a sentence, e.g. 'wants 3 bed, pre-approved'."
+          },
+          "next_follow_up": {
+            "type": "string",
+            "description": "Optional, YYYY-MM-DD. Only when they said when; otherwise leave it out and the tracker picks the date."
+          },
+          "agent": {
+            "type": "string",
+            "description": "Only for an owner or admin giving the lead to a teammate: the teammate's name."
+          },
+          "add_anyway": {
+            "type": "boolean",
+            "description": "True only after they confirmed a returned match is a different person."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "log_lead_contact",
+      "authz": null,
+      "label": "Updating the lead",
+      "needs": [],
+      "description": "Record that the person you are talking to called, texted, emailed, met or showed a property to one of their leads (or just write a note on it). Moves the lead's status on and sets the next follow-up date.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "match": {
+            "type": "string",
+            "description": "The lead's name, as they said it."
+          },
+          "lead_id": {
+            "type": "string",
+            "description": "The lead_id, when you have it from an earlier result."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "call",
+              "text",
+              "email",
+              "met",
+              "showing",
+              "note"
+            ]
+          },
+          "reached": {
+            "type": "boolean",
+            "description": "False when they tried and got no answer. Defaults to true."
+          },
+          "note": {
+            "type": "string",
+            "description": "What happened, in a sentence."
+          },
+          "next_follow_up": {
+            "type": "string",
+            "description": "Optional, YYYY-MM-DD. Only when they said when; otherwise leave it out and the tracker picks the date."
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "list_my_followups",
+      "authz": null,
+      "label": "Checking your follow-ups",
+      "needs": [],
+      "description": "List the leads the person you are talking to is due to follow up with: overdue and today.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "everyone": {
+            "type": "boolean",
+            "description": "Owner or admin only: every agent's follow-ups, not just theirs."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "browser_open",
       "authz": null,
       "label": "Opening the website",

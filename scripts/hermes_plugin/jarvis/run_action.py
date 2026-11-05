@@ -315,6 +315,53 @@ def imessage_search(a):
         say=None if msgs else "Nothing matched in the texts synced from their Mac (the last 30 days).")
 
 
+LEADS_SAY = {
+    "feature_off": "Leads are switched off for them. Say an admin turned it off in Settings → Team.",
+    "sheet_backed": "Their leads still live in the Google Sheet, so you can't change them from here yet. Say so "
+                    "plainly.",
+    "not_found": "None of their leads matches that. Ask which lead they mean.",
+    "not_allowed": "Only an admin or the owner can give a lead to someone else. Say so plainly; nothing was added.",
+    "unknown_agent": "No one on the team goes by that name. Ask who they mean; nothing was added.",
+}
+
+
+def leads(op: str, a: dict) -> None:
+    payload = {"ref": os.environ.get("JARVIS_ACTOR_MSG", ""), "op": op, **a}
+    try:
+        r = app_broker.call("leads", payload, timeout=30)
+    except app_broker.BrokerError as exc:
+        b = exc.body if isinstance(exc.body, dict) else {}
+        err = b.get("error")
+        if err == "duplicate":
+            return out(ok=False, duplicate=True, matches=b.get("matches") or [],
+                       say=("Not added: this looks like a lead already in the tracker"
+                            + (" (it's a teammate's)" if not b.get("matches") else "")
+                            + ". Ask whether it's the same person; only call add_lead again with add_anyway if "
+                              "they say it's someone else."))
+        if err == "ambiguous":
+            return out(ok=False, matches=b.get("matches") or [],
+                       say="More than one of their leads matches. Ask which one, then use its lead_id.")
+        if err in LEADS_SAY:
+            return out(ok=False, say=LEADS_SAY[err])
+        if err == "bad_request":
+            return out(ok=False, say=str(b.get("detail") or "That wasn't quite right; check the details."))
+        print(f"broker: {exc}", file=sys.stderr)
+        return out(ok=False, say="I couldn't reach the lead tracker just now. Nothing was changed.")
+    out(**r)
+
+
+def add_lead(a):
+    leads("add", a)
+
+
+def log_lead_contact(a):
+    leads("log", a)
+
+
+def list_my_followups(a):
+    leads("followups", a)
+
+
 def browser_open(a):
     browser("open", a)
 
@@ -370,7 +417,8 @@ def connect_google(a):
 ACTIONS = {f.__name__: f for f in (list_tasks, add_task, complete_task, calendar_upcoming, add_calendar_event,
                                    search_email, draft_email, connect_google, browser_open, browser_read,
                                    browser_scroll, browser_back, browser_click, browser_type, browser_press,
-                                   browser_login, browser_request_access, browser_ask_person, imessage_search)}
+                                   browser_login, browser_request_access, browser_ask_person, imessage_search,
+                                   add_lead, log_lead_contact, list_my_followups)}
 
 if __name__ == "__main__":
     name = sys.argv[1] if len(sys.argv) > 1 else ""

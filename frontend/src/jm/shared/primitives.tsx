@@ -257,7 +257,8 @@ export function Sheet({
       <div
         className={cx(
           'relative box-border grid max-h-[85vh] w-full max-w-jm-sheet gap-jm-4 overflow-y-auto',
-          'rounded-t-jm-xl border border-b-0 border-jm-border bg-jm-panel px-jm-5 pb-jm-5 pt-jm-3 shadow-jm-float',
+          'rounded-t-jm-xl border border-b-0 border-jm-border bg-jm-panel px-jm-5 pt-jm-3 shadow-jm-float',
+          'pb-[max(1.25rem,env(safe-area-inset-bottom))]',
           'sm:rounded-jm-xl sm:border-b sm:pt-jm-5',
           'animate-jm-sheet motion-reduce:animate-jm-fade',
         )}

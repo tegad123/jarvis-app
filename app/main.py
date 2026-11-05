@@ -23,7 +23,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -104,6 +104,8 @@ from app import imessage as imessage_mod  # noqa: E402
 app.include_router(imessage_mod.broker_router)
 app.include_router(imessage_mod.router)
 app.include_router(imessage_mod.settings_router)
+from app import lead_tools as lead_tools_mod  # noqa: E402
+app.include_router(lead_tools_mod.broker_router)
 from app import model_proxy as model_proxy_mod  # noqa: E402
 app.include_router(model_proxy_mod.router)
 from app import team as team_mod  # noqa: E402
@@ -139,6 +141,12 @@ def _announce_app_logging() -> None:
 def _start_text_followup() -> None:
     from app import text_followup  # noqa: PLC0415
     text_followup.start()
+
+
+@app.on_event("startup")
+def _start_lead_followup() -> None:
+    from app import lead_followup  # noqa: PLC0415
+    lead_followup.start()
 
 
 class LoginRequest(BaseModel):
@@ -843,7 +851,8 @@ class LeadCreate(BaseModel):
     price_point: Optional[str] = Field(None, max_length=64)
     source: Optional[str] = Field(None, max_length=120)
     notes: Optional[str] = Field(None, max_length=4000)
-    status: Optional[str] = Field(None, max_length=40)
+    status: Optional[str] = Field(None, max_length=80)
+    pipeline: Optional[str] = Field(None, max_length=40)
     temperature: Optional[str] = Field(None, max_length=20)
     follow_up: Optional[str] = Field(None, max_length=500)
     owner_person: Optional[str] = Field(None, max_length=64)
@@ -864,12 +873,76 @@ class LeadPatch(BaseModel):
     price_point: Optional[str] = Field(None, max_length=64)
     source: Optional[str] = Field(None, max_length=120)
     notes: Optional[str] = Field(None, max_length=4000)
-    status: Optional[str] = Field(None, max_length=40)
+    status: Optional[str] = Field(None, max_length=80)
+    pipeline: Optional[str] = Field(None, max_length=40)
     temperature: Optional[str] = Field(None, max_length=20)
     follow_up: Optional[str] = Field(None, max_length=500)
     owner_person: Optional[str] = Field(None, max_length=64)
     thread_id: Optional[str] = Field(None, max_length=64)
     next_touch_at: Optional[str] = Field(None, max_length=40)
+
+
+class LeadTouch(BaseModel):
+    kind: str = Field(..., pattern=r"^(call|text|email|met|showing|note)$")
+    note: Optional[str] = Field(None, max_length=4000)
+    reached: bool = True
+    next_touch_at: Optional[str] = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _leads_writable() -> None:
+    if leads_src.source() != "store":
+        raise HTTPException(
+            status_code=409,
+            detail="This tenant reads leads from a Google Sheet; editing in-app is "
+                   "disabled until it is migrated to app-native storage.",
+        )
+
+
+def _lead_in_reach(sess: dict, lead_id: str) -> dict:
+    """A member reaches their own leads; owner, admin and operator reach all.
+    Someone else's lead is a 404, not a 403: its existence is not theirs to
+    learn either."""
+    lead = leads_store.get(lead_id)
+    viewer = _viewer(sess)
+    if lead is None or (viewer is not None and lead.get("owner_person") != viewer):
+        raise HTTPException(status_code=404, detail="No such lead.")
+    return lead
+
+
+def _owner_for_write(sess: dict, asked: Optional[str]) -> str:
+    """Who a new or reassigned lead belongs to. A member's leads are their
+    own; only owner and admin hand one to someone else. The key has to name
+    someone on the team — a typo must not park a lead where nobody can see it."""
+    me = auth.person_of(sess)
+    if asked and asked != me and auth.role_of(sess) not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="Only an admin or the owner can give a lead to someone else.")
+    owner = asked or me
+    if owner not in accounts_mod.known_people():
+        raise HTTPException(status_code=422, detail="That person is not on the team.")
+    return owner
+
+
+def _closed_lead_fields(fields: dict) -> dict:
+    """Status and temperature stay in the screen's closed lists. Case is
+    normalised. Anything else is a 422, not a new word on the chip."""
+    if fields.get("status"):
+        try:
+            fields["status"] = leads_store.canonical_status(fields["status"])
+        except leads_store.LeadError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+    if fields.get("temperature"):
+        try:
+            fields["temperature"] = leads_store.canonical_temperature(fields["temperature"])
+        except leads_store.LeadError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+    if "pipeline" in fields:
+        try:
+            fields["pipeline"] = leads_store.canonical_pipeline(fields.get("pipeline") or "")
+        except leads_store.LeadError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+    if "archive_bucket" in fields and fields["archive_bucket"] not in ("", *leads_store.ARCHIVE_BUCKETS):
+        raise HTTPException(status_code=422, detail="archive_bucket must be old, purchased or sold.")
+    return fields
 
 
 @app.post("/api/leads", status_code=201)
@@ -878,24 +951,93 @@ def create_lead(body: LeadCreate, sess: dict = Depends(_needs("leads"))):
     it needs no write-guard arming; exporting to a tenant's Sheet does, and that
     lives in the connector."""
     auth.require_person(sess)
-    if leads_src.source() != "store":
-        raise HTTPException(
-            status_code=409,
-            detail="This tenant reads leads from a Google Sheet; creating in-app is "
-                   "disabled until it is migrated to app-native storage.",
-        )
+    _leads_writable()
+    fields = _closed_lead_fields(body.model_dump(exclude_none=True))
+    fields["owner_person"] = _owner_for_write(sess, fields.get("owner_person"))
+    name = fields.pop("name")
     try:
-        return {"ok": True, "lead": leads_store.create(**body.model_dump(exclude_none=True))}
+        return {"ok": True, "lead": leads_store.create_with_cadence(
+            name, by=auth.person_of(sess), **fields)}
     except leads_store.LeadError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.get("/api/leads/{lead_id}")
+def get_lead(lead_id: str, sess: dict = Depends(_needs("leads"))):
+    """One lead and its timeline. The operator sees the timeline's shape — when,
+    who, what kind — and not what was written."""
+    if leads_src.source() != "store":
+        raise HTTPException(status_code=409, detail="Leads are sheet-backed for this tenant.")
+    lead = _lead_in_reach(sess, lead_id)
+    bodies = not auth.is_operator(sess)
+    timeline = [{**t, "by_name": leads_src._display_name(t.get("by_person")),
+                 "note": t.get("note") if bodies else None}
+                for t in leads_store.touches(lead_id)]
+    row = leads_src._to_screen_row(lead)
+    if not bodies:
+        row["follow_up"] = ""
+        row["internal_email"] = ""
+    row.update({"email": (lead.get("email") or "") if bodies else "",
+                "phone": (lead.get("phone") or "") if bodies else "",
+                "source": lead.get("source") or "", "owner_person": lead.get("owner_person") or "",
+                "notes": (lead.get("notes") or "") if bodies else ""})
+    return {"lead": row, "timeline": timeline, "today": leads_store.today_local().isoformat()}
+
+
+@app.post("/api/leads/{lead_id}/touches", status_code=201)
+def log_lead_touch(lead_id: str, body: LeadTouch, sess: dict = Depends(_needs("leads"))):
+    auth.require_person(sess)
+    _leads_writable()
+    _lead_in_reach(sess, lead_id)
+    try:
+        res = leads_store.log_contact(lead_id, auth.person_of(sess), body.kind, note=body.note,
+                                      reached=body.reached, next_touch_at=body.next_touch_at)
+    except leads_store.LeadNotFound:
+        raise HTTPException(status_code=404, detail="No such lead.")
+    except leads_store.LeadError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {"ok": True, "lead": leads_src._to_screen_row(res["lead"]), "touch": res["touch"]}
+
+
+class LeadImportRun(BaseModel):
+    token: str = Field(..., max_length=64)
+    #: Each agent name the team list couldn't place -> a person key, or null for nobody.
+    agents: Dict[str, Optional[str]] = Field(default_factory=dict)
+
+
+@app.post("/api/leads/import/preview")
+async def preview_lead_import(file: UploadFile = File(...), sess: dict = Depends(auth.current_session)):
+    """Owner only: read an uploaded tracker and say what importing it would do.
+    Writes nothing."""
+    auth.require_owner(sess)
+    _leads_writable()
+    from app import leads_upload  # noqa: PLC0415
+    data = await file.read(leads_upload.MAX_BYTES + 1)
+    try:
+        return leads_upload.preview(auth.person_of(sess), file.filename or "", data)
+    except leads_upload.UploadError as exc:
+        return JSONResponse(status_code=422, content={"error": exc.error, "detail": exc.detail})
+
+
+@app.post("/api/leads/import/run")
+def run_lead_import(body: LeadImportRun, sess: dict = Depends(auth.current_session)):
+    auth.require_owner(sess)
+    _leads_writable()
+    from app import leads_upload  # noqa: PLC0415
+    try:
+        return leads_upload.run(auth.person_of(sess), body.token, body.agents, accounts_mod.known_people())
+    except leads_upload.UploadError as exc:
+        return JSONResponse(status_code=422, content={"error": exc.error, "detail": exc.detail})
 
 
 @app.patch("/api/leads/{lead_id}")
 def patch_lead(lead_id: str, body: LeadPatch, sess: dict = Depends(_needs("leads"))):
     auth.require_person(sess)
-    if leads_src.source() != "store":
-        raise HTTPException(status_code=409, detail="Leads are sheet-backed for this tenant.")
-    fields = body.model_dump(exclude_unset=True, exclude_none=True)
+    _leads_writable()
+    _lead_in_reach(sess, lead_id)
+    fields = _closed_lead_fields(body.model_dump(exclude_unset=True, exclude_none=True))
+    if "owner_person" in fields:
+        fields["owner_person"] = _owner_for_write(sess, fields["owner_person"])
     try:
         return {"ok": True, "lead": leads_store.update(lead_id, **fields)}
     except leads_store.LeadNotFound:
@@ -907,8 +1049,8 @@ def patch_lead(lead_id: str, body: LeadPatch, sess: dict = Depends(_needs("leads
 @app.post("/api/leads/{lead_id}/archive")
 def archive_lead(lead_id: str, sess: dict = Depends(_needs("leads"))):
     auth.require_person(sess)
-    if leads_src.source() != "store":
-        raise HTTPException(status_code=409, detail="Leads are sheet-backed for this tenant.")
+    _leads_writable()
+    _lead_in_reach(sess, lead_id)
     try:
         return {"ok": True, "lead": leads_store.set_archived(lead_id, True)}
     except leads_store.LeadNotFound:
@@ -916,9 +1058,18 @@ def archive_lead(lead_id: str, sess: dict = Depends(_needs("leads"))):
 
 
 @app.get("/api/leads")
-def get_leads(sess: dict = Depends(_needs("leads"))):
+def get_leads(sess: dict = Depends(_needs("leads")),
+              archive: Optional[str] = Query(None)):
+    if archive and archive not in leads_store.ARCHIVE_BUCKETS:
+        raise HTTPException(status_code=422, detail="archive must be old, purchased or sold.")
     try:
-        return leads_src.load(viewer=_viewer(sess))
+        payload = leads_src.load(viewer=_viewer(sess), archive_bucket=archive)
+        # follow_up and the internal address are the agent's own words.
+        if auth.is_operator(sess):
+            for lead in payload.get("leads") or []:
+                lead["follow_up"] = ""
+                lead["internal_email"] = ""
+        return payload
     except leads_mod.LeadsUnavailable as exc:
         # 503 with a real body, matching /api/health's contract: the client
         # renders this as an honest error, never as an empty lead list.

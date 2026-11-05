@@ -421,11 +421,20 @@ export interface Lead {
   temperature: string
   /** 3/2/1/0, for the temperature bars. */
   temperature_rank: number
-  /** 'No Response' | 'Responded' | 'Not Interested' | '' */
+  /** Status Of Lead: No Response, Responded, Scheduled, Not Interested, Closed, Dead? (confirm), Dead, Won, Lost. */
   status: string
-  /** Free text: 'New', 'Contacted', 'Emailed 6/15'. Never chip this. */
+  /** Follow-up Status when it is a pipeline stage. Freeform notes stay in follow_up. */
+  pipeline?: string
+  /** The follow-up cell as written, including 'Emailed 6/15'. Not a stage by itself. */
   follow_up: string
   next_follow_up: string
+  /** Sheet Lead ID, when this row was imported. */
+  external_ref?: string
+  capture_date?: string
+  nudge_count?: number | null
+  /** '' | 'old' | 'purchased' | 'sold' */
+  archive_bucket?: string
+  internal_email?: string
   last_nudge: string
   agent: string
   tab: string
@@ -500,6 +509,45 @@ export interface LeadsResponse {
   sheet_id: string
   sheet_title: string
   counts: { all: number; needs_touch: number; hot: number; new: number }
+  /** YYYY-MM-DD in the tenant's zone (store only): what "due today" means. */
+  today?: string
+  /** In-app follow-up schedule (store only). Not read from a spreadsheet. */
+  cadence?: { hot: number; warm: number; other: number; later: number[] }
+}
+
+export type LeadTouchKind = 'call' | 'text' | 'email' | 'met' | 'showing' | 'note'
+
+export interface LeadTouch {
+  touch_id: string
+  lead_id: string
+  at: string
+  by_person: string | null
+  by_name: string
+  kind: LeadTouchKind | 'created' | 'imported'
+  /** Null on an operator session: the server withheld it. */
+  note: string | null
+  reached: boolean | null
+  next_touch_at: string | null
+}
+
+export interface LeadImportPreview {
+  token: string
+  leads: number
+  new: number
+  already_imported: number
+  due_now: number
+  bad_dates: number
+  co_listed: number
+  tabs: { tab: string; leads: number; skipped?: string; unmatched_headers?: string[] }[]
+  /** One per agent name in the file; person_key null = the team list can't place it. */
+  agents: { name: string; leads: number; person_key: string | null }[]
+  collisions: { ref: string; first: string; second: string }[]
+}
+
+export interface LeadDetailResponse {
+  lead: Lead & { email: string; phone: string; source: string; owner_person: string; notes: string }
+  timeline: LeadTouch[]
+  today: string
 }
 
 /** 503 body when the sheet cannot be read. */
