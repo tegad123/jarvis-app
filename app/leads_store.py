@@ -51,7 +51,18 @@ DB_PATH = Path(
 
 # The sheet's vocabularies are already the product's — they are what the people
 # using this actually say. Kept closed so the UI can chip them safely.
-STATUSES = ("New", "No Response", "Responded", "Not Interested")
+# Status Of Lead, the response column. "Dead? (confirm)" stays due: it is a
+# question, not a closed outcome. "New" is not a response; it is a pipeline stage.
+STATUSES = (
+    "No Response", "Responded", "Scheduled", "Not Interested",
+    "Closed", "Dead? (confirm)", "Dead", "Won", "Lost",
+)
+# Follow-up Status when the cell is one of the workbook's dropdown values.
+# Freeform notes ("Emailed 6/15") stay in follow_up and do not set this.
+PIPELINES = ("New", "Contacted", "Touring", "Offer Made", "Closed", "Lost")
+# Closed outcomes leave the Today list. Not a send rule and not a nudge cap.
+TERMINAL_STATUSES = ("Not Interested", "Dead", "Won", "Lost", "Closed")
+ARCHIVE_BUCKETS = ("old", "purchased", "sold")
 
 # Slug -> the word a person reads. Auto-capture (_shared/lead_capture.py)
 # writes the slug; this is the only place it becomes prose.
@@ -141,25 +152,71 @@ def init() -> None:
             -- shows up once a tenant is busy.
             CREATE INDEX IF NOT EXISTS idx_leads_email ON leads(email);
             CREATE INDEX IF NOT EXISTS idx_leads_name  ON leads(name);
-
-            -- The timeline: every call, text, meeting and note, oldest first.
-            -- Append-only; the lead row carries the current state, this
-            -- carries how it got there.
-            CREATE TABLE IF NOT EXISTS lead_touches (
-                touch_id       TEXT PRIMARY KEY,
-                lead_id        TEXT NOT NULL REFERENCES leads(lead_id),
-                at             TEXT NOT NULL,
-                by_person      TEXT,
-                kind           TEXT NOT NULL,
-                note           TEXT,
-                reached        INTEGER,
-                next_touch_at  TEXT
-            );
-            CREATE INDEX IF NOT EXISTS idx_touches_lead ON lead_touches(lead_id, at);
             """
         )
-        conn.commit()
+        migrate(conn)
         _initialised = True
+
+
+# Additive. An existing jarvis_leads.db from before the timeline has the leads
+# table and nothing else; opening it must create lead_touches without rewriting
+# a single lead. Idempotent. This is the only migration for this table — leads
+# live in the tenant's SQLite file, not in the Postgres Alembic chain.
+_TOUCHES_DDL = """
+CREATE TABLE IF NOT EXISTS lead_touches (
+    touch_id       TEXT PRIMARY KEY,
+    lead_id        TEXT NOT NULL REFERENCES leads(lead_id),
+    at             TEXT NOT NULL,
+    by_person      TEXT,
+    kind           TEXT NOT NULL,
+    note           TEXT,
+    reached        INTEGER,
+    next_touch_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_touches_lead ON lead_touches(lead_id, at);
+"""
+
+
+# Columns added after the first leads table. Each is nullable. migrate() adds
+# whichever an older file is missing; it does not rewrite lead rows.
+_LEAD_COLUMNS = (
+    ("capture_date", "TEXT"),       # the sheet's Date (open-house day), not last activity
+    ("pipeline", "TEXT"),           # Follow-up Status when it is a dropdown value
+    ("internal_email", "TEXT"),     # Internal Agent Email; not a send address by itself
+    ("nudge_count", "INTEGER"),     # copied from the sheet; nothing here increments it
+    ("last_nudge_at", "TEXT"),      # Last Nudge Date, as a calendar day
+    ("archive_bucket", "TEXT"),     # old | purchased | sold | '' 
+)
+_SEND_LOG_DDL = """
+CREATE TABLE IF NOT EXISTS lead_send_log (
+    log_id         TEXT PRIMARY KEY,
+    at             TEXT,
+    external_ref   TEXT,
+    agent_email    TEXT,
+    nudge_n        INTEGER,
+    mode           TEXT,
+    cc_spencer     INTEGER,
+    subject        TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_send_log_key
+    ON lead_send_log(at, external_ref, mode, nudge_n);
+"""
+
+
+def migrate(conn: sqlite3.Connection) -> None:
+    """Bring an existing leads file up to the tracker schema.
+
+    Creates the timeline and the send-log table, and adds the sheet columns
+    the first table did not have. Safe to run on every open. Does not touch
+    any other database and does not send anything.
+    """
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.executescript(_TOUCHES_DDL)
+    have = {row[1] for row in conn.execute("PRAGMA table_info(leads)").fetchall()}
+    for name, typ in _LEAD_COLUMNS:
+        if name not in have:
+            conn.execute(f"ALTER TABLE leads ADD COLUMN {name} {typ}")
+    conn.executescript(_SEND_LOG_DDL)
 
 
 def _ensure() -> sqlite3.Connection:
@@ -185,8 +242,9 @@ def _row(r: sqlite3.Row) -> Dict[str, Any]:
 # ── writes ────────────────────────────────────────────────────────────────────
 
 FIELDS = ("name", "email", "phone", "property", "price_point", "source", "notes",
-          "status", "temperature", "follow_up", "owner_person", "thread_id",
-          "last_activity_at", "next_touch_at", "external_ref")
+          "status", "temperature", "follow_up", "pipeline", "owner_person", "thread_id",
+          "last_activity_at", "next_touch_at", "external_ref", "capture_date",
+          "internal_email", "nudge_count", "last_nudge_at", "archive_bucket")
 
 
 def _emit(headline: str, detail: str, kind: str,
@@ -235,11 +293,20 @@ def create(name: str, created_by: str = "user", emit: bool = True, **fields: Any
 
     data = {k: fields.get(k) for k in FIELDS}
     data["name"] = name
-    data.setdefault("status", "New")
+    # Blank response → No Response. Blank pipeline → New, unless the caller
+    # passed "" (a freeform follow-up note is not a stage). These are the
+    # in-app defaults for a lead typed into the app, not a reading of the
+    # sheet's observed 10-day gaps.
     if not data.get("status"):
-        data["status"] = "New"
+        data["status"] = "No Response"
+    if data.get("pipeline") is None:
+        data["pipeline"] = "New"
     if data.get("temperature") is None:
         data["temperature"] = ""
+    if not data.get("archive_bucket"):
+        data["archive_bucket"] = ""
+    elif data.get("archive_bucket") not in ARCHIVE_BUCKETS:
+        raise LeadError("archive_bucket must be old, purchased or sold.")
 
     now = _now()
     lead_id = _new_id()
@@ -383,9 +450,12 @@ def find_by_name(name: str, archived: bool = False) -> List[Dict[str, Any]]:
 
 def query(status: Optional[str] = None, temperature: Optional[str] = None,
           owner_person: Optional[str] = None, archived: bool = False,
-          needs_touch: Optional[bool] = None) -> List[Dict[str, Any]]:
+          needs_touch: Optional[bool] = None,
+          archive_bucket: Optional[str] = None) -> List[Dict[str, Any]]:
     sql = ["SELECT * FROM leads WHERE archived = ?"]
-    args: List[Any] = [1 if archived else 0]
+    args: List[Any] = [1 if archived or archive_bucket else 0]
+    if archive_bucket:
+        sql.append("AND archive_bucket = ?"); args.append(archive_bucket)
     if status:
         sql.append("AND status = ?"); args.append(status)
     if temperature:
@@ -421,15 +491,108 @@ TOUCH_KINDS = CONTACT_KINDS + ("note", "created", "imported")
 
 # Days to the next follow-up. The first one by temperature (a hot lead is
 # called tomorrow); after each logged contact, the next step of the ladder.
+# These are the IN-APP default, not a reading of the original tracker workbook
+# (that file was not available). A tenant overrides them with app.lead_cadence
+# {hot, warm, other, later}; a missing block means this schedule. Turning the
+# morning email on is a separate switch (app.lead_followup.enabled) and stays off.
 CADENCE_FIRST = {"hot": 1, "warm": 2}
 CADENCE_FIRST_OTHER = 3
 CADENCE_LATER = (7, 14, 30)
 
 
+def _cadence_fallback(counter: str, exc: Any) -> None:
+    from . import threads as threads_mod  # noqa: PLC0415
+    threads_mod.bump_counter(counter)
+    import logging  # noqa: PLC0415
+    logging.getLogger("app.leads_store").error(
+        "leads: follow-up schedule unusable (%s); using the default ladder", type(exc).__name__)
+
+
+def _cadence_day(n: Any) -> int:
+    if isinstance(n, bool) or not isinstance(n, int) or not 0 <= n <= 365:
+        raise ValueError("not a whole number of days")
+    return n
+
+
+def cadence_settings() -> Dict[str, Any]:
+    """The schedule in force. Defaults come from the constants above, read at
+    call time so a test can substitute them. A bad app.lead_cadence is refused
+    and counted; the default is what then runs."""
+    defaults = {
+        "hot": int(CADENCE_FIRST.get("hot", 1)),
+        "warm": int(CADENCE_FIRST.get("warm", 2)),
+        "other": int(CADENCE_FIRST_OTHER),
+        "later": [int(x) for x in CADENCE_LATER],
+    }
+    try:
+        if str(config.SHARED) not in sys.path:
+            sys.path.insert(0, str(config.SHARED))
+        import tenant_config as tc  # noqa: PLC0415
+        raw = tc.get("app.lead_cadence", None)
+    except Exception as exc:
+        _cadence_fallback("leads_cadence_config_unreadable", exc)
+        return defaults
+    if raw is None or raw == {}:
+        return defaults
+    if not isinstance(raw, dict):
+        _cadence_fallback("leads_cadence_config_rejected", raw)
+        return defaults
+    out = dict(defaults)
+    try:
+        unknown = set(raw) - {"hot", "warm", "other", "later"}
+        if unknown:
+            raise ValueError("unknown keys")
+        for key in ("hot", "warm", "other"):
+            if key in raw:
+                out[key] = _cadence_day(raw[key])
+        if "later" in raw:
+            later = raw["later"]
+            if not isinstance(later, list) or not later:
+                raise ValueError("later")
+            out["later"] = [_cadence_day(x) for x in later]
+    except Exception as exc:
+        _cadence_fallback("leads_cadence_config_rejected", exc)
+        return defaults
+    return out
+
+
+def canonical_status(value: str) -> str:
+    mapped = {s.lower(): s for s in STATUSES}.get((value or "").strip().lower())
+    if not mapped:
+        raise LeadError(
+            "status must be one of: " + ", ".join(STATUSES) + ".")
+    return mapped
+
+
+def canonical_pipeline(value: str) -> str:
+    if not (value or "").strip():
+        return ""
+    mapped = {p.lower(): p for p in PIPELINES}.get(value.strip().lower())
+    if not mapped:
+        raise LeadError("pipeline must be " + ", ".join(PIPELINES) + ".")
+    return mapped
+
+
+def canonical_temperature(value: str) -> str:
+    if not (value or "").strip():
+        return ""
+    mapped = {t.lower(): t for t in TEMPERATURES if t}.get(value.strip().lower())
+    if not mapped:
+        raise LeadError("temperature must be Hot, Warm or Cold.")
+    return mapped
+
+
 def cadence_days(temperature: Optional[str], contacts_logged: int) -> int:
+    cfg = cadence_settings()
     if contacts_logged <= 0:
-        return CADENCE_FIRST.get((temperature or "").strip().lower(), CADENCE_FIRST_OTHER)
-    return CADENCE_LATER[min(contacts_logged, len(CADENCE_LATER)) - 1]
+        key = (temperature or "").strip().lower()
+        if key == "hot":
+            return cfg["hot"]
+        if key == "warm":
+            return cfg["warm"]
+        return cfg["other"]
+    later = cfg["later"]
+    return later[min(contacts_logged, len(later)) - 1]
 
 
 def today_local() -> date:
@@ -522,10 +685,11 @@ def log_contact(lead_id: str, by: Optional[str], kind: str, note: Optional[str] 
         return {"lead": lead, "touch": touch}
     if kind not in CONTACT_KINDS:
         raise LeadError(f"kind must be one of {', '.join(CONTACT_KINDS + ('note',))}.")
-    status = lead.get("status") or "New"
-    if reached and status in ("New", "No Response"):
+    status = lead.get("status") or "No Response"
+    # "New" here is an old row from before response and pipeline were split.
+    if reached and status in ("New", "No Response", ""):
         status = "Responded"
-    elif not reached and status == "New":
+    elif not reached and status in ("New", ""):
         status = "No Response"
     if next_touch_at:
         nxt = next_touch_at[:10]
@@ -542,9 +706,12 @@ def due(owner_person: Optional[str] = None, today=None) -> List[Dict[str, Any]]:
     """Leads whose follow-up date is today or earlier, oldest date first.
     Not Interested and archived leads are never due."""
     day = (today or today_local()).isoformat()
-    sql = ["SELECT * FROM leads WHERE archived = 0 AND status != 'Not Interested' "
+    held = ",".join("?" * len(TERMINAL_STATUSES))
+    sql = ["SELECT * FROM leads WHERE archived = 0 "
+           f"AND COALESCE(status, '') NOT IN ({held}) "
+           "AND (archive_bucket IS NULL OR archive_bucket = '') "
            "AND next_touch_at IS NOT NULL AND next_touch_at != '' AND substr(next_touch_at, 1, 10) <= ?"]
-    args: List[Any] = [day]
+    args: List[Any] = [*TERMINAL_STATUSES, day]
     if owner_person:
         sql.append("AND owner_person = ?"); args.append(owner_person)
     sql.append("ORDER BY substr(next_touch_at, 1, 10) ASC, CASE temperature WHEN 'Hot' THEN 0 "

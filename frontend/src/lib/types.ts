@@ -421,11 +421,20 @@ export interface Lead {
   temperature: string
   /** 3/2/1/0, for the temperature bars. */
   temperature_rank: number
-  /** 'No Response' | 'Responded' | 'Not Interested' | '' */
+  /** Status Of Lead: No Response, Responded, Scheduled, Not Interested, Closed, Dead? (confirm), Dead, Won, Lost. */
   status: string
-  /** Free text: 'New', 'Contacted', 'Emailed 6/15'. Never chip this. */
+  /** Follow-up Status when it is a pipeline stage. Freeform notes stay in follow_up. */
+  pipeline?: string
+  /** The follow-up cell as written, including 'Emailed 6/15'. Not a stage by itself. */
   follow_up: string
   next_follow_up: string
+  /** Sheet Lead ID, when this row was imported. */
+  external_ref?: string
+  capture_date?: string
+  nudge_count?: number | null
+  /** '' | 'old' | 'purchased' | 'sold' */
+  archive_bucket?: string
+  internal_email?: string
   last_nudge: string
   agent: string
   tab: string
@@ -502,6 +511,8 @@ export interface LeadsResponse {
   counts: { all: number; needs_touch: number; hot: number; new: number }
   /** YYYY-MM-DD in the tenant's zone (store only): what "due today" means. */
   today?: string
+  /** In-app follow-up schedule (store only). Not read from a spreadsheet. */
+  cadence?: { hot: number; warm: number; other: number; later: number[] }
 }
 
 export type LeadTouchKind = 'call' | 'text' | 'email' | 'met' | 'showing' | 'note'
