@@ -348,6 +348,10 @@ FINAL = ("sent", "nothing_due", "not_connected", "feature_off", "shadowed", "wri
 
 def tick(now: Optional[datetime] = None) -> Dict[str, str]:
     """Serve this morning's slot to every agent with leads not yet served it."""
+    from . import tenant_delete  # noqa: PLC0415
+    if tenant_delete.closed():
+        log.warning("lead_followup: skipped because this team was deleted")
+        return {"_": "tenant_closed"}
     cfg = settings()
     if not cfg.get("enabled"):
         return {}

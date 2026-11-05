@@ -85,6 +85,9 @@ struct LoginView: View {
                 }
                 SecureField("PIN", text: $pin)
                     .accessibilityLabel("PIN")
+                if let status = model.status {
+                    Text(status).font(.footnote)
+                }
                 if let error {
                     Text(error).foregroundStyle(.red)
                 }

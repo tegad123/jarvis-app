@@ -212,6 +212,40 @@ public final class JarvisClient {
         return receipt
     }
 
+    /// Owner-only. Describes full team deletion and does not perform it.
+    public func teamDeletionImpact() async throws -> TeamDeletionImpact {
+        let data = try await send(method: "GET", path: "/api/account/tenant-deletion", body: nil, acceptError: false)
+        return try APIDecoding.decode(TeamDeletionImpact.self, from: data)
+    }
+
+    /// Owner-only one-time nonce. Does not delete anything.
+    public func teamDeletionChallenge() async throws -> TeamDeletionImpact {
+        let data = try await send(
+            method: "POST", path: "/api/account/tenant-deletion/challenge", body: Data("{}".utf8),
+            acceptError: false, headers: ["X-Jarvis-Confirm": "delete-tenant"])
+        return try APIDecoding.decode(TeamDeletionImpact.self, from: data)
+    }
+
+    /// Deletes this tenant's local records. Refuses a reply that does not say
+    /// the local data is gone and sign-in is blocked, and keeps `stillExists`
+    /// for the screen to show.
+    public func deleteTeam(pin: String, phrase: String, nonce: String) async throws -> TeamDeletionReceipt {
+        let body = try JSONSerialization.data(withJSONObject: [
+            "confirm": phrase,
+            "pin": pin,
+            "nonce": nonce,
+        ])
+        let data = try await send(
+            method: "POST", path: "/api/account/tenant-deletion", body: body, acceptError: false,
+            headers: ["X-Jarvis-Confirm": "delete-tenant"])
+        let receipt = try APIDecoding.decode(TeamDeletionReceipt.self, from: data)
+        if receipt.action != "team-deleted" || !receipt.deletedLocal || !receipt.signInBlocked {
+            throw JarvisError.http(502, "The server did not confirm that this team's local records were removed.")
+        }
+        if let host = origin?.host { cookies.clear(host: host) }
+        return receipt
+    }
+
     public func logout() async {
         _ = try? await send(method: "POST", path: "/api/logout", body: nil, acceptError: true)
         if let host = origin?.host { cookies.clear(host: host) }
@@ -302,8 +336,8 @@ public final class JarvisClient {
         return cookies.names(for: host)
     }
 
-    private func send(method: String, path: String, body: Data?, acceptError: Bool) async throws -> Data {
-        let request = try makeRequest(method: method, path: path, body: body)
+    private func send(method: String, path: String, body: Data?, acceptError: Bool, headers: [String: String] = [:]) async throws -> Data {
+        let request = try makeRequest(method: method, path: path, body: body, headers: headers)
         let (data, response) = try await transport.send(request)
         if let header = response.value(forHTTPHeaderField: "Set-Cookie"), let host = origin?.host {
             cookies.store(setCookieHeader: header, host: host)
@@ -314,13 +348,16 @@ public final class JarvisClient {
         return data
     }
 
-    private func makeRequest(method: String, path: String, body: Data?) throws -> URLRequest {
+    private func makeRequest(method: String, path: String, body: Data?, headers: [String: String] = [:]) throws -> URLRequest {
         guard let origin else { throw JarvisError.noOrigin }
         var request = URLRequest(url: origin.endpoint(path))
         request.httpMethod = method
         request.httpBody = body
         if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        for (name, value) in headers {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
         if let cookie = cookies.header(for: origin.host) {
             request.setValue(cookie, forHTTPHeaderField: "Cookie")
         }

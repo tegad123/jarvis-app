@@ -25,6 +25,22 @@ cd ios/JarvisKit
 swift test
 ```
 
+## Delete the team
+
+The owner, and only the owner, can `POST /api/account/tenant-deletion`.
+It requires the owner's current session, the owner's PIN, the phrase
+`delete <tenant slug>`, a one-time nonce, and the header
+`X-Jarvis-Confirm: delete-tenant`. GET does not delete. A member or admin
+receives 403.
+
+That removes the records this process stores: accounts, leads, tasks,
+channels and messages, local files under the tenant home, and this app's
+copy of Google tokens. It then refuses every sign-in. It does not delete
+the Gmail mailbox, backups, host environment files, or prompts Anthropic
+already has. If the Postgres role cannot delete the append-only audit log,
+those rows stay and the response says so. The per-person request above is
+unchanged and is not this action.
+
 ## Sign-in off, deletion still pending
 
 `POST /api/account/deletion-request` with the caller's PIN and the words

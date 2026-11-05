@@ -149,6 +149,12 @@ def _start_lead_followup() -> None:
     lead_followup.start()
 
 
+@app.on_event("startup")
+def _reconcile_tenant_delete() -> None:
+    from app import tenant_delete  # noqa: PLC0415
+    tenant_delete.reconcile()
+
+
 class LoginRequest(BaseModel):
     """Either a per-person sign-in, or the break-glass operator passphrase.
 
@@ -274,6 +280,10 @@ def get_people(request: Request):
 
 @app.post("/api/login")
 def login(body: LoginRequest, request: Request, response: Response):
+    from app import tenant_delete  # noqa: PLC0415
+    if tenant_delete.closed():
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="This team was deleted. Sign-in is off.")
     if auth.throttled(request):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -472,6 +482,74 @@ def post_deletion_request(body: DeletionRequestBody, sess: dict = Depends(auth.c
         "detail": "Sign-in is turned off and a deletion request is recorded. "
                   "Leads, tasks, and messages were not deleted.",
     }
+
+
+class TeamDeletionBody(BaseModel):
+    confirm: str = Field(..., max_length=80)
+    pin: str = Field(..., min_length=1, max_length=64)
+    nonce: str = Field(..., min_length=10, max_length=80)
+
+
+def _deletion_origin_ok(request: Request) -> None:
+    """A browser on another site cannot ride the cookie. SameSite=lax already
+    drops it on a cross-site POST; the header and Origin check are the rest.
+    A native client sends no Origin, which is allowed."""
+    from urllib.parse import urlparse
+    header = (request.headers.get("x-jarvis-confirm") or "").strip()
+    if header != "delete-tenant":
+        raise HTTPException(status_code=403, detail="Missing confirmation header. Nothing was deleted.")
+    origin = request.headers.get("origin")
+    if origin:
+        if urlparse(origin).netloc != request.url.netloc:
+            raise HTTPException(status_code=403, detail="Cross-origin request refused. Nothing was deleted.")
+    referer = request.headers.get("referer")
+    if referer and not origin:
+        if urlparse(referer).netloc != request.url.netloc:
+            raise HTTPException(status_code=403, detail="Cross-origin request refused. Nothing was deleted.")
+
+
+@app.get("/api/account/tenant-deletion")
+def get_tenant_deletion(sess: dict = Depends(auth.current_session)):
+    """What full team deletion would remove. Does not delete anything."""
+    auth.require_owner(sess)
+    from app import tenant_delete  # noqa: PLC0415
+    try:
+        return tenant_delete.impact()
+    except tenant_delete.TenantDeleteError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+
+
+@app.post("/api/account/tenant-deletion/challenge")
+def post_tenant_deletion_challenge(request: Request, sess: dict = Depends(auth.current_session)):
+    """Mint a one-time nonce. Does not delete anything."""
+    auth.require_owner(sess)
+    _deletion_origin_ok(request)
+    from app import tenant_delete  # noqa: PLC0415
+    try:
+        return tenant_delete.issue_challenge(auth.person_of(sess))
+    except tenant_delete.TenantDeleteError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+
+
+@app.post("/api/account/tenant-deletion")
+def post_tenant_deletion(body: TeamDeletionBody, request: Request, response: Response,
+                         sess: dict = Depends(auth.current_session)):
+    """Delete this tenant's local records. Owner PIN, typed phrase, one-time nonce.
+
+    Not the per-person deactivation request. A member or admin gets 403.
+    """
+    auth.require_owner(sess)
+    _deletion_origin_ok(request)
+    from app import tenant_delete  # noqa: PLC0415
+    caller = auth.person_of(sess)
+    if not auth.verify_pin(caller, body.pin):
+        raise HTTPException(status_code=401, detail="That PIN is not right. Nothing was deleted.")
+    try:
+        result = tenant_delete.erase(caller, body.nonce, body.confirm)
+    except tenant_delete.TenantDeleteError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+    auth.clear_cookie(response)
+    return result
 
 
 @app.get("/api/session")

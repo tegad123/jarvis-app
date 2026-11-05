@@ -134,6 +134,39 @@ public enum AIDisclosure {
     public static let confirmPhrase = "request-account-deletion"
 }
 
+public struct TeamDeletionImpact: Decodable, Equatable {
+    public var action: String
+    public var slug: String
+    public var phrase: String
+    public var removes: [String]
+    public var notRemoved: [String]
+    public var nonce: String?
+    public var expiresIn: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case action, slug, phrase, removes, nonce
+        case notRemoved = "not_removed"
+        case expiresIn = "expires_in"
+    }
+}
+
+public struct TeamDeletionReceipt: Decodable, Equatable {
+    public var ok: Bool
+    public var action: String
+    public var deletedLocal: Bool
+    public var signInBlocked: Bool
+    public var removed: [String]
+    public var stillExists: [String]
+    public var detail: String
+
+    enum CodingKeys: String, CodingKey {
+        case ok, action, removed, detail
+        case deletedLocal = "deleted_local"
+        case signInBlocked = "sign_in_blocked"
+        case stillExists = "still_exists"
+    }
+}
+
 public struct DeletionReceipt: Decodable, Equatable {
     public var ok: Bool
     public var deleted: Bool

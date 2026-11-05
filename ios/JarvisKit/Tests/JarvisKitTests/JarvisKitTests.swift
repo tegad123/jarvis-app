@@ -170,6 +170,28 @@ final class JarvisKitTests: XCTestCase {
         XCTAssertEqual(client.cookieNamesForTests(), [])
     }
 
+    func testTeamDeletionIsSeparateAndKeepsTheLimits() async throws {
+        let fake = FakeTransport()
+        fake.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/api/account/tenant-deletion")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-Jarvis-Confirm"), "delete-tenant")
+            let body = try JSONSerialization.jsonObject(with: request.httpBody ?? Data()) as? [String: Any]
+            XCTAssertEqual(body?["confirm"] as? String, "delete alpha")
+            XCTAssertEqual(body?["nonce"] as? String, "once")
+            let json = """
+            {"ok":true,"action":"team-deleted","deleted_local":true,"sign_in_blocked":true,"removed":["leads"],"still_exists":["The Gmail mailbox was not deleted or disconnected at Google."],"detail":"This team's records stored by this Jarvis were deleted, and sign-in is off."}
+            """
+            return (200, "", Data(json.utf8))
+        }
+        let client = JarvisClient(transport: fake)
+        try client.useOrigin("https://team.example.com")
+        let receipt = try await client.deleteTeam(pin: "pin", phrase: "delete alpha", nonce: "once")
+        XCTAssertEqual(receipt.action, "team-deleted")
+        XCTAssertTrue(receipt.stillExists[0].contains("Gmail"))
+        XCTAssertFalse(receipt.detail.contains("Google account was deleted"))
+    }
+
     func testFeatureFlagDoesNotStopTheRequest() async throws {
         let fake = FakeTransport()
         fake.handler = { _ in (200, "", Data("{\"tasks\":[{\"task_id\":\"t1\",\"title\":\"Call back\"}]}".utf8)) }

@@ -347,8 +347,8 @@ struct SettingsView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
-                Section("Sign-in") {
-                    Text("This turns off your sign-in and records a deletion request. It does not delete leads, tasks, or messages. The only owner cannot do this to themselves.")
+                Section("My sign-in") {
+                    Text("This turns off your sign-in and records a deletion request. It does not delete leads, tasks, or messages, and it does not delete the team. The only owner cannot do this to themselves.")
                         .font(.footnote)
                     SecureField("PIN again", text: $closurePIN)
                         .accessibilityLabel("PIN to confirm turning off sign-in")
@@ -357,6 +357,9 @@ struct SettingsView: View {
                     if let closureNote {
                         Text(closureNote).font(.footnote)
                     }
+                }
+                if model.session?.role == "owner" {
+                    TeamDeletionSection()
                 }
                 Section("Store login") {
                     Text("This build signs in with a PIN only. Google sign-in is still how some tenants sign in on the web. Leaving it off this screen does not, by itself, settle App Store guideline 4.8.")
@@ -382,6 +385,82 @@ struct SettingsView: View {
             closureNote = message
         } catch {
             closureNote = "That request did not go through."
+        }
+    }
+}
+
+struct TeamDeletionSection: View {
+    @EnvironmentObject private var model: AppModel
+    @State private var phraseRequired = ""
+    @State private var nonce = ""
+    @State private var removes: [String] = []
+    @State private var limits: [String] = []
+    @State private var typed = ""
+    @State private var pin = ""
+    @State private var busy = false
+    @State private var note: String?
+
+    var body: some View {
+        Section("Delete this team") {
+            Text("This permanently deletes this team's records stored in Jarvis: every member's sign-in, leads, tasks, chats, and messages. It is not the same as turning off your own sign-in.")
+                .font(.footnote)
+            ForEach(removes, id: \.self) { line in
+                Text(line).font(.footnote)
+            }
+            ForEach(limits, id: \.self) { line in
+                Text(line).font(.footnote).foregroundStyle(.secondary)
+            }
+            if phraseRequired.isEmpty {
+                Text(note ?? "Loading what this will do.").font(.footnote)
+            } else {
+                Text("Type \(phraseRequired) to confirm. There is no one-tap delete.")
+                    .font(.footnote)
+                    .accessibilityLabel("Type \(phraseRequired) to confirm")
+                TextField(phraseRequired, text: $typed)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .accessibilityLabel("Confirmation phrase")
+                SecureField("Owner PIN", text: $pin)
+                    .accessibilityLabel("Owner PIN")
+                Button("Delete this team") { Task { await deleteTeam() } }
+                    .disabled(busy || nonce.isEmpty || pin.isEmpty || typed != phraseRequired)
+                if let note {
+                    Text(note).font(.footnote)
+                }
+            }
+        }
+        .task { await load() }
+    }
+
+    private func load() async {
+        do {
+            let impact = try await model.client.teamDeletionChallenge()
+            phraseRequired = impact.phrase
+            nonce = impact.nonce ?? ""
+            removes = impact.removes
+            limits = impact.notRemoved
+            note = nil
+        } catch JarvisError.http(_, let message) {
+            note = message
+        } catch {
+            note = "Could not load team deletion."
+        }
+    }
+
+    private func deleteTeam() async {
+        busy = true
+        defer { busy = false; pin = "" }
+        do {
+            let receipt = try await model.client.deleteTeam(pin: pin, phrase: typed, nonce: nonce)
+            let limits = receipt.stillExists.joined(separator: " ")
+            model.status = receipt.detail + " " + limits
+            model.session = nil
+        } catch JarvisError.http(_, let message) {
+            note = message
+            nonce = ""
+            await load()
+        } catch {
+            note = "That request did not go through. Nothing here was treated as deleted."
         }
     }
 }

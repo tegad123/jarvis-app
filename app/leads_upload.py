@@ -325,6 +325,9 @@ def _summary(parsed: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def preview(owner: str, filename: str, data: bytes) -> Dict[str, Any]:
+    from . import tenant_delete  # noqa: PLC0415
+    if tenant_delete.closed():
+        raise UploadError("closed", "This team was deleted. The import did not run.")
     parsed = parse(filename, data)
     token = "imp_" + secrets.token_hex(8)
     now = time.time()
@@ -340,6 +343,9 @@ def run(owner: str, token: str, agents: Dict[str, Optional[str]], known: set) ->
     """Write the previewed rows. `agents` answers each unplaced name: a person
     key from `known`, or None for nobody. A name left unanswered is refused,
     so no lead is given to a guess."""
+    from . import tenant_delete  # noqa: PLC0415
+    if tenant_delete.closed():
+        raise UploadError("closed", "This team was deleted. The import did not run.")
     with _lock:
         pending = _pending.get(token)
         if not pending or pending["owner"] != owner or pending["expires"] < time.time():
