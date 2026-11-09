@@ -108,6 +108,21 @@ def _to_screen_row(lead: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def person_key_for(raw: str) -> Optional[str]:
+    """"Martin", "martin@…", "martin" -> the person key, or None when the
+    registry can't say. Never a guess."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    try:
+        if str(config.SHARED) not in sys.path:
+            sys.path.insert(0, str(config.SHARED))
+        import identity as _identity
+        return _identity.resolve(raw) or None
+    except Exception:
+        return None
+
+
 def _owned_by(row: Dict[str, Any], viewer: str) -> bool:
     """Does this screen row belong to `viewer`?
 
@@ -175,4 +190,5 @@ def load(viewer: Optional[str] = None) -> Dict[str, Any]:
                        "new": sum(1 for l in screen if l["is_new"]),
                    }),
         "source": "store",
+        "today": leads_store.today_local().isoformat(),
     }

@@ -3,6 +3,7 @@ import { BackContext } from './components/Page'
 import Approvals from './screens/Approvals'
 import Ask from './screens/Ask'
 import Feed from './screens/Feed'
+import Inbox from './screens/Inbox'
 import Leads from './screens/Leads'
 import Login from './screens/Login'
 import Settings from './screens/Settings'
@@ -18,6 +19,7 @@ import {
   deleteCategory,
   getApprovals,
   getDirectory,
+  getInbox,
   getSession,
   getThreads,
   logout,
@@ -43,12 +45,12 @@ type AuthState =
       features: Partial<Record<Feature, boolean>>
     }
 
-type NavId = 'feed' | 'approvals' | 'tasks' | 'leads' | 'settings'
+type NavId = 'feed' | 'approvals' | 'inbox' | 'tasks' | 'leads' | 'settings'
 type View = { kind: 'nav'; id: NavId } | { kind: 'thread'; id: string } | null
 
 type Sheet = { mode: 'create' } | { mode: 'rename'; thread: Thread } | null
 
-const NAV_IDS: NavId[] = ['feed', 'approvals', 'tasks', 'leads', 'settings']
+const NAV_IDS: NavId[] = ['feed', 'approvals', 'inbox', 'tasks', 'leads', 'settings']
 
 /** A channel with no message for this long reads "Quiet" in the sidebar. */
 const QUIET_AFTER_HOURS = 48
@@ -151,6 +153,7 @@ function Shell({
   const [threadsError, setThreadsError] = useState<string | null>(null)
   const [people, setPeople] = useState<Person[]>([])
   const [pending, setPending] = useState(0)
+  const [inboxUnread, setInboxUnread] = useState(0)
   const [sheet, setSheet] = useState<Sheet>(null)
   const [sheetBusy, setSheetBusy] = useState(false)
   const [sheetError, setSheetError] = useState<string | null>(null)
@@ -217,6 +220,25 @@ function Shell({
     return () => window.clearInterval(t)
   }, [loadPending, view])
 
+  const seesInbox = role === 'owner' || role === 'admin'
+  const loadInboxCount = useCallback(async () => {
+    if (!seesInbox) return
+    try {
+      const r = await getInbox()
+      setInboxUnread(r.status === 'connected' ? r.unread : 0)
+    } catch (err) {
+      if (err instanceof Unauthorized) unauthorized()
+    }
+  }, [seesInbox, unauthorized])
+
+  useEffect(() => {
+    void loadInboxCount()
+    const t = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void loadInboxCount()
+    }, 60_000)
+    return () => window.clearInterval(t)
+  }, [loadInboxCount])
+
   const signOut = useCallback(async () => {
     await logout()
     onSignedOutRef.current()
@@ -232,6 +254,7 @@ function Shell({
   const select = (id: string) => {
     if ((NAV_IDS as string[]).includes(id)) {
       if (id === 'settings' && !canSeeSettings(role)) return
+      if (id === 'inbox' && role !== 'owner' && role !== 'admin') return
       setView({ kind: 'nav', id: id as NavId })
     } else {
       setView({ kind: 'thread', id })
@@ -321,6 +344,7 @@ function Shell({
   const nav: SidebarNavItem[] = [
     { id: 'feed', label: 'Activity', icon: 'activity' },
     { id: 'approvals', label: 'Approvals', icon: 'approvals', count: pending, attention: pending > 0 },
+    ...(seesInbox ? [{ id: 'inbox', label: 'Inbox', icon: 'inbox' as const, count: inboxUnread, attention: inboxUnread > 0 }] : []),
     ...(on('tasks') ? [{ id: 'tasks', label: 'Tasks', icon: 'tasks' as const }] : []),
     ...(on('leads') ? [{ id: 'leads', label: 'Leads', icon: 'leads' as const }] : []),
     ...(canSeeSettings(role) ? [{ id: 'settings', label: 'Settings', icon: 'settings' as const }] : []),
@@ -390,6 +414,9 @@ function Shell({
       case 'feed':
         content = <Feed role={role} onUnauthorized={unauthorized} />
         break
+      case 'inbox':
+        content = seesInbox ? <Inbox onUnauthorized={unauthorized} /> : null
+        break
       case 'approvals':
         content =
           role === 'operator' ? (
@@ -404,7 +431,7 @@ function Shell({
         content = <Tasks role={role} personKey={personKey} people={people} onUnauthorized={unauthorized} />
         break
       case 'leads':
-        content = <Leads personKey={personKey} onUnauthorized={unauthorized} />
+        content = <Leads role={role} personKey={personKey} people={people} onUnauthorized={unauthorized} />
         break
       case 'settings':
         content = canSeeSettings(role) ? (

@@ -17,7 +17,7 @@ from typing import Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from . import accounts, auth
+from . import accounts, auth, broker, config
 from . import channels as channels_mod
 from . import threads as threads_mod
 
@@ -89,7 +89,16 @@ def post_invite(body: InviteBody, sess: dict = Depends(auth.current_session)):
         acct = accounts.invite(body.name, body.email, body.role, by=auth.person_of(sess), title=body.title)
     except accounts.AccountError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    return {"ok": True, "person": next(p for p in accounts.team() if p["person_key"] == acct["person_key"])}
+    person = next(p for p in accounts.team() if p["person_key"] == acct["person_key"])
+    inviter = accounts.get(auth.person_of(sess)) or {}
+    origin = config.public_origin() or ""
+    status, content = broker.send_team_invite(
+        person.get("email") or body.email, person["full_name"] or person["name"], body.role, origin,
+        inviter.get("name") or "Your team", person["person_key"],
+    )
+    emailed = status == 200
+    return {"ok": True, "person": person, "emailed": emailed,
+            "email_error": None if emailed else (content.get("detail") or "The invitation email was not sent.")}
 
 
 @router.patch("/{person_key}")

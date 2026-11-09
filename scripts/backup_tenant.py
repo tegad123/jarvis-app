@@ -94,7 +94,10 @@ def backup_platform_db(slug: str, dest: Path) -> dict:
     """pg_dump jarvis_{slug} into dest/platform.dump, then prove it restores."""
     tool = Path(__file__).resolve().parent / "pg_tenant.py"
     out = dest / "platform.dump"
-    for cmd in (["dump", slug, str(out)], ["restore-check", str(out)]):
+    # Per-tenant scratch name. The shared jarvis_restorecheck name collides when
+    # several tenants back up at 03:15.
+    scratch = f"jarvis_restorecheck_{slug}"
+    for cmd in (["dump", slug, str(out)], ["restore-check", str(out), "--scratch", scratch]):
         p = subprocess.run([sys.executable, str(tool), *cmd], capture_output=True, text=True)
         if p.returncode != 0:
             print(f"backup: platform database {cmd[0]} FAILED: {(p.stderr or p.stdout)[-400:]}", file=sys.stderr)

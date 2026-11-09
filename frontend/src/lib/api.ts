@@ -27,8 +27,12 @@ import type {
   FeedResponse,
   FeedSummary,
   GoogleConnectionStatus,
+  InboxResponse,
   HealthResponse,
   JarvisReplies,
+  LeadDetailResponse,
+  LeadImportPreview,
+  LeadTouchKind,
   LeadsError,
   LeadsResponse,
   Task,
@@ -346,6 +350,8 @@ export interface LeadInput {
   temperature?: string
   follow_up?: string
   next_touch_at?: string
+  /** Owner or admin only; the API refuses it from a member. */
+  owner_person?: string
 }
 
 export function createLead(input: LeadInput): Promise<{ ok: boolean }> {
@@ -361,6 +367,54 @@ export function patchLead(id: string, input: LeadInput): Promise<{ ok: boolean }
 
 export function archiveLead(id: string): Promise<{ ok: boolean }> {
   return requestOk('/api/leads/' + encodeURIComponent(id) + '/archive', { method: 'POST' })
+}
+
+/** The import's refusals ("upload a .csv instead") come back as words to show. */
+export type LeadImportResult<T> = { ok: true; data: T } | { ok: false; error: string; detail: string }
+
+export async function previewLeadImport(file: File): Promise<LeadImportResult<LeadImportPreview>> {
+  const form = new FormData()
+  form.append('file', file, file.name)
+  let res: Response
+  try {
+    res = await fetch('/api/leads/import/preview', { method: 'POST', credentials: 'include', body: form })
+  } catch {
+    throw new ApiError('Upload failed — could not reach Jarvis.', 0)
+  }
+  if (res.status === 401) throw new Unauthorized()
+  const body = await res.json().catch(() => null)
+  if (res.ok && body) return { ok: true, data: body as LeadImportPreview }
+  return { ok: false, error: body?.error ?? 'failed', detail: detailOf(body) ?? 'That file could not be read.' }
+}
+
+export async function runLeadImport(
+  token: string,
+  agents: Record<string, string | null>,
+): Promise<LeadImportResult<{ created: number; updated: number; collisions: number }>> {
+  const { ok, body } = await request<{ created: number; updated: number; collisions: number; error?: string }>(
+    '/api/leads/import/run',
+    { method: 'POST', body: JSON.stringify({ token, agents }) },
+  )
+  if (ok && body) return { ok: true, data: body }
+  return { ok: false, error: body?.error ?? 'failed', detail: detailOf(body) ?? 'The import did not run.' }
+}
+
+export function getLead(id: string): Promise<LeadDetailResponse> {
+  return requestOk('/api/leads/' + encodeURIComponent(id))
+}
+
+export interface LeadTouchInput {
+  kind: LeadTouchKind
+  note?: string
+  reached?: boolean
+  next_touch_at?: string
+}
+
+export function logLeadTouch(id: string, input: LeadTouchInput): Promise<{ ok: boolean }> {
+  return requestOk('/api/leads/' + encodeURIComponent(id) + '/touches', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
 }
 
 /* ------------------------------------------------------------------- health */
@@ -426,6 +480,11 @@ export async function getHealth(): Promise<HealthResponse> {
 
 export function getApprovals(): Promise<ApprovalsResponse> {
   return requestOk<ApprovalsResponse>('/api/approvals')
+}
+
+/** Jarvis's own inbox. Owner and admin only; the server refuses everyone else. */
+export function getInbox(): Promise<InboxResponse> {
+  return requestOk<InboxResponse>('/api/inbox')
 }
 
 /** Records a decision. 409 means someone already resolved it. */
@@ -526,12 +585,12 @@ export function getTeam(): Promise<TeamResponse> {
   return requestOk<TeamResponse>('/api/team')
 }
 
-export async function invitePerson(input: { name: string; email: string; role: 'admin' | 'member' }): Promise<TeamPerson> {
-  const { ok, status, body } = await request<{ ok: boolean; person: TeamPerson }>('/api/team/invite', {
+export async function invitePerson(input: { name: string; email: string; role: 'admin' | 'member' }): Promise<{ person: TeamPerson; emailed: boolean; email_error: string | null }> {
+  const { ok, status, body } = await request<{ ok: boolean; person: TeamPerson; emailed?: boolean; email_error?: string | null }>('/api/team/invite', {
     method: 'POST',
     body: JSON.stringify(input),
   })
-  if (ok && body?.person) return body.person
+  if (ok && body?.person) return { person: body.person, emailed: body.emailed === true, email_error: body.email_error ?? null }
   throw new ApiError(detailOf(body) ?? 'Could not invite them.', status)
 }
 

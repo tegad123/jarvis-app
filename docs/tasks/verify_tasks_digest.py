@@ -108,9 +108,9 @@ print("\n── what it says ─────────────────
 ck("the header counts what is open", "5 open tasks" in body, body.splitlines()[1][:70])
 ck("and how much has gone quiet", "1 gone quiet" in body, body.splitlines()[1][:70])
 ck("finished work is NOT in the digest", "Already handled" not in body)
-i_high, i_med, i_low = (body.find("--- HIGH"), body.find("--- MEDIUM"), body.find("--- LOW"))
-ck("sections run high, then medium, then low",
-   -1 < i_high < i_med < i_low, f"{i_high}/{i_med}/{i_low}")
+ck("the newest task is listed above the oldest",
+   body.find("File the quarterly returns") < body.find(OVERDUE),
+   f"{body.find('File the quarterly returns')}/{body.find(OVERDUE)}")
 ck("the overdue task is marked OVERDUE", "OVERDUE" in body)
 ck("   and it is the one that is actually overdue",
    "OVERDUE" in body[body.find(OVERDUE) - 60:body.find(OVERDUE) + 10], "")
@@ -124,8 +124,8 @@ ck("days open are shown", "d open" in body)
 # — and most mail clients show the HTML.
 ck("the html marks the quiet task too", "STALE" in html)
 ck("the html marks the overdue one too", "OVERDUE" in html)
-ck("the html twin carries the same sections",
-   html.find("HIGH PRIORITY") < html.find("MEDIUM PRIORITY") < html.find("LOW PRIORITY"))
+ck("the html lists the newest task above the oldest",
+   html.find("File the quarterly returns") < html.find(OVERDUE))
 
 print("\n── positions, so a reply can resolve against them ─────────────")
 conn = __import__("sqlite3").connect(str(tasks_store.DB_PATH))
@@ -134,9 +134,12 @@ conn.close()
 ck("one position per open task", len(rows) == 5, str(len(rows)))
 ck("numbered from one, without gaps", [r[0] for r in rows] == [1, 2, 3, 4, 5],
    str([r[0] for r in rows]))
-ck("position 1 is the overdue high-priority task",
-   rows and tasks_store.get(rows[0][1])["title"] == OVERDUE,
+ck("position 1 is the newest task",
+   rows and tasks_store.get(rows[0][1])["title"] == "File the quarterly returns",
    tasks_store.get(rows[0][1])["title"] if rows else "")
+ck("the oldest task is last",
+   rows and tasks_store.get(rows[-1][1])["title"] == OVERDUE,
+   tasks_store.get(rows[-1][1])["title"] if rows else "")
 
 print("\n── what the tenant sees afterwards ────────────────────────────")
 events = [json.loads(l) for l in feed.read_text().splitlines()[before_feed:] if l.strip()]

@@ -118,6 +118,26 @@ export type Role = 'owner' | 'admin' | 'member' | 'operator'
  *  keys — never token/refresh/cipher. */
 export type GoogleConnectionStatusName = 'connected' | 'needs_reauth' | 'disconnected'
 
+/** One message in Jarvis's own inbox. A log line, not the full letter. */
+export interface InboxMessage {
+  id: string
+  from: string
+  subject: string
+  date: string
+  unread: boolean
+  snippet: string
+  /** What Jarvis did with it, once the watcher has handled it. */
+  handling?: string
+}
+
+export interface InboxResponse {
+  status: 'connected' | 'disconnected' | 'needs_reauth' | 'unavailable'
+  mailbox: string | null
+  unread: number
+  messages: InboxMessage[]
+  notice: string | null
+}
+
 export interface GoogleConnectionStatus {
   status: GoogleConnectionStatusName
   google_email: string | null
@@ -500,6 +520,43 @@ export interface LeadsResponse {
   sheet_id: string
   sheet_title: string
   counts: { all: number; needs_touch: number; hot: number; new: number }
+  /** YYYY-MM-DD in the tenant's zone (store only): what "due today" means. */
+  today?: string
+}
+
+export type LeadTouchKind = 'call' | 'text' | 'email' | 'met' | 'showing' | 'note'
+
+export interface LeadTouch {
+  touch_id: string
+  lead_id: string
+  at: string
+  by_person: string | null
+  by_name: string
+  kind: LeadTouchKind | 'created' | 'imported'
+  /** Null on an operator session: the server withheld it. */
+  note: string | null
+  reached: boolean | null
+  next_touch_at: string | null
+}
+
+export interface LeadImportPreview {
+  token: string
+  leads: number
+  new: number
+  already_imported: number
+  due_now: number
+  bad_dates: number
+  co_listed: number
+  tabs: { tab: string; leads: number; skipped?: string; unmatched_headers?: string[] }[]
+  /** One per agent name in the file; person_key null = the team list can't place it. */
+  agents: { name: string; leads: number; person_key: string | null }[]
+  collisions: { ref: string; first: string; second: string }[]
+}
+
+export interface LeadDetailResponse {
+  lead: Lead & { email: string; phone: string; source: string; owner_person: string; notes: string }
+  timeline: LeadTouch[]
+  today: string
 }
 
 /** 503 body when the sheet cannot be read. */

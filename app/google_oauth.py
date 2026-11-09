@@ -659,7 +659,8 @@ def _callback_login(
     auth.clear_failures(request)
     accounts.mark_login(acct["person_key"])
     threads_mod.ensure_direct(acct["person_key"])
-    redir = RedirectResponse("/", status_code=302)
+    from . import devices  # noqa: PLC0415
+    redir = RedirectResponse(devices.after_login_path(request), status_code=302)
     _clear_state_cookie(redir)
     auth.issue_cookie(redir, person_key=acct["person_key"], role=acct["role"])
     return redir

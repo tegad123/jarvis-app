@@ -18,6 +18,7 @@ import html
 import json
 import logging
 import os
+import re
 import sys
 import threading
 from datetime import datetime, timedelta, timezone
@@ -94,6 +95,51 @@ def label(dt: datetime) -> str:
 
 # ── what is waiting ──────────────────────────────────────────────────────────
 
+# A machine text. Hard patterns are codes and bank warnings, whoever the sender
+# claims to be. Soft patterns are delivery, ratings, and blasts, and those only
+# count when the sender is a number or a short code rather than a person.
+_HARD_AUTO = re.compile(
+    r"(verification code|security code|one[- ]time (code|pin|passcode)|"
+    r"your (pin|code) is|code is\s*:?\s*\d{4,}|do not share this|"
+    r"payment code|provide this pin|pick-?up w/?code)",
+    re.I,
+)
+_SOFT_AUTO = re.compile(
+    r"(package ready|gopuff|luxer|driver is almost|your order|"
+    r"how would you rate|rate our|%\s*off|black friday|reply stop|unsubscribe|"
+    r"no code needed|election day|ballot box|bit\.ly/)",
+    re.I,
+)
+
+
+def _is_short_code(value: str) -> bool:
+    raw = re.sub(r"[\s()+-]", "", value or "")
+    return raw.isdigit() and 3 <= len(raw) <= 6
+
+
+def _looks_like_person(value: str) -> bool:
+    value = (value or "").strip()
+    if not value or _is_short_code(value):
+        return False
+    if re.fullmatch(r"[+\d\s().-]+", value):
+        return False
+    return len(re.sub(r"[^A-Za-z]", "", value)) >= 2
+
+
+def is_automated(sender: str, text: str, chat: str = "") -> bool:
+    """True for codes, delivery notices, and blasts. A named person stays."""
+    body = text or ""
+    if _HARD_AUTO.search(body):
+        return True
+    who = sender or ""
+    named = _looks_like_person(who) or _looks_like_person(chat)
+    if named:
+        return False
+    if _is_short_code(who) or _is_short_code(chat):
+        return True
+    return bool(_SOFT_AUTO.search(body))
+
+
 def waiting(person: str, now: Optional[datetime] = None, cfg: Optional[dict] = None) -> List[Dict[str, Any]]:
     """Conversations whose newest message is someone else's, inside the window.
     Newest first. Message text is the first line only."""
@@ -106,7 +152,7 @@ def waiting(person: str, now: Optional[datetime] = None, cfg: Optional[dict] = N
         "SELECT chat, sender, is_from_me, sent_at, text_cipher FROM imessages i WHERE person_key = ? "
         "AND sent_at = (SELECT MAX(sent_at) FROM imessages j WHERE j.person_key = i.person_key AND j.chat = i.chat) "
         "ORDER BY sent_at DESC", (person,)).fetchall()
-    out, seen = [], set()
+    out, seen, skipped = [], set(), 0
     for r in rows:
         if r["chat"] in seen:
             continue
@@ -119,9 +165,15 @@ def waiting(person: str, now: Optional[datetime] = None, cfg: Optional[dict] = N
             threads_mod.bump_counter("text_followup_decrypt_failed")
             text = ""
         first = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+        if is_automated(r["sender"] or "", text, r["chat"] or ""):
+            skipped += 1
+            continue
         if len(first) > LINE_CHARS:
             first = first[:LINE_CHARS - 1].rstrip() + "…"
         out.append({"chat": r["chat"] or r["sender"], "sender": r["sender"], "sent_at": r["sent_at"], "line": first})
+    if skipped:
+        threads_mod.bump_counter("text_followup_spam_skipped", skipped)
+        log.info("text_followup: left %d automated texts off the reply list", skipped)
     return out
 
 

@@ -197,18 +197,36 @@ def append_only_enforced(db: str) -> bool:
             return True
 
 
+# One shared name races: every tenant backup fires at 03:15 and CREATE DATABASE
+# collides on pg_database_datname_index, and the winner's DROP removes the
+# database out from under the others. The name stays obviously scratch, never
+# jarvis_<tenant>.
+_SCRATCH_RE = re.compile(r"^jarvis_restorecheck(_[a-z0-9]{1,24})?$")
+
+
+def _drop_scratch(name: str) -> None:
+    if not _SCRATCH_RE.match(name):
+        raise SystemExit(f"refusing to drop {name!r}: not the restore-check scratch database")
+    with admin() as c:
+        # FORCE drops a leftover from a killed check, including one another
+        # session still holds. It cannot name a tenant database.
+        c.execute(f"DROP DATABASE IF EXISTS {q(name)} WITH (FORCE)")
+
+
 def cmd_restore_check(a) -> None:
     """Restore a dump into a scratch database, compare it with its source when
     --against names one, and drop the scratch database."""
-    scratch = "jarvis_restorecheck"
+    scratch = (getattr(a, "scratch", None) or "").strip() or "jarvis_restorecheck"
+    if not _SCRATCH_RE.match(scratch):
+        raise SystemExit("scratch database must be jarvis_restorecheck or jarvis_restorecheck_<slug>")
+    _drop_scratch(scratch)
     with admin() as c:
-        c.execute(f"DROP DATABASE IF EXISTS {q(scratch)}")
         c.execute(f"CREATE DATABASE {q(scratch)} TEMPLATE template0")
     try:
         subprocess.run(["pg_restore", "--no-owner", "--no-privileges", "--exit-on-error", "-h", SOCKET,
                         "-U", "postgres", "-d", scratch, a.file], check=True)
         restored = table_digest(scratch)
-        result = {"ok": True, "restored": restored}
+        result = {"ok": True, "restored": restored, "scratch": scratch}
         if a.against:
             source = table_digest(a.against)
             result["matches_source"] = source == restored
@@ -216,8 +234,7 @@ def cmd_restore_check(a) -> None:
         result["append_only_after_restore"] = append_only_enforced(scratch)
         result["ok"] = result["ok"] and result["append_only_after_restore"]
     finally:
-        with admin() as c:
-            c.execute(f"DROP DATABASE IF EXISTS {q(scratch)}")
+        _drop_scratch(scratch)
     print(json.dumps(result))
     if not result["ok"]:
         raise SystemExit(1)
@@ -269,6 +286,7 @@ def main() -> None:
     p = sub.add_parser("dsn"); p.add_argument("slug")
     p = sub.add_parser("dump"); p.add_argument("slug"); p.add_argument("file")
     p = sub.add_parser("restore-check"); p.add_argument("file"); p.add_argument("--against")
+    p.add_argument("--scratch", default="", help="scratch database; default jarvis_restorecheck")
     p = sub.add_parser("drop"); p.add_argument("slug"); p.add_argument("--yes", action="store_true")
     p = sub.add_parser("verify-db"); p.add_argument("op", choices=("create", "drop")); p.add_argument("name")
     a = ap.parse_args()

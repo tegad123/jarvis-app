@@ -279,6 +279,10 @@ def main() -> int:
                  .execute("SELECT task_id FROM tasks")}
     check(f"the proof left the tenant's task list as it found it ({len(before_all)} -> {len(after_ids)} tasks)",
           (found is not None or a.spoof) and after_ids == before_all)
+    # The channel it talked in sits in a real person's sidebar; archive it
+    # (nothing is ever deleted, app/threads.py), so the sidebar ends as it began.
+    r = c.post(f"/api/threads/{tid}/archive")
+    check(f"its channel is archived, out of the owner's sidebar (HTTP {r.status_code})", r.status_code == 200)
     print(f"\n{PASS}/{PASS + FAIL} passed")
     return 1 if FAIL else 0
 

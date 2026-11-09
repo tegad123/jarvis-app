@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import Page from '../components/Page'
+import LeadImport from '../components/LeadImport'
 import {
   ApiError,
   Unauthorized,
@@ -194,6 +195,7 @@ export default function Settings({ role, personKey, features = {}, onUnauthorize
       {role !== 'operator' && features.imessage !== false && <MacMessages onUnauthorized={onUnauthorized} />}
       {canManageTeam(role) && <Team role={role} personKey={personKey ?? null} onUnauthorized={onUnauthorized} />}
       {canManageTeam(role) && <Channels onUnauthorized={onUnauthorized} />}
+      {role === 'owner' && features.leads !== false && <LeadImport onUnauthorized={onUnauthorized} />}
     </Page>
   )
 }
@@ -249,11 +251,15 @@ function Team({ role, personKey, onUnauthorized }: { role: Role; personKey: stri
     setError(null)
     setNotice(null)
     try {
-      const p = await invitePerson({ name: name.trim(), email: email.trim(), role: newRole })
+      const { person: p, emailed, email_error: emailError } = await invitePerson({ name: name.trim(), email: email.trim(), role: newRole })
       setName('')
       setEmail('')
       setNewRole('member')
-      setNotice(`${p.name} is on the team. Send them ${window.location.origin}: they sign in with Google using ${p.email}.`)
+      setNotice(
+        emailed
+          ? `An invitation was emailed to ${p.email}. They sign in with Google at ${window.location.origin}.`
+          : `${p.name} is on the team, but the invitation email was not sent${emailError ? `: ${emailError}` : '.'} Send them ${window.location.origin} and have them sign in with Google using ${p.email}.`,
+      )
       await load()
     } catch (err) {
       if (err instanceof Unauthorized) return onUnauthorized()

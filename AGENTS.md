@@ -34,7 +34,7 @@ emails and texts to real clients. Act accordingly.
   /opt/<slug>, manifests docs/tenants/<slug>.yaml. Each person's own Jarvis in
   practice mode (two-user, sentinel shadow, writes blocked), no Google
   connected, placeholder mailboxes `<slug>-assistant@assistant.invalid`.
-  App bfd501b since 2026-10-16 (`--upgrade`, proofs 123/123).
+  App ff895c1 since 2026-10-27 (`--upgrade`, proofs 124/124).
   Their owners carry roles owner + internal (task.add needs internal or
   assistant; roles are literal). The provisioner refuses an owner without
   internal, and `--reconfigure` re-applies the manifest's roles.
@@ -53,7 +53,7 @@ emails and texts to real clients. Act accordingly.
 - TEGA: app 8780, gateway 8782, hooks 18798, /opt/tega, manifest
   docs/tenants/tega.yaml. Same layout and rules as EDDIE/BLAKE/MARTIN
   (practice mode, owner + internal, owner PIN in
-  /root/onboarding/tega-owner-pin.txt). App 81fde8f, provisioned 2026-10-21.
+  /root/onboarding/tega-owner-pin.txt). Provisioned 2026-10-21; app ff895c1 since 2026-10-27.
   The owner email is real (tegad8@gmail.com: identity only, outside
   boundary_domains, never a recipient). `identity.py has-role internal` is
   true for it, `is-internal` (domain) false. A `@34dev.com` address can't be
@@ -61,7 +61,7 @@ emails and texts to real clients. Act accordingly.
   Part A: tega.yamin.io (docs/platform/ingress/PART-A.md, "Tega"), public
   since 2026-10-21 (public_origin in the manifest; Access app "tega", service
   token in /root/onboarding/cf-access-verify-token.txt, KEY=value lines).
-- Tenant agent behaviour (tega, eddie, blake, martin on app bfe2793):
+- Tenant agent behaviour (tega, eddie, blake, martin on app ff895c1):
   the agent's only tools are the eight in
   scripts/hermes_plugin/jarvis/tools.json (Hermes plugin "jarvis", copied
   root-owned 0640 into HERMES_HOME/plugins; platform_toolsets.api_server:
@@ -71,6 +71,14 @@ emails and texts to real clients. Act accordingly.
   Buttons in chat come only from the app (`action` event), never from model
   text; they are saved in messages.actions and re-checked on every history read. Proofs: docs/model/verify_agent_behaviour.py,
   docs/model/verify_agent_tools.py --slug, docs/frontend/verify_chat_links.mjs.
+- Team channels (app 548b1ff+; tega, eddie, blake, martin, isocheck): people in a
+  channel talk to each other; Jarvis answers a channel message only on `@jarvis`
+  (or every message, Settings → Channels, `channel_settings`), acting as the
+  person who called it, with the whole channel as context. Messages carry
+  `messages.author`; `thread_reads` drives unread. Real-tenant chat proofs must
+  call Jarvis with `@jarvis` in their channel. Proofs:
+  docs/channels/verify_channels.py, verify_channels_ui.mjs,
+  verify_tenant_channel.py (isocheck only, real model).
 - App chat identity (two-user tenants on app 08be2f4+): each chat turn the app
   mints an opaque `app:<random>` reference, sends it as `X-Jarvis-Actor-Ref`,
   and the patched Hermes hands it to tools as JARVIS_ACTOR_MSG; skills authz
