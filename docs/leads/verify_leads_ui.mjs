@@ -123,8 +123,8 @@ try {
   const after = await leadsOf(omar)
   const tina = after.find((l) => l.name === 'Tina Open')
   check('quick add: +1 lead in the ledger', after.length - before === 1, `${before} -> ${after.length}`)
-  check(`   Warm -> due ${plus(2)}, his, New`, tina?.next_follow_up === plus(2) && tina?.status === 'New' && tina?.agent === 'Omar',
-    JSON.stringify(tina && [tina.next_follow_up, tina.status, tina.agent]))
+  check(`   Warm -> due ${plus(2)}, his, No Response, pipeline New`, tina?.next_follow_up === plus(2) && tina?.status === 'No Response' && tina?.pipeline === 'New' && tina?.agent === 'Omar',
+    JSON.stringify(tina && [tina.next_follow_up, tina.status, tina.pipeline, tina.agent]))
   check('   not due today, so Today stays (2)', (await todayChip.innerText()) === 'Today (2)', await todayChip.innerText())
 
   console.log('\n── Log contact ─────────────────────────────────────────')
@@ -189,6 +189,27 @@ try {
   await dana.page.getByTestId('lead-import-file').setInputFiles({ name: 'Open house.csv', mimeType: 'text/csv', buffer: csv })
   await pv.waitFor({ timeout: 8000 }).catch(() => {})
   check('the same file again: 0 new, 2 already imported', await pv.getByText(/^2 leads found · 0 new · 2 already imported/).isVisible())
+
+  console.log('\n── phone width ─────────────────────────────────────────')
+  const phoneCtx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
+  const login = await phoneCtx.request.post(`${BASE}/api/login`, { data: { person_key: 'omar', pin: PINS.omar } })
+  check('mobile sign-in', login.ok())
+  const phone = await phoneCtx.newPage()
+  await phone.goto(BASE)
+  await phone.locator('nav').getByRole('button', { name: /^Leads/ }).first().click()
+  await phone.getByRole('group', { name: 'Show' }).waitFor({ timeout: 8000 })
+  const overflow = await phone.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
+  check('mobile leads page does not scroll sideways', overflow <= 1, String(overflow))
+  await phone.getByRole('group', { name: 'Show' }).getByRole('button', { name: 'All', exact: true }).click()
+  await phone.locator('main').getByRole('button', { name: 'Sarah Lee', exact: true }).click()
+  const msheet = phone.getByTestId('lead-sheet')
+  await msheet.waitFor({ timeout: 8000 })
+  const box = await msheet.boundingBox()
+  check('mobile lead sheet fits the screen', !!box && box.width <= 390 && box.x >= -1, JSON.stringify(box))
+  check('mobile log contact is on the sheet', await msheet.getByRole('button', { name: 'Log contact' }).isVisible())
+  check('mobile phone number is still a tap-to-call link', (await msheet.locator('a[href^="tel:"]').count()) === 1)
+  await phone.screenshot({ path: join(shots, '7-omar-mobile-sheet.png') })
+  await phoneCtx.close()
 } finally {
   await browser.close()
   server.kill()

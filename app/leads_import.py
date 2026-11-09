@@ -58,7 +58,11 @@ HEADER_FIELDS: Dict[str, Tuple[str, ...]] = {
     "email": ("email", "e-mail", "email address"),
     "phone": ("phone", "phone number", "mobile"),
     "external_ref": ("lead id", "leadid", "id"),
-    "last_activity_at": ("date", "created", "date added"),
+    # "Date" is the open-house day, not last activity and not Last Nudge Date.
+    "capture_date": ("date", "date added", "created"),
+    "last_nudge_at": ("last nudge date",),
+    "nudge_count": ("nudge count",),
+    "internal_email": ("internal agent email",),
     "thread_id": ("thread id", "channel id"),
 }
 

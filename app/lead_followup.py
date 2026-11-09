@@ -13,6 +13,12 @@ the email says so.
 
 ONE SLOT, NOT A BACKLOG: same rule as text_followup. A morning more than GRACE
 late is skipped, never sent at noon.
+
+NOT TAKEN FROM THE TRACKER WORKBOOK. The send log shows digests around 05:30,
+follow-ups often about 10 days apart, and a copy to Spencer on some third
+nudges. Those are observations of old mail, not a schedule this code will run.
+The time stays 07:00 unless the tenant sets another, the cadence stays the
+in-app ladder, and nobody is copied. Nudge count is whatever the sheet said.
 """
 import fcntl
 import html
@@ -272,8 +278,17 @@ def compose(agent: str, overdue, today_rows, tips: Dict[str, str], by_model: boo
     return subject, "\n".join(lines) + "\n", page
 
 
+def _result_slug(result: str) -> str:
+    slug = re.sub(r"[^a-z0-9_]+", "_", (result or "error").lower()).strip("_")[:48]
+    return slug or "error"
+
+
 def send_now(person: str, now: Optional[datetime] = None, kind: str = "now") -> Dict[str, Any]:
     cfg = settings()
+    if not cfg.get("enabled"):
+        threads_mod.bump_counter("lead_followup_disabled")
+        log.info("lead_followup: not sent; the morning email is off for this account")
+        return {"result": "disabled", "due": 0, "status": 0}
     tz = _zone()
     now = now or datetime.now(timezone.utc)
     today = now.astimezone(tz).date()
@@ -292,7 +307,8 @@ def send_now(person: str, now: Optional[datetime] = None, kind: str = "now") -> 
         tips, by_model = {l["lead_id"]: template(l, agent) for l in listed}, True
     subject, text, page = compose(agent, overdue, today_rows, tips, by_model, now, tz)
     status, content = broker.send_to_self(person, subject, text, f"lead_followup.{kind}", html=page)
-    result = "sent" if status == 200 else (content.get("error") or f"http_{status}")
+    raw = "sent" if status == 200 else ((content.get("error") if isinstance(content, dict) else None) or f"http_{status}")
+    result = "sent" if status == 200 else _result_slug(str(raw))
     threads_mod.bump_counter("lead_followup_sent" if status == 200 else f"lead_followup_{result}")
     if status != 200:
         log.warning("lead_followup: a morning email was not sent (%s)", result)
@@ -357,7 +373,12 @@ def tick(now: Optional[datetime] = None) -> Dict[str, str]:
                 log.warning("lead_followup: this morning's email was more than %s late; skipped", GRACE)
                 done[person] = "missed"
             else:
-                done[person] = send_now(person, now, kind=key)["result"]
+                try:
+                    done[person] = send_now(person, now, kind=key)["result"]
+                except Exception as exc:
+                    threads_mod.bump_counter("lead_followup_send_failed")
+                    log.exception("lead_followup: one morning email failed (%s)", type(exc).__name__)
+                    done[person] = "error"
             state[person] = {"slot": key, "result": done[person], "at": now.isoformat(), "attempts": attempts}
             if done[person] not in FINAL and attempts >= MAX_ATTEMPTS:
                 threads_mod.bump_counter("lead_followup_gave_up")

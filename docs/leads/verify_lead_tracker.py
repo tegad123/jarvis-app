@@ -200,7 +200,8 @@ L0 = ledger()
 r = as_("dana").post("/api/leads", json={"name": "Sarah Lee", "temperature": "Hot", "owner_person": "omar",
                                          "phone": "(512) 555-0101", "property": "1109 E 24th St"})
 sarah = r.json().get("lead") or {}
-out["create_hot"] = [r.status_code, sarah.get("next_touch_at"), sarah.get("owner_person"), sarah.get("status")]
+out["create_hot"] = [r.status_code, sarah.get("next_touch_at"), sarah.get("owner_person"),
+                   sarah.get("status"), sarah.get("pipeline")]
 r = as_("omar").post("/api/leads", json={"name": "Wes Warm", "temperature": "Warm"})
 wes = r.json().get("lead") or {}
 out["create_warm"] = [r.status_code, wes.get("next_touch_at"), wes.get("owner_person")]
@@ -236,8 +237,17 @@ out["timeline"] = [[t["kind"], t["by_name"], t["note"]] for t in d["timeline"]]
 dop = as_("op").get(f"/api/leads/{sarah['lead_id']}").json()
 out["op_timeline"] = [[t["kind"], t["note"]] for t in dop["timeline"]]
 out["op_touch"] = as_("op").post(f"/api/leads/{sarah['lead_id']}/touches", json={"kind": "call"}).status_code
+as_("omar").patch(f"/api/leads/{sarah['lead_id']}", json={"follow_up": "Emailed 6/15", "notes": "private note"})
+dop2 = as_("op").get(f"/api/leads/{sarah['lead_id']}").json()["lead"]
+own2 = as_("omar").get(f"/api/leads/{sarah['lead_id']}").json()["lead"]
+out["op_bodies"] = [dop2.get(k) for k in ("phone", "email", "notes", "follow_up")]
+out["own_bodies"] = [own2.get("phone"), own2.get("notes"), own2.get("follow_up")]
+out["op_list_follow"] = next(l["follow_up"] for l in as_("op").get("/api/leads").json()["leads"] if l["name"] == "Sarah Lee")
+out["omar_list_follow"] = next(l["follow_up"] for l in as_("omar").get("/api/leads").json()["leads"] if l["name"] == "Sarah Lee")
 out["member_reassign_own"] = as_("omar").patch(f"/api/leads/{wes['lead_id']}", json={"owner_person": "maya"}).status_code
 out["ledger_routes"] = [L0, ledger()]
+out["unknown_owner"] = as_("dana").post("/api/leads", json={"name": "Nope", "owner_person": "zed"}).status_code
+out["bad_status"] = as_("dana").post("/api/leads", json={"name": "Nope2", "status": "Contacted"}).status_code
 
 # ── Jarvis's tools ───────────────────────────────────────────────────────────
 broker._authorize = lambda request: None
@@ -359,7 +369,22 @@ out["real_gate"] = [real["result"], len(sent) - n_before]
 out["counters_mail"] = {k: ctr(k) - v for k, v in C0.items()}
 os.environ["LT_RUNTIME"] = os.environ["LT_RUNTIME_OFF"]
 out["off_by_default"] = [lead_followup.settings()["enabled"], lead_followup.tick(at(7, 5, day=31))]
+n_sent = len(sent)
+D0 = ctr("lead_followup_disabled")
+out["send_while_off"] = [lead_followup.send_now("omar", at(8, 0))["result"], len(sent) - n_sent,
+                         ctr("lead_followup_disabled") - D0]
 os.environ["LT_RUNTIME"] = os.environ["LT_RUNTIME_ON"]
+lead_followup.STATE_PATH.unlink(missing_ok=True)
+def explode(person, subject, text, kind, html=None):
+    if person == "maya":
+        raise RuntimeError("gmail down")
+    return fake_send(person, subject, text, kind, html=html)
+broker.send_to_self = explode
+S0 = ctr("lead_followup_send_failed")
+out["tick_one_fails"] = lead_followup.tick(at(7, 5))
+out["send_failed_count"] = ctr("lead_followup_send_failed") - S0
+broker.send_to_self = fake_send
+out["tick_retry"] = lead_followup.tick(at(7, 20))
 
 # ── the import ───────────────────────────────────────────────────────────────
 import openpyxl
@@ -440,6 +465,75 @@ del sys.modules["openpyxl"]
 out["no_openpyxl"] = [r.status_code, r.json().get("error"), ctr("leads_upload_xlsx_unavailable") - X0]
 out["bad_type"] = up("dana", "t.pdf", b"%PDF").json().get("error")
 
+import sqlite3, tempfile
+fd, oldp = tempfile.mkstemp(suffix=".db")
+os.close(fd)
+con = sqlite3.connect(oldp)
+con.execute("CREATE TABLE leads (lead_id TEXT PRIMARY KEY, name TEXT NOT NULL)")
+con.execute("INSERT INTO leads (lead_id, name) VALUES ('ld_old', 'Old Lead')")
+con.commit()
+leads_store.migrate(con)
+touch = con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='lead_touches'").fetchone()
+kept = con.execute("SELECT name FROM leads WHERE lead_id='ld_old'").fetchone()[0]
+con.execute("INSERT INTO lead_touches (touch_id, lead_id, at, kind) VALUES ('lt_1','ld_old','t','imported')")
+con.commit()
+out["migrated"] = [kept, touch is not None, con.execute("SELECT COUNT(*) FROM lead_touches").fetchone()[0]]
+con.close()
+base_rt = os.environ["LT_RUNTIME"]
+rt = json.load(open(base_rt))
+rt.setdefault("app", {})["lead_cadence"] = {"hot": 4, "warm": 2, "other": 3, "later": [7, 14, 30]}
+over = base_rt + ".cadence"
+json.dump(rt, open(over, "w"))
+os.environ["LT_RUNTIME"] = over
+out["cadence_override"] = leads_store.cadence_days("Hot", 0)
+rt["app"]["lead_cadence"] = {"hot": "tomorrow"}
+json.dump(rt, open(over + "b", "w"))
+os.environ["LT_RUNTIME"] = over + "b"
+Cbad = ctr("leads_cadence_config_rejected")
+out["cadence_rejected"] = [leads_store.cadence_days("Hot", 0), ctr("leads_cadence_config_rejected") - Cbad,
+                        int(leads_store.CADENCE_FIRST.get("hot", 1))]
+os.environ["LT_RUNTIME"] = base_rt
+
+# The sanitized workbook (no real people). Sheet owners are added only here,
+# after the earlier import proved an unknown "Blake" stays unplaced.
+ident = json.load(open(os.environ["LT_IDENTITY"]))
+for key, name in (("spencer", "Spencer"), ("kaden", "Kaden"), ("tega", "Tega"),
+                  ("martin", "Martin"), ("alex", "Alex"), ("blake", "Blake")):
+    ident["people"][key] = {"name": name, "display_name": name, "roles": ["member"]}
+json.dump(ident, open(os.environ["LT_IDENTITY"], "w"))
+book = os.path.join(os.environ["APP_ROOT"], "docs/leads/fixtures/sanitized-open-house.xlsx")
+raw = open(book, "rb").read()
+pvb = up("dana", "sanitized-open-house.xlsx", raw).json()
+runb = as_("dana").post("/api/leads/import/run", json={"token": pvb["token"], "agents": {}}).json()
+def row(ref):
+    return leads_store.get_by_external(ref) or {}
+spn, spn2 = row("SPN-0001"), row("SPN-0002")
+old, won, bought = row("TGA-0099"), row("MRT-0099"), row("ALX-0099")
+logs = leads_store._ensure().execute(
+    "SELECT mode, nudge_n, cc_spencer, external_ref FROM lead_send_log ORDER BY at, external_ref").fetchall()
+out["parity"] = {
+    "preview_leads": pvb.get("leads"), "new": pvb.get("new"), "bad_dates": pvb.get("bad_dates"),
+    "send_log_preview": pvb.get("send_log"), "unplaced": [a["name"] for a in pvb.get("agents") or [] if not a.get("person_key")],
+    "created": runb.get("created"), "logged": runb.get("send_log"),
+    "spn": [spn.get("owner_person"), spn.get("pipeline"), spn.get("status"), spn.get("temperature"),
+            spn.get("capture_date"), spn.get("next_touch_at"), spn.get("nudge_count"), spn.get("price_point"),
+            spn.get("internal_email"), spn.get("archive_bucket"), spn.get("archived")],
+    "spn2": [spn2.get("owner_person"), spn2.get("thread_id"), spn2.get("nudge_count"), spn2.get("last_nudge_at")],
+    "has_agent_not_owner": spn2.get("owner_person") == "spencer",
+    "old": [old.get("archive_bucket"), old.get("archived"), old.get("next_touch_at"), "Lost" in (old.get("notes") or ""),
+            old.get("owner_person")],
+    "won": [won.get("archive_bucket"), won.get("status"), won.get("pipeline"), won.get("archived")],
+    "bought": bought.get("archive_bucket"),
+    "dead_confirm": [row("TGA-0001").get("status"), row("TGA-0001").get("archived")],
+    "prefixes": sorted(row(ref).get("external_ref") for ref in
+                       ("SPN-0001", "SPN-0002", "KAD-0001", "TGA-0001", "MRT-0001", "ALX-0001", "BLK-0001")),
+    "log": [[r[0], r[1], r[2], r[3]] for r in logs],
+    "active_due_excludes_archive": "Sample Old Lead" not in
+        [l.get("name") for l in leads_store.due(today=date(2026, 10, 28))],
+}
+again = up("dana", "sanitized-open-house.xlsx", raw).json()
+out["parity_again"] = [again.get("new"), again.get("already_imported")]
+
 out["feed_emit_failed"] = ctr("leads_feed_emit_failed")
 print("RESULT " + json.dumps(out, default=str))
 '''
@@ -452,13 +546,19 @@ sys.path.insert(0, "scripts")
 import provision_tenant as pt
 def die(msg): raise SystemExit("DIE " + msg)
 pt.die = die
-out = {"absent": pt.lead_followup({}), "on": pt.lead_followup({"lead_followup": {"enabled": True, "time_local": "06:30"}})}
+out = {"absent": pt.lead_followup({}), "on": pt.lead_followup({"lead_followup": {"enabled": True, "time_local": "06:30"}}),
+       "cadence_absent": pt.lead_cadence({}),
+       "cadence_custom": pt.lead_cadence({"lead_cadence": {"hot": 2, "later": [5, 10]}})}
 for name, bad in (("time", {"time_local": "7am"}), ("key", {"emailed": True}), ("suggest", {"suggest": "yes"}),
                   ("yes_string", {"enabled": "yes"})):
     try:
         out[name] = pt.lead_followup({"lead_followup": bad})
     except SystemExit as exc:
         out[name] = str(exc)
+try:
+    out["cadence_bool"] = pt.lead_cadence({"lead_cadence": {"hot": True}})
+except SystemExit as exc:
+    out["cadence_bool"] = str(exc)
 print(json.dumps(out))
 '''
     p = subprocess.run([sys.executable, "-c", code], cwd=str(APP_ROOT), capture_output=True, text=True)
@@ -518,11 +618,11 @@ def main() -> int:
         print(json.dumps(r, indent=1))
 
     print("── cadence and the timeline ──")
-    ck("Hot: due tomorrow, owner set by the owner, status New", r["create_hot"] == [201, "2026-10-29", "omar", "New"],
-       r["create_hot"])
+    ck("Hot: due tomorrow, owner set, response No Response, pipeline New",
+       r["create_hot"] == [201, "2026-10-29", "omar", "No Response", "New"], r["create_hot"])
     ck("Warm: due in 2 days, a member's lead is their own", r["create_warm"] == [201, "2026-10-30", "omar"], r["create_warm"])
     ck("no temperature: due in 3 days", r["create_plain"] == [201, "2026-10-31", "maya"], r["create_plain"])
-    ck("missed call: New -> No Response, next in 7 days", r["missed_call"] == [201, "No Response", "2026-11-04"],
+    ck("missed call: stays No Response, next in 7 days", r["missed_call"] == [201, "No Response", "2026-11-04"],
        r["missed_call"])
     ck("reached by text: -> Responded, next in 14 days", r["reached_text"] == [201, "Responded", "2026-11-11"],
        r["reached_text"])
@@ -535,6 +635,14 @@ def main() -> int:
        [t[0] for t in r["op_timeline"]] == ["created", "call", "text", "note", "call"]
        and all(t[1] is None for t in r["op_timeline"]), r["op_timeline"])
     ck("operator can't log a contact (403)", r["op_touch"] == 403, r["op_touch"])
+    ck("operator detail withholds phone, email, notes and follow-up text",
+       r["op_bodies"] == ["", "", "", ""], r["op_bodies"])
+    ck("   (twin) the lead's owner still sees the phone, the note and the follow-up text",
+       r["own_bodies"][0] and r["own_bodies"][1] == "private note" and r["own_bodies"][2] == "Emailed 6/15",
+       r["own_bodies"])
+    ck("   and the operator's list hides that follow-up text while the member's list keeps it",
+       r["op_list_follow"] == "" and r["omar_list_follow"] == "Emailed 6/15",
+       [r["op_list_follow"], r["omar_list_follow"]])
     ck("a new lead posts one feed line", r["feed_new_lead"] is True)
     ck("   no feed write failed (leads_feed_emit_failed 0)", r["feed_emit_failed"] == 0, r["feed_emit_failed"])
 
@@ -546,12 +654,14 @@ def main() -> int:
     ck("   nor edit, archive or log on it (404 each)",
        [r["omar_patch_mia"], r["omar_archive_mia"], r["omar_touch_mia"]] == [404, 404, 404],
        [r["omar_patch_mia"], r["omar_archive_mia"], r["omar_touch_mia"]])
-    ck("   and it is unchanged (New, not archived, one timeline entry)", r["mia_untouched"] == ["New", False, 1],
-       r["mia_untouched"])
+    ck("   and it is unchanged (No Response, not archived, one timeline entry)",
+       r["mia_untouched"] == ["No Response", False, 1], r["mia_untouched"])
     ck("the admin opens maya's lead (200)", r["admin_open_mia"] == 200, r["admin_open_mia"])
     ck("a member can't give a lead to someone else (403 on create and on edit)",
        r["member_gives_away"] == 403 and r["member_reassign_own"] == 403,
        [r["member_gives_away"], r["member_reassign_own"]])
+    ck("a lead can't be given to someone who isn't on the team (422)", r["unknown_owner"] == 422, r["unknown_owner"])
+    ck("a status outside the list is refused (422)", r["bad_status"] == 422, r["bad_status"])
     a, b = r["ledger_routes"]
     ck(f"ledger: +3 leads, +7 timeline rows ({a} -> {b})",
        b["leads"] - a["leads"] == 3 and b["touches"] - a["touches"] == 7)
@@ -628,6 +738,13 @@ def main() -> int:
        cm == {"lead_followup_sent": 4, "lead_followup_suggest_calls": 5, "lead_followup_suggest_fallback": 1,
               "lead_followup_slot_missed": 2, "lead_followup_nothing_due": 1, "lead_followup_sentinel_off": 1})
     ck("off when app.lead_followup is absent", r["off_by_default"] == [False, {}], r["off_by_default"])
+    ck("send_now while the email is off sends nothing and says so",
+       r["send_while_off"] == ["disabled", 0, 1], r["send_while_off"])
+    ck("one agent's send failing does not drop the other's",
+       (r["tick_one_fails"] or {}).get("omar") == "sent" and (r["tick_one_fails"] or {}).get("maya") == "error"
+       and r["send_failed_count"] == 1, r["tick_one_fails"])
+    ck("the failed send is tried again in the same slot",
+       (r["tick_retry"] or {}).get("maya") == "sent" and "omar" not in (r["tick_retry"] or {}), r["tick_retry"])
 
     print("\n── the spreadsheet import ──")
     ck("owner only: member 403, admin 403", r["import_member"] == 403 and r["import_admin"] == 403,
@@ -668,6 +785,40 @@ def main() -> int:
     ck("no openpyxl: says so (422 xlsx_unavailable), counted", r["no_openpyxl"] == [422, "xlsx_unavailable", 1],
        r["no_openpyxl"])
     ck("other files refused", r["bad_type"] == "bad_type", r["bad_type"])
+    ck("an older leads database gains the timeline and keeps its row",
+       r["migrated"] == ["Old Lead", True, 1], r["migrated"])
+    ck("app.lead_cadence hot 4 is what a new hot lead would use", r["cadence_override"] == 4, r["cadence_override"])
+    got = r["cadence_rejected"]
+    ck("a schedule that isn't whole days is refused, counted, and the default stays",
+       got[0] == got[2] and got[1] == 1, got)
+
+    print("\n── sanitized workbook parity ──")
+    p = r.get("parity") or {}
+    ck("10 leads (Spencer has two), none left unplaced, one non-date kept",
+       p.get("preview_leads") == 10 and p.get("unplaced") == [] and p.get("bad_dates") == 1, p)
+    ck("send log is counted, not sent", p.get("send_log_preview") == 4 and p.get("logged") == 4, p)
+    ck("import writes the 10 leads", p.get("created") == 10, p.get("created"))
+    ck("SPN-0001 stays Spencer's: Contacted, No Response, Warm, date, price, email, nudge 0",
+       p.get("spn") == ["spencer", "Contacted", "No Response", "Warm", "2026-09-06", "2026-09-16", 0,
+                        "750k-1.3M", "spencer@example.com", "", False], p.get("spn"))
+    ck("Has agent does not become the owner; thread id and nudge 1 kept",
+       p.get("spn2") == ["spencer", "thread-sample-1", 1, "2026-09-20"] and p.get("has_agent_not_owner") is True,
+       p.get("spn2"))
+    ck("OLD LEADS is its own bucket, date cell Lost was not turned into a day",
+       p.get("old") == ["old", True, None, True, "tega"], p.get("old"))
+    ck("won and purchased-elsewhere stay different buckets",
+       p.get("won") == ["sold", "Won", "Closed", True] and p.get("bought") == "purchased",
+       [p.get("won"), p.get("bought")])
+    ck("Dead? (confirm) is kept and is not archived", p.get("dead_confirm") == ["Dead? (confirm)", False],
+       p.get("dead_confirm"))
+    ck("imported ids keep their prefixes and do not collide",
+       p.get("prefixes") == ["ALX-0001", "BLK-0001", "KAD-0001", "MRT-0001", "SPN-0001", "SPN-0002", "TGA-0001"],
+       p.get("prefixes"))
+    ck("send log keeps new/digest/reply and the one copied row, as history",
+       p.get("log") == [["digest", 1, 0, "MRT-0001"], ["digest", 3, 1, "ALX-0001"],
+                        ["new", 1, 0, "TGA-0001"], ["reply", 2, 0, "ALX-0001"]], p.get("log"))
+    ck("archive rows are not on the due list", p.get("active_due_excludes_archive") is True)
+    ck("the same file again adds nothing", r.get("parity_again") == [0, 10], r.get("parity_again"))
 
     print("\n── the provisioner ──")
     p = provisioner()
@@ -678,6 +829,11 @@ def main() -> int:
     ck("refuses a bad time, an unknown key, a non-boolean suggest",
        all(str(p.get(k, "")).startswith("DIE ") for k in ("time", "key", "suggest")))
     ck("enabled: 'yes' (not true) stays off", (p.get("yes_string") or {}).get("enabled") is False)
+    ck("absent cadence is the in-app default, not a spreadsheet reading",
+       p.get("cadence_absent") == {"hot": 1, "warm": 2, "other": 3, "later": [7, 14, 30]}, p.get("cadence_absent"))
+    ck("a partial cadence keeps the other defaults",
+       p.get("cadence_custom") == {"hot": 2, "warm": 2, "other": 3, "later": [5, 10]}, p.get("cadence_custom"))
+    ck("true is not a number of days", str(p.get("cadence_bool", "")).startswith("DIE "), p.get("cadence_bool"))
 
     print(f"\n{sum(ok)}/{len(ok)} passed")
     return 0 if ok and all(ok) else 1

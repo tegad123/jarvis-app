@@ -150,7 +150,7 @@ export default function LeadSheet({
               {kind !== 'note' && (
                 <label className="flex flex-wrap items-center gap-jm-2 text-jm-body-sm text-jm-fg-secondary">
                   Next follow-up
-                  <Field type="date" value={next} onChange={(e) => setNext(e.target.value)} aria-label="Next follow-up" />
+                  <Field className="w-full sm:w-auto" type="date" value={next} onChange={(e) => setNext(e.target.value)} aria-label="Next follow-up" />
                   <span className="text-jm-caption">Leave blank and Jarvis picks it.</span>
                 </label>
               )}

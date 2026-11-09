@@ -33,6 +33,11 @@ const FILTERS: { id: FilterId; label: string }[] = [
 
 const TEMPS = ['Hot', 'Warm', 'Cold']
 
+function firstFollowUp(c?: { hot: number; warm: number; other: number }): string {
+  const day = (n: number) => (n === 1 ? 'tomorrow' : n === 2 ? 'in two days' : `in ${n} days`)
+  return `Jarvis sets the first follow-up: ${day(c?.hot ?? 1)} if hot, ${day(c?.warm ?? 2)} if warm, otherwise ${day(c?.other ?? 3)}.`
+}
+
 interface Props {
   role: Role
   /** Null on a break-glass operator session. Editing needs a person — see
@@ -209,9 +214,7 @@ export default function Leads({ role, personKey, people, onUnauthorized }: Props
               />
             </label>
           )}
-          <p className="m-0 text-jm-caption text-jm-fg-secondary">
-            Jarvis sets the first follow-up: tomorrow if hot, in two days if warm, otherwise in three.
-          </p>
+          <p className="m-0 text-jm-caption text-jm-fg-secondary">{firstFollowUp(data?.cadence)}</p>
           <div className="flex gap-jm-2">
             <Button type="submit" variant="primary" disabled={busy || !draft.name.trim()}>
               Add
@@ -282,9 +285,9 @@ export default function Leads({ role, personKey, people, onUnauthorized }: Props
                 price={l.price || undefined}
                 temperature={l.temperature as LeadRowProps['temperature']}
                 temperatureRank={l.temperature_rank}
-                status={l.status as LeadRowProps['status']}
-                // Most recent signal we have about this lead, in preference order.
-                activity={l.follow_up || (l.last_nudge ? `Nudged ${l.last_nudge}` : '') || undefined}
+                status={l.status}
+                pipeline={l.pipeline}
+                activity={(l.follow_up && l.follow_up !== l.pipeline ? l.follow_up : '') || (l.last_nudge ? `Nudged ${l.last_nudge}` : '') || undefined}
                 agent={l.agent || undefined}
                 date={l.date || undefined}
                 due={d?.text}

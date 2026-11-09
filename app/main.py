@@ -847,7 +847,8 @@ class LeadCreate(BaseModel):
     price_point: Optional[str] = Field(None, max_length=64)
     source: Optional[str] = Field(None, max_length=120)
     notes: Optional[str] = Field(None, max_length=4000)
-    status: Optional[str] = Field(None, max_length=40)
+    status: Optional[str] = Field(None, max_length=80)
+    pipeline: Optional[str] = Field(None, max_length=40)
     temperature: Optional[str] = Field(None, max_length=20)
     follow_up: Optional[str] = Field(None, max_length=500)
     owner_person: Optional[str] = Field(None, max_length=64)
@@ -868,7 +869,8 @@ class LeadPatch(BaseModel):
     price_point: Optional[str] = Field(None, max_length=64)
     source: Optional[str] = Field(None, max_length=120)
     notes: Optional[str] = Field(None, max_length=4000)
-    status: Optional[str] = Field(None, max_length=40)
+    status: Optional[str] = Field(None, max_length=80)
+    pipeline: Optional[str] = Field(None, max_length=40)
     temperature: Optional[str] = Field(None, max_length=20)
     follow_up: Optional[str] = Field(None, max_length=500)
     owner_person: Optional[str] = Field(None, max_length=64)
@@ -905,11 +907,38 @@ def _lead_in_reach(sess: dict, lead_id: str) -> dict:
 
 def _owner_for_write(sess: dict, asked: Optional[str]) -> str:
     """Who a new or reassigned lead belongs to. A member's leads are their
-    own; only owner and admin hand one to someone else."""
+    own; only owner and admin hand one to someone else. The key has to name
+    someone on the team — a typo must not park a lead where nobody can see it."""
     me = auth.person_of(sess)
     if asked and asked != me and auth.role_of(sess) not in ("owner", "admin"):
         raise HTTPException(status_code=403, detail="Only an admin or the owner can give a lead to someone else.")
-    return asked or me
+    owner = asked or me
+    if owner not in accounts_mod.known_people():
+        raise HTTPException(status_code=422, detail="That person is not on the team.")
+    return owner
+
+
+def _closed_lead_fields(fields: dict) -> dict:
+    """Status and temperature stay in the screen's closed lists. Case is
+    normalised. Anything else is a 422, not a new word on the chip."""
+    if fields.get("status"):
+        try:
+            fields["status"] = leads_store.canonical_status(fields["status"])
+        except leads_store.LeadError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+    if fields.get("temperature"):
+        try:
+            fields["temperature"] = leads_store.canonical_temperature(fields["temperature"])
+        except leads_store.LeadError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+    if "pipeline" in fields:
+        try:
+            fields["pipeline"] = leads_store.canonical_pipeline(fields.get("pipeline") or "")
+        except leads_store.LeadError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+    if "archive_bucket" in fields and fields["archive_bucket"] not in ("", *leads_store.ARCHIVE_BUCKETS):
+        raise HTTPException(status_code=422, detail="archive_bucket must be old, purchased or sold.")
+    return fields
 
 
 @app.post("/api/leads", status_code=201)
@@ -919,7 +948,7 @@ def create_lead(body: LeadCreate, sess: dict = Depends(_needs("leads"))):
     lives in the connector."""
     auth.require_person(sess)
     _leads_writable()
-    fields = body.model_dump(exclude_none=True)
+    fields = _closed_lead_fields(body.model_dump(exclude_none=True))
     fields["owner_person"] = _owner_for_write(sess, fields.get("owner_person"))
     name = fields.pop("name")
     try:
@@ -941,7 +970,11 @@ def get_lead(lead_id: str, sess: dict = Depends(_needs("leads"))):
                  "note": t.get("note") if bodies else None}
                 for t in leads_store.touches(lead_id)]
     row = leads_src._to_screen_row(lead)
-    row.update({"email": lead.get("email") or "", "phone": lead.get("phone") or "",
+    if not bodies:
+        row["follow_up"] = ""
+        row["internal_email"] = ""
+    row.update({"email": (lead.get("email") or "") if bodies else "",
+                "phone": (lead.get("phone") or "") if bodies else "",
                 "source": lead.get("source") or "", "owner_person": lead.get("owner_person") or "",
                 "notes": (lead.get("notes") or "") if bodies else ""})
     return {"lead": row, "timeline": timeline, "today": leads_store.today_local().isoformat()}
@@ -998,7 +1031,7 @@ def patch_lead(lead_id: str, body: LeadPatch, sess: dict = Depends(_needs("leads
     auth.require_person(sess)
     _leads_writable()
     _lead_in_reach(sess, lead_id)
-    fields = body.model_dump(exclude_unset=True, exclude_none=True)
+    fields = _closed_lead_fields(body.model_dump(exclude_unset=True, exclude_none=True))
     if "owner_person" in fields:
         fields["owner_person"] = _owner_for_write(sess, fields["owner_person"])
     try:
@@ -1021,9 +1054,18 @@ def archive_lead(lead_id: str, sess: dict = Depends(_needs("leads"))):
 
 
 @app.get("/api/leads")
-def get_leads(sess: dict = Depends(_needs("leads"))):
+def get_leads(sess: dict = Depends(_needs("leads")),
+              archive: Optional[str] = Query(None)):
+    if archive and archive not in leads_store.ARCHIVE_BUCKETS:
+        raise HTTPException(status_code=422, detail="archive must be old, purchased or sold.")
     try:
-        return leads_src.load(viewer=_viewer(sess))
+        payload = leads_src.load(viewer=_viewer(sess), archive_bucket=archive)
+        # follow_up and the internal address are the agent's own words.
+        if auth.is_operator(sess):
+            for lead in payload.get("leads") or []:
+                lead["follow_up"] = ""
+                lead["internal_email"] = ""
+        return payload
     except leads_mod.LeadsUnavailable as exc:
         # 503 with a real body, matching /api/health's contract: the client
         # renders this as an honest error, never as an empty lead list.

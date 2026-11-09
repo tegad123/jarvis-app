@@ -8,7 +8,8 @@ export interface LeadRowProps {
   price?: string
   temperature?: 'Hot' | 'Warm' | 'Cold' | ''
   temperatureRank?: number
-  status?: 'New' | 'No Response' | 'Responded' | 'Not Interested' | ''
+  status?: string
+  pipeline?: string
   /** follow_up, else "Nudged {last_nudge}". Default "No activity yet". */
   activity?: string
   agent?: string
@@ -17,7 +18,7 @@ export interface LeadRowProps {
   /** Only for the app's own store with a signed-in person. */
   canEdit?: boolean
   /** One field per tap: { temperature } or { status }. */
-  onChange?: (fields: { temperature?: string; status?: string }) => void
+  onChange?: (fields: { temperature?: string; status?: string; pipeline?: string }) => void
   onArchive?: () => void
   /** Opens the lead (its timeline); the name becomes a button. */
   onOpen?: () => void
@@ -29,8 +30,11 @@ export interface LeadRowProps {
   className?: string
 }
 
-const STATUS_CYCLE = ['New', 'No Response', 'Responded', 'Not Interested']
+const STATUS_CYCLE = ['No Response', 'Responded', 'Scheduled', 'Not Interested', 'Closed', 'Dead? (confirm)', 'Dead', 'Won', 'Lost']
+const PIPELINE_CYCLE = ['New', 'Contacted', 'Touring', 'Offer Made', 'Closed', 'Lost']
 const TEMP_CYCLE = ['', 'Cold', 'Warm', 'Hot']
+/** Workbook fills. Hot pink, warm yellow, cold blue. */
+const TEMP_FILL: Record<string, string> = { Hot: '#FFC7CE', Warm: '#FFEB9C', Cold: '#BDD7EE' }
 
 /** Three rising bars: filled in fg, empty in border-strong. Never coloured. */
 function TempBars({ rank }: { rank: number }) {
@@ -65,6 +69,23 @@ export function LeadRow(p: LeadRowProps) {
     <span role="img" title={tempLabel} aria-label={tempLabel} className={barsBox}>
       <TempBars rank={rank} />
     </span>
+  )
+
+  const swatch = p.temperature && TEMP_FILL[p.temperature]
+  const pipeline = p.pipeline ?? ''
+  const nextPipeline = PIPELINE_CYCLE[(Math.max(0, PIPELINE_CYCLE.indexOf(pipeline)) + 1) % PIPELINE_CYCLE.length]
+  const pipelineNode = !pipeline ? null : p.canEdit ? (
+    <button
+      type="button"
+      disabled={p.busy}
+      aria-label={`Pipeline: ${pipeline}. Change to ${nextPipeline}`}
+      onClick={() => p.onChange?.({ pipeline: nextPipeline })}
+      className={cx(tagBase, tagNeutral, 'max-w-[9rem] cursor-pointer appearance-none truncate font-jm disabled:opacity-jm-disabled', focus)}
+    >
+      {pipeline}
+    </button>
+  ) : (
+    <span className={cx(tagBase, tagNeutral, 'max-w-[9rem] truncate')}>{pipeline}</span>
   )
 
   const status = p.status ?? ''
@@ -102,12 +123,21 @@ export function LeadRow(p: LeadRowProps) {
     <li className={cx(rowBase, p.className)}>
       <div className="flex min-w-0 items-center gap-jm-2">
         {bars}
+        {swatch && (
+          <span
+            aria-hidden="true"
+            data-temperature={p.temperature}
+            title={p.temperature}
+            className="h-3 w-3 shrink-0 rounded-full border border-black/10"
+            style={{ background: swatch }}
+          />
+        )}
         {p.onOpen ? (
           <button
             type="button"
             onClick={p.onOpen}
             className={cx(
-              'min-w-0 flex-1 cursor-pointer appearance-none border-0 bg-transparent p-0 text-left font-jm text-jm-body-sm text-jm-fg hover:underline',
+              'min-h-[44px] min-w-0 flex-1 cursor-pointer appearance-none border-0 bg-transparent p-0 text-left font-jm text-jm-body-sm text-jm-fg hover:underline',
               truncate,
               focus,
             )}
@@ -118,6 +148,7 @@ export function LeadRow(p: LeadRowProps) {
           <span className={cx('min-w-0 flex-1 text-jm-body-sm text-jm-fg', truncate)}>{p.name}</span>
         )}
         {p.byJarvis && <SparkGlyph label="Added by Jarvis" />}
+        {pipelineNode}
         {statusNode}
       </div>
       {place && <p className={cx('m-0 text-jm-body-sm text-jm-fg-secondary', truncate)}>{place}</p>}
