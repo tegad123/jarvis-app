@@ -8,6 +8,7 @@ Skills clone only from the slice-0 bare origin — never cp from a working tree.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import pwd
@@ -302,6 +303,48 @@ def mls(manifest: dict) -> dict:
     if out["start_url"] and not (browser_enabled(manifest) and browser_mode(manifest) == "headed"):
         die("mls.start_url needs browser: enabled and browser_mode: headed")
     return out
+
+
+def browser_proxy(manifest: dict) -> Optional[Dict[str, Any]]:
+    """`browser_proxy: {host, port, auth}`, absent = off: the egress connects
+    directly. With it, every browser connection leaves through that upstream
+    and fails if it is unreachable (app/browser_egress.py). `auth: true`
+    loads the upstream's "user:password" from ETC_JARVIS/<slug>-browser-proxy-auth
+    as a systemd credential; it is never put in the manifest or the unit."""
+    v = manifest.get("browser_proxy")
+    if v in (None, "off"):
+        return None
+    if not isinstance(v, dict):
+        die("browser_proxy must be {host, port, auth} (absent = off)")
+    unknown = sorted(set(v) - {"host", "port", "auth"})
+    if unknown:
+        die(f"browser_proxy: unknown key(s) {', '.join(unknown)}")
+    if not browser_enabled(manifest):
+        die("browser_proxy needs browser: enabled")
+    host, port, auth = v.get("host"), v.get("port"), v.get("auth", False)
+    if not isinstance(host, str) or not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?", host):
+        die("browser_proxy.host must be a host name or IPv4 address (no scheme, no credentials)")
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+    if literal is not None and not literal.is_global:
+        die("browser_proxy.host must be a public address")
+    if isinstance(port, bool) or not isinstance(port, int) or not 0 < port < 65536:
+        die("browser_proxy.port must be a whole number from 1 to 65535")
+    if not isinstance(auth, bool):
+        die("browser_proxy.auth must be true or false")
+    return {"host": host, "port": port, "auth": auth}
+
+
+def egress_proxy_lines(manifest: dict) -> str:
+    bp = browser_proxy(manifest)
+    if bp is None:
+        return ""
+    lines = [f"Environment=JARVIS_EGRESS_UPSTREAM={bp['host']}:{bp['port']}"]
+    if bp["auth"]:
+        lines.append(f"LoadCredential=upstream_auth:{ETC_JARVIS / (manifest['slug'] + '-browser-proxy-auth')}")
+    return "\n".join(lines)
 
 
 def browser_headed_problems() -> List[str]:
@@ -1076,6 +1119,7 @@ def common_map(manifest: dict, posture: dict, fernet: str, force: str,
     if iso and browser_enabled(manifest):
         iso.update({"WEB_USER": n["web_user"], "BROWSER_CODE": str(BROWSER_CODE_ROOT / slug),
                     **browser_unit_vars(manifest),
+                    "EGRESS_PROXY_LINES": egress_proxy_lines(manifest),
                     "BROWSER_MAX_OPEN": str(int((manifest.get("browser_limits") or {}).get("max_open", 2))),
                     # Headed: two browsers with their displays measured ~600 MB
                     # (PSS, verify_browser_headed.py); 2G leaves room for heavy pages.
@@ -1550,6 +1594,9 @@ def validate_manifest(manifest: dict) -> tuple:
             bad = browser_headed_problems()
             if bad:
                 die("browser_mode: headed but " + "; ".join(bad) + " (docs/plans/browser-har-comps.md section 12)")
+    bp = browser_proxy(manifest)
+    if bp and bp["auth"] and not (ETC_JARVIS / f"{slug}-browser-proxy-auth").is_file():
+        die(f"browser_proxy.auth is true but {ETC_JARVIS / (slug + '-browser-proxy-auth')} does not exist")
     signin_lines(manifest)
     log(f"venv=platform: {PLATFORM_VENV} (a copy; pip installs there do not reach live)")
 

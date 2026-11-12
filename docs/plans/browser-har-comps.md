@@ -473,6 +473,13 @@ that upstream proxy instead of connecting directly.
 - Upstream credentials, if any, come from a systemd credential file
   (`LoadCredential=`), not from the unit's `Environment=` and not from the
   manifest. Logs name the upstream host and port and nothing else.
+  `browser_proxy.auth: true` loads `/etc/jarvis/<slug>-browser-proxy-auth`
+  (one line, `user:password`, root-owned, mode 600) as the credential
+  `upstream_auth`; the provisioner refuses `auth: true` when the file is
+  missing.
+- The egress asks the upstream for the address it checked (`CONNECT ip:port`),
+  not the name, so the upstream cannot be steered to a different address.
+  Proof: `docs/browser/verify_browser_proxy.py` (with `--canary`).
 - The upstream must be a public address; the egress unit's `IPAddressDeny`
   already blocks private ranges.
 - It applies to the whole tenant: everyone on the tenant leaves from the same
