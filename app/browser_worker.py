@@ -30,6 +30,10 @@ import time
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote, quote_plus, urlsplit
 
+from browser_launch import (  # noqa: E402
+    DESKTOP_UA, HEIGHT, WIDTH, chrome_args, display_for, headed_requested, supports_headed,
+)
+
 BIN = os.environ.get("JARVIS_BROWSER_BIN", "")
 PROFILE = os.environ.get("JARVIS_BROWSER_PROFILE", "")
 EGRESS = os.environ.get("JARVIS_EGRESS_SOCKET", "")
@@ -37,7 +41,6 @@ IDLE_CLOSE_S = int(os.environ.get("JARVIS_BROWSER_IDLE_S", "600"))
 IDLE_EXIT_S = int(os.environ.get("JARVIS_BROWSER_EXIT_S", "1800"))
 MAX_OPEN = int(os.environ.get("JARVIS_BROWSER_MAX_OPEN", "2"))
 PERSON = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
-WIDTH, HEIGHT = 1280, 800
 SNAPSHOT_CHARS = 12000
 LOAD_TIMEOUT_S = 15
 INTERACTIVE = {"button", "link", "textbox", "searchbox", "combobox", "checkbox", "radio", "menuitem", "tab",
