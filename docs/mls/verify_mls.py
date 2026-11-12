@@ -26,7 +26,11 @@ loopback): every fixture is opened and read through browser.gate() with the
 `tables` request, one ledger row each; each page gets its class; table, card
 and embedded-data pages parse to the same hand-worked rows; agent contact
 columns never reach a Listing; the search form's fields and boxes are found
-and the read rule treats only status and type boxes as filters.
+and the read rule treats only status and type boxes as filters. The
+sanitizer (docs/mls/sanitize_fixture.py) refuses a page it cannot clean,
+removes every invented personal detail from fixtures/saved_example.html, and
+its output still reads as results; every sanitized captured page in
+fixtures/real/ must read as its .expect.json says (docs/mls/FIXTURE-CAPTURE.md).
 
 Step 14 (a real headless worker, egress and the fixture site, the broker
 route through FastAPI's TestClient with real actor refs): without a read
@@ -454,6 +458,13 @@ for name in ("search.html", "results_table.html", "results_table_p2.html", "resu
             d = browser.call("describe", "omar", ref=m.group(1)) if m else {}
             verdicts[label] = bp.read_only_gesture("click", d, "", False, K) if m else "no element"
         out["box_verdicts"] = verdicts
+out["real"] = {}
+for name in json.loads(os.environ.get("REAL_PAGES") or "[]"):
+    st, _ = browser.gate("open", {"url": SITE + "/f/real/" + name}, ctx, "omar")
+    st2, page = browser.gate("tables", {"snapshot": True}, ctx, "omar")
+    cls, det = mm.classify(page)
+    out["real"][name] = {"open": st, "tables": st2, "class": cls, "rows": [r.__dict__ for r in det.get("rows", [])],
+                         "fields": sorted(mm.search_fields(page.get("snapshot") or ""))}
 out["ledger_tables"] = ledger("tables")
 out["ledger_open"] = ledger("open")
 print("RESULT " + json.dumps(out, default=str))
@@ -505,10 +516,39 @@ def start_worker(scr: pathlib.Path, allow: str):
     return eg, w
 
 
+def sanitized_example(real: pathlib.Path) -> dict:
+    """The sanitizer run on a made-up "saved" page full of fake personal
+    details: what it refuses, what it writes, and that the result is still a
+    readable results page (checked with the captured pages below)."""
+    real.mkdir(parents=True, exist_ok=True)
+    src = HERE / "fixtures" / "saved_example.html"
+    tool = [sys.executable, str(HERE / "sanitize_fixture.py")]
+    names = ["--name", "Jordan Q. Realtor", "--name", "Lakeside Realty Group"]
+    with_url = real.parent / (real.name + "-with-url.html")
+    with_url.write_text(src.read_text().replace("Ref 7731902.", "See https://www.lakesiderealty.example/jordan"))
+    refused = subprocess.run(tool + [str(with_url), str(real / "refused.html"), "--seed", "7"] + names,
+                             capture_output=True, text=True)
+    with_url.unlink()
+    done = subprocess.run(tool + [str(src), str(real / "saved_example.html"), "--seed", "7"] + names,
+                          capture_output=True, text=True)
+    text = (real / "saved_example.html").read_text() if (real / "saved_example.html").exists() else ""
+    (real / "saved_example.expect.json").write_text(json.dumps({"class": "results", "rows": 3}))
+    return {"refused_rc": refused.returncode, "refused_out": refused.stdout, "refused_wrote": (real / "refused.html").exists(),
+            "rc": done.returncode, "out": done.stdout + done.stderr, "text": text}
+
+
 def step13(env) -> None:
     print("── step 13: reading pages")
     sys.path.insert(0, str(HERE))
     import fixture_site  # noqa: PLC0415
+    import tempfile  # noqa: PLC0415
+    real = pathlib.Path(tempfile.mkdtemp(prefix="verify-mls-real-"))
+    for f in (fixture_site.REAL.glob("*") if fixture_site.REAL.is_dir() else []):
+        (real / f.name).write_bytes(f.read_bytes())
+    san = sanitized_example(real)
+    fixture_site.REAL = real
+    pages = sorted(f.name for f in real.glob("*.html"))
+    env = {**env, "REAL_PAGES": json.dumps(pages)}
     ip = f"127.{secrets.randbelow(250) + 3}.0.31"
     srv, site = fixture_site.serve(ip)
     scr = pathlib.Path("/tmp/verify-mls-13")
@@ -527,6 +567,34 @@ def step13(env) -> None:
         ck("step 13 child ran", False)
         return
     o = json.loads(line[-1][7:])
+    ck("sanitizer: a page with something it cannot clean (a URL in the text) is refused and nothing is written",
+       san["refused_rc"] == 1 and not san["refused_wrote"] and "full URL" in san["refused_out"], san["refused_out"])
+    leaks = [s for s in ("Jordan", "Lakeside", "Casey", "Riley", "lakesiderealty", "otherbrokerage", "555-01",
+                         "555.01", "8451", "8452", "7731902", "88123", "Elmwood", "Nineteenth Row", "W 19th",
+                         "VIEWSTATE", "<script", "<img", "csrf", "sess-", "tok-", "https://")
+             if s.lower() in san["text"].lower()]
+    ck("sanitizer: the made-up saved page comes out with none of its names, contacts, numbers, addresses or tokens",
+       san["rc"] == 0 and san["text"] and leaks == [], (san["out"], leaks))
+    rp = o["real"]
+    ck("sanitizer: its output still reads as a results page with every row (through the real worker)",
+       rp.get("saved_example.html", {}).get("class") == "results"
+       and [r["address"] for r in rp["saved_example.html"]["rows"]] == ["102 Fixture St", "104 Fixture St",
+                                                                         "106 Fixture St"]
+       and all(r["status"] == "sold" and r["sold_price"] for r in rp["saved_example.html"]["rows"]),
+       rp.get("saved_example.html"))
+    for name in sorted(rp):
+        if name == "saved_example.html":
+            continue
+        exp_path = real / (name[:-5] + ".expect.json")
+        exp = json.loads(exp_path.read_text()) if exp_path.is_file() else None
+        got = rp[name]
+        ck(f"captured page {name}: reads as {exp and exp.get('class')} with {exp and exp.get('rows')} rows "
+           f"(its .expect.json)", exp is not None and got["open"] == 200 and got["class"] == exp.get("class")
+           and len(got["rows"]) == exp.get("rows", len(got["rows"])), (got["class"], len(got["rows"]), exp))
+    captured = [n for n in rp if n != "saved_example.html"]
+    print(f"      captured Matrix pages checked: {len(captured)}"
+          + ("  (none yet: docs/mls/FIXTURE-CAPTURE.md)" if not captured else ""))
+    subprocess.run(["rm", "-rf", str(real)])
     pg = o["pages"]
     raw = json.loads((HERE / "fixtures" / "rows.json").read_text())
     want1, want2 = expected_rows(raw["page1"]), expected_rows(raw["page2"])
@@ -536,7 +604,8 @@ def step13(env) -> None:
        all(v["open"] == 200 and v["tables"] in (200, 502) for v in pg.values()),
        {k: (v["open"], v["tables"]) for k, v in pg.items()})
     ck("each tables read is one executed ledger row, as is each open",
-       o["ledger_tables"] == len(pg) and o["ledger_open"] == len(pg), (o["ledger_tables"], o["ledger_open"]))
+       o["ledger_tables"] == len(pg) + len(rp) and o["ledger_open"] == len(pg) + len(rp),
+       (o["ledger_tables"], o["ledger_open"], len(pg), len(rp)))
     want_cls = {"search.html": "search", "results_table.html": "results", "results_table_p2.html": "results",
                 "results_cards.html": "results", "results_json.html": "results", "no_results.html": "empty",
                 "ambiguous.html": "ambiguous", "login.html": "login", "captcha.html": "captcha",

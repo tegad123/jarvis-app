@@ -3,7 +3,8 @@
 Made-up pages only. /Matrix/Search is the search form; posting it answers by
 the Area field (see RESULTS_BY_AREA) and records every post so a test can
 assert which filters were entered. /f/<name> serves any fixture as is;
-/f/too_many.html answers 429 like a rate-limited site. /__log (for the test,
+/f/too_many.html answers 429 like a rate-limited site. /f/real/<name> serves
+a sanitized captured page from REAL (docs/mls/FIXTURE-CAPTURE.md). /__log (for the test,
 fetched directly, never through the browser) lists every load and post.
 """
 import http.server
@@ -14,6 +15,7 @@ from typing import Dict, List
 from urllib.parse import parse_qs, urlsplit
 
 FIXTURES = pathlib.Path(__file__).resolve().parent / "fixtures"
+REAL = FIXTURES / "real"
 RESULTS_BY_AREA = {
     "heights": "results_table.html",
     "heights cards": "results_cards.html",
@@ -35,8 +37,8 @@ class Site(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
-    def _send(self, name: str, code: int = 200) -> None:
-        body = (FIXTURES / name).read_bytes() if name else b"<!doctype html><title>frame</title>"
+    def _send(self, name: str, code: int = 200, root: pathlib.Path = FIXTURES) -> None:
+        body = (root / name).read_bytes() if name else b"<!doctype html><title>frame</title>"
         self.send_response(429 if name == "too_many.html" else code)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -64,6 +66,10 @@ class Site(http.server.BaseHTTPRequestHandler):
             return self._send("login.html")
         if u.path == "/recaptcha/frame":
             return self._send("")
+        if u.path.startswith("/f/real/"):
+            name = u.path[8:]
+            if "/" not in name and (REAL / name).is_file():
+                return self._send(name, root=REAL)
         if u.path.startswith("/f/"):
             name = u.path[3:]
             if (FIXTURES / name).is_file() and "/" not in name:
