@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from . import broker, config, tasks_store
+from .appointment_time import as_chicago, local_label, resolve_appointment
 from .inbox_watch import _when, parse_plan
 
 log = logging.getLogger("app.imessage_watch")
@@ -38,9 +39,14 @@ _PROMPT = (
     "If he did not commit to anything, tasks is empty. Do not turn other people's requests "
     "into tasks unless his new message agrees to do them. deadline is YYYY-MM-DD or empty. "
     "calendar is an object with title, start, end, and attendees only when a meeting is "
-    "confirmed or asked for AND a clock time is given. start and end are ISO datetimes. "
+    "confirmed or asked for AND a clock time is given AND a day can be told. "
+    "Resolve today, tonight, tomorrow, tomorrow night, a weekday, or 'next <weekday>' "
+    "against the timestamp of the message that says them (shown with each message). "
+    "A clock time in the new message combines with a day stated in a recent message. "
+    "start and end are ISO 8601 datetimes with the America/Chicago offset. "
+    "end is one hour after start unless the messages say otherwise. "
     "attendees are email addresses actually written in the messages. "
-    "If the time is missing, calendar is null. Do not invent a time or a date."
+    "If the time or the day is missing, calendar is null. Do not invent a time or a date."
 )
 
 
@@ -114,7 +120,7 @@ def _context(chat: str, sent_at: str) -> str:
     from . import imessage
     f = imessage._fernet()
     rows = imessage._db().execute(
-        """SELECT sender, is_from_me, text_cipher FROM imessages
+        """SELECT sender, is_from_me, sent_at, text_cipher FROM imessages
            WHERE person_key=? AND chat=? AND sent_at<? ORDER BY sent_at DESC LIMIT 6""",
         (PERSON, chat, sent_at),
     ).fetchall()
@@ -123,23 +129,82 @@ def _context(chat: str, sent_at: str) -> str:
         who = "me" if row["is_from_me"] else (row["sender"] or "them")
         try:
             body = f.decrypt(row["text_cipher"]).decode()
+            when = local_label(datetime.fromisoformat(str(row["sent_at"])))
         except Exception:
             continue
-        lines.append(f"{who}: {body[:500]}")
+        lines.append(f"[{when}] {who}: {body[:500]}")
     return "\n".join(lines)
 
 
-def _extract(chat: str, new_text: str, prior: str, from_me: bool) -> Dict[str, Any]:
+def _prior(chat: str, sent_at: str) -> List[tuple]:
+    """Recent texts in this chat, oldest last, each with its own timestamp."""
+    from . import imessage
+    fernet = imessage._fernet()
+    rows = imessage._db().execute(
+        """SELECT is_from_me, sender, sent_at, text_cipher FROM imessages
+           WHERE person_key=? AND chat=? AND sent_at<? ORDER BY sent_at DESC LIMIT 6""",
+        (PERSON, chat, sent_at),
+    ).fetchall()
+    out = []
+    for row in rows:
+        try:
+            body = fernet.decrypt(row["text_cipher"]).decode()
+            moment = datetime.fromisoformat(str(row["sent_at"]))
+        except Exception:
+            continue
+        who = "me" if row["is_from_me"] else (row["sender"] or "them")
+        out.append((f"{who}: {body}", moment))
+    return out
+
+
+def _complete_plan(plan: Dict[str, Any], text: str, sent_at: str, prior: List[tuple]) -> Dict[str, Any]:
+    """Fill a real start time when the day and the clock are both stated."""
+    try:
+        moment = datetime.fromisoformat(sent_at)
+    except ValueError:
+        return plan
+    titles = [task["title"] for task in plan.get("tasks") or []]
+    existing = plan.get("calendar") if isinstance(plan.get("calendar"), dict) else None
+    if not (existing and _when(str(existing.get("start") or ""))):
+        span = resolve_appointment(text, moment, prior, titles)
+        if span:
+            start, end = span
+            title = titles[0] if titles else "Appointment"
+            plan["calendar"] = {
+                "title": title[:200],
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "attendees": (existing or {}).get("attendees") or [],
+            }
+            existing = plan["calendar"]
+    start_iso = _when(str((existing or {}).get("start") or ""))
+    if start_iso:
+        day = as_chicago(datetime.fromisoformat(start_iso)).date().isoformat()
+        for task in plan.get("tasks") or []:
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", task.get("deadline") or ""):
+                task["deadline"] = day
+        if existing and not _when(str(existing.get("end") or "")):
+            existing["end"] = (datetime.fromisoformat(start_iso) + timedelta(hours=1)).isoformat()
+    return plan
+
+
+def _extract(chat: str, new_text: str, prior: str, from_me: bool, sent_at: str = "") -> Dict[str, Any]:
     key = os.environ.get("API_SERVER_KEY", "")
     if not key:
         raise RuntimeError("no model key")
     who = "me" if from_me else "someone else"
+    when = ""
+    try:
+        when = local_label(datetime.fromisoformat(sent_at))
+    except ValueError:
+        when = sent_at
     payload = {
         "model": "claude-sonnet-5-5",
         "max_tokens": 700,
         "system": _PROMPT,
         "messages": [{"role": "user", "content":
-                      f"Chat: {chat}\n\nRecent messages:\n{prior[:6000]}\n\nNew message from {who}:\n{new_text[:2000]}"}],
+                      f"Chat: {chat}\nNew message local time: {when}\n\n"
+                      f"Recent messages:\n{prior[:6000]}\n\nNew message from {who}:\n{new_text[:2000]}"}],
     }
     resp = httpx.post(
         "http://127.0.0.1:8810/api/model/anthropic/v1/messages",
@@ -183,7 +248,7 @@ def _calendar(guid: str, chat: str, cal: Optional[Dict[str, Any]]) -> str:
         return ""
     end = _when(str(cal.get("end") or ""))
     if not end:
-        end = (datetime.fromisoformat(start) + timedelta(minutes=30)).isoformat()
+        end = (datetime.fromisoformat(start) + timedelta(hours=1)).isoformat()
     title = str(cal.get("title") or "Meeting")[:200]
     body = {
         "summary": title,
@@ -225,12 +290,15 @@ def _handle(row: sqlite3.Row) -> None:
         _mark(guid, "skipped", note="not from Spencer")
         return
     chat = str(row["chat"] or "")
+    sent_at = str(row["sent_at"] or "")
+    prior = _prior(chat, sent_at)
     try:
-        plan = _extract(chat, text, _context(chat, str(row["sent_at"])), from_me)
+        plan = _extract(chat, text, _context(chat, sent_at), from_me, sent_at)
     except Exception as exc:
         log.error("imessage_watch: could not read what the text committed to (%s)", type(exc).__name__)
         _mark(guid, "failed", note="could not read the commitment")
         return
+    plan = _complete_plan(plan, text, sent_at, prior)
     task_ids = _add_tasks(guid, chat, plan["tasks"]) if from_me else []
     cal = _calendar(guid, chat, plan["calendar"])
     note = []
