@@ -30,14 +30,21 @@ import time
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote, quote_plus, urlsplit
 
+# -I leaves the script's own directory off the import path. The helpers are
+# copied next to this file (provision_tenant.BROWSER_CODE_FILES); appended, so
+# nothing beside it can shadow the standard library.
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+import browser_launch  # noqa: E402
+
 BIN = os.environ.get("JARVIS_BROWSER_BIN", "")
 PROFILE = os.environ.get("JARVIS_BROWSER_PROFILE", "")
 EGRESS = os.environ.get("JARVIS_EGRESS_SOCKET", "")
 IDLE_CLOSE_S = int(os.environ.get("JARVIS_BROWSER_IDLE_S", "600"))
 IDLE_EXIT_S = int(os.environ.get("JARVIS_BROWSER_EXIT_S", "1800"))
 MAX_OPEN = int(os.environ.get("JARVIS_BROWSER_MAX_OPEN", "2"))
-PERSON = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
-WIDTH, HEIGHT = 1280, 800
+PERSON = browser_launch.PERSON
+MODE = os.environ.get("JARVIS_BROWSER_MODE", "headless").strip().lower() or "headless"
+WIDTH, HEIGHT = browser_launch.size(MODE)
 SNAPSHOT_CHARS = 12000
 LOAD_TIMEOUT_S = 15
 INTERACTIVE = {"button", "link", "textbox", "searchbox", "combobox", "checkbox", "radio", "menuitem", "tab",
@@ -159,14 +166,7 @@ class Browser:
         os.makedirs(self.profile, mode=0o700, exist_ok=True)
         to_chrome_r, to_chrome_w = os.pipe()
         from_chrome_r, from_chrome_w = os.pipe()
-        args = [f"--user-data-dir={self.profile}", "--headless", "--no-sandbox", "--disable-dev-shm-usage",
-                "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--disable-sync",
-                "--disable-background-networking", "--disable-component-update", "--disable-default-apps",
-                "--disable-extensions", "--disable-quic", "--mute-audio", "--hide-scrollbars",
-                "--disable-features=IsolateOrigins,site-per-process,MediaRouter",
-                "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
-                f"--proxy-server=http://127.0.0.1:{self.forward_port}", "--proxy-bypass-list=<-loopback>",
-                f"--window-size={WIDTH},{HEIGHT}", "--remote-debugging-pipe", "about:blank"]
+        args = browser_launch.chrome_args(self.profile, self.forward_port, MODE)
         # bash, not sh: dash cannot redirect descriptors above 9.
         shell = (f'exec "$0" "$@" 3<&{to_chrome_r} 4>&{from_chrome_w} {to_chrome_r}<&- {from_chrome_w}>&- '
                  f'{to_chrome_w}>&- {from_chrome_r}<&-')

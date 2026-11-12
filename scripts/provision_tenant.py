@@ -64,9 +64,17 @@ UNIT_DIR = Path("/etc/systemd/system")
 # (the browser user is deliberately not in the tenant group, so it cannot read there).
 BROWSER_RUNTIME = Path("/opt/jarvis/browser/chrome-headless-shell-1234")
 BROWSER_BIN = BROWSER_RUNTIME / "chrome-headless-shell"
+# browser_mode: headed runs the full Chromium build (same revision) as a
+# window on a virtual display, so a person can take it over live.
+BROWSER_HEADED_RUNTIME = Path("/opt/jarvis/browser/chrome-1234")
+BROWSER_HEADED_BIN = BROWSER_HEADED_RUNTIME / "chrome"
+XVFB_BIN = Path("/usr/bin/Xvfb")
+X11VNC_BIN = Path("/usr/bin/x11vnc")
+BROWSER_POLICY_FILE = Path("/etc/opt/chrome_for_testing/policies/managed/jarvis.json")
+BROWSER_MODES = ("headless", "headed")
 BROWSER_CODE_ROOT = Path("/opt/jarvis/browser-code")
 BROWSER_STATE_ROOT = Path("/var/lib/jarvis-browser")
-BROWSER_CODE_FILES = ("browser_worker.py", "browser_egress.py")
+BROWSER_CODE_FILES = ("browser_worker.py", "browser_egress.py", "browser_launch.py")
 BROWSER_TEST_VARS = ("JARVIS_BROWSER_TEST", "JARVIS_EGRESS_TEST_ALLOW", "JARVIS_BROWSER_LISTEN",
                      "JARVIS_EGRESS_LISTEN")
 
@@ -256,6 +264,38 @@ def browser_enabled(manifest: dict) -> bool:
     if v != "enabled":
         die("browser must be enabled | off (absent = off)")
     return True
+
+
+def browser_mode(manifest: dict) -> str:
+    """`browser_mode: headless | headed`, absent = headless: a tenant's browser
+    does not change until someone sets it."""
+    v = manifest.get("browser_mode")
+    if v in (None, ""):
+        return "headless"
+    if v not in BROWSER_MODES:
+        die(f"browser_mode must be {' | '.join(BROWSER_MODES)} (absent = headless)")
+    return str(v)
+
+
+def browser_unit_vars(manifest: dict) -> Dict[str, str]:
+    mode = browser_mode(manifest)
+    if mode == "headless":
+        return {"BROWSER_BIN": str(BROWSER_BIN), "BROWSER_MODE_LINES": "Environment=JARVIS_BROWSER_MODE=headless"}
+    return {"BROWSER_BIN": str(BROWSER_HEADED_BIN),
+            "BROWSER_MODE_LINES": "\n".join([
+                "Environment=JARVIS_BROWSER_MODE=headed",
+                f"Environment=JARVIS_XVFB_BIN={XVFB_BIN}",
+                f"Environment=JARVIS_X11VNC_BIN={X11VNC_BIN}",
+                f"Environment=JARVIS_BROWSER_POLICY={BROWSER_POLICY_FILE}"])}
+
+
+def browser_headed_problems() -> List[str]:
+    """What a headed tenant needs on this server before it can start."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
+    import browser_launch  # noqa: PLC0415
+    out = [f"{p} is missing" for p in (BROWSER_HEADED_BIN, XVFB_BIN, X11VNC_BIN) if not os.access(p, os.X_OK)]
+    pol = browser_launch.policy_problem(str(BROWSER_POLICY_FILE))
+    return out + ([pol] if pol else [])
 
 
 def preflight_owner_addresses(manifest: dict) -> List[str]:
@@ -1018,7 +1058,7 @@ def common_map(manifest: dict, posture: dict, fernet: str, force: str,
                "DATA_DIRS": " ".join(str(d) for d in skill_data_dirs(Path(opt), shipped))}
     if iso and browser_enabled(manifest):
         iso.update({"WEB_USER": n["web_user"], "BROWSER_CODE": str(BROWSER_CODE_ROOT / slug),
-                    "BROWSER_BIN": str(BROWSER_BIN),
+                    **browser_unit_vars(manifest),
                     "BROWSER_MAX_OPEN": str(int((manifest.get("browser_limits") or {}).get("max_open", 2))),
                     "BROWSER_MEMORY_MAX": str((manifest.get("browser_limits") or {}).get("memory_max", "1G")),
                     "BROWSER_LINES": f"Environment=JARVIS_BROWSER=on\n"
@@ -1486,6 +1526,10 @@ def validate_manifest(manifest: dict) -> tuple:
             die("browser: enabled needs isolation: two_user")
         if not os.access(BROWSER_BIN, os.X_OK):
             die(f"browser: enabled but {BROWSER_BIN} is missing; run scripts/install_browser_runtime.py")
+        if browser_mode(manifest) == "headed":
+            bad = browser_headed_problems()
+            if bad:
+                die("browser_mode: headed but " + "; ".join(bad) + " (docs/plans/browser-har-comps.md section 12)")
     signin_lines(manifest)
     log(f"venv=platform: {PLATFORM_VENV} (a copy; pip installs there do not reach live)")
 
