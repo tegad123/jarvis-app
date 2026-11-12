@@ -30,7 +30,8 @@ POLICY = {
     "URLAllowlist": ["about:blank"],
     "AllowFileSelectionDialogs": False,
     "DownloadRestrictions": 3,
-    "DeveloperToolsAvailability": 2,
+    # Not DeveloperToolsAvailability=2: it also refuses the DevTools pipe the
+    # worker drives Chromium with. The devtools:// pages are blocked above.
     "PasswordManagerEnabled": False,
     "AutofillAddressEnabled": False,
     "AutofillCreditCardEnabled": False,
@@ -43,8 +44,23 @@ POLICY = {
     "HomepageLocation": "about:blank",
     "NewTabPageLocation": "about:blank",
     "RestoreOnStartup": 1,
+    # The full build calls Google on its own (updates, sign-in, suggestions);
+    # the headless shell never did. None of that is the person's browsing.
+    "ComponentUpdatesEnabled": False,
+    "MetricsReportingEnabled": False,
+    "SearchSuggestEnabled": False,
+    "NetworkPredictionOptions": 2,
+    "TranslateEnabled": False,
+    "SpellcheckEnabled": False,
+    "AlternateErrorPagesEnabled": False,
+    "UrlKeyedAnonymizedDataCollectionEnabled": False,
+    "BackgroundModeEnabled": False,
+    "DefaultBrowserSettingEnabled": False,
+    "PromotionalTabsEnabled": False,
+    "SafeBrowsingProtectionLevel": 0,
+    "ShoppingListEnabled": False,
 }
-POLICY_MUST = ("URLBlocklist", "AllowFileSelectionDialogs", "DownloadRestrictions", "DeveloperToolsAvailability")
+POLICY_MUST = ("URLBlocklist", "URLAllowlist", "AllowFileSelectionDialogs", "DownloadRestrictions")
 
 
 def size(mode: str):
@@ -85,13 +101,28 @@ def chrome_args(profile: str, proxy_port: int, mode: str) -> list:
             "--window-position=0,0", "--remote-debugging-pipe", "about:blank"]
 
 
-def xvfb_args(binary: str, display_fd: int, mode: str = "headed") -> list:
-    """Xvfb picks a free display itself (-displayfd) and listens on its unix
-    socket only: no TCP, and no abstract socket (which a private /tmp would
-    not hide)."""
+X_SOCKET_DIR = "/tmp/.X11-unix"
+DISPLAY_RANGE = range(10, 500)
+
+
+def free_display(taken) -> int:
+    """A display number nobody uses. Not Xvfb's -displayfd: with the abstract
+    socket off it takes no lock and replaces a socket already in use, so two
+    people would share one screen. The worker is the only thing starting
+    Xvfb in its unit, so it hands out numbers itself."""
+    for n in DISPLAY_RANGE:
+        if n not in taken and not os.path.exists(os.path.join(X_SOCKET_DIR, f"X{n}")) \
+                and not os.path.exists(f"/tmp/.X{n}-lock"):
+            return n
+    raise RuntimeError("no free display")
+
+
+def xvfb_args(binary: str, display: int, mode: str = "headed") -> list:
+    """Unix socket only: no TCP, and no abstract socket (which a private /tmp
+    would not hide)."""
     w, h = size(mode)
-    return [binary, "-displayfd", str(display_fd), "-screen", "0", f"{w}x{h}x24", "-nolisten", "tcp",
-            "-nolisten", "local", "-noreset"]
+    return [binary, f":{display}", "-screen", "0", f"{w}x{h}x24", "-nolisten", "tcp", "-nolisten", "local",
+            "-noreset"]
 
 
 def x11vnc_args(binary: str, display: str, sock: str) -> list:

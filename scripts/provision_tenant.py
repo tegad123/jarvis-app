@@ -1060,7 +1060,10 @@ def common_map(manifest: dict, posture: dict, fernet: str, force: str,
         iso.update({"WEB_USER": n["web_user"], "BROWSER_CODE": str(BROWSER_CODE_ROOT / slug),
                     **browser_unit_vars(manifest),
                     "BROWSER_MAX_OPEN": str(int((manifest.get("browser_limits") or {}).get("max_open", 2))),
-                    "BROWSER_MEMORY_MAX": str((manifest.get("browser_limits") or {}).get("memory_max", "1G")),
+                    # Headed: two browsers with their displays measured ~600 MB
+                    # (PSS, verify_browser_headed.py); 2G leaves room for heavy pages.
+                    "BROWSER_MEMORY_MAX": str((manifest.get("browser_limits") or {}).get(
+                        "memory_max", "2G" if browser_mode(manifest) == "headed" else "1G")),
                     "BROWSER_LINES": f"Environment=JARVIS_BROWSER=on\n"
                                      f"Environment=JARVIS_BROWSER_SOCKET=/run/jarvis-browser/{slug}.sock"})
     elif iso:

@@ -42,6 +42,14 @@ EGRESS = os.environ.get("JARVIS_EGRESS_SOCKET", "")
 IDLE_CLOSE_S = int(os.environ.get("JARVIS_BROWSER_IDLE_S", "600"))
 IDLE_EXIT_S = int(os.environ.get("JARVIS_BROWSER_EXIT_S", "1800"))
 MAX_OPEN = int(os.environ.get("JARVIS_BROWSER_MAX_OPEN", "2"))
+XVFB = os.environ.get("JARVIS_XVFB_BIN", "/usr/bin/Xvfb")
+X11VNC = os.environ.get("JARVIS_X11VNC_BIN", "/usr/bin/x11vnc")
+POLICY = os.environ.get("JARVIS_BROWSER_POLICY", browser_launch.POLICY_FILE)
+TEST = os.environ.get("JARVIS_BROWSER_TEST") == "1"
+# Canary only: lets the isolation test prove its own file:// check can fail.
+NO_GUARD = TEST and os.environ.get("JARVIS_BROWSER_TEST_NO_GUARD") == "1"
+NO_POLICY = NO_GUARD or (TEST and os.environ.get("JARVIS_BROWSER_TEST_NO_POLICY") == "1")
+WEB_SCHEMES = ("http", "https")
 PERSON = browser_launch.PERSON
 MODE = os.environ.get("JARVIS_BROWSER_MODE", "headless").strip().lower() or "headless"
 WIDTH, HEIGHT = browser_launch.size(MODE)
@@ -84,6 +92,14 @@ def refused_text(site: str, code: int) -> str:
 
 class CDPError(RuntimeError):
     pass
+
+
+VNC_DIR = "/tmp/jarvis-vnc"
+DISPLAYS: set = set()
+
+
+def nonweb(url: str) -> bool:
+    return url not in ("", "about:blank") and url.split(":", 1)[0].lower() not in WEB_SCHEMES
 
 
 class CDP:
@@ -157,13 +173,126 @@ class Browser:
         self.secrets: set = set()
         self.forward_port = forward_port
         self.last_used = time.monotonic()
+        self.xvfb: Optional[asyncio.subprocess.Process] = None
+        self.display = ""
+        self.vnc: Optional[asyncio.subprocess.Process] = None
+        self.viewers = 0
+        self.guarded = 0
 
     # ── lifecycle ──────────────────────────────────────────────────────────
+    def headed_problem(self) -> str:
+        if not browser_launch.headed_binary(BIN):
+            return f"{os.path.basename(BIN)} cannot show a window; headed needs the full Chromium"
+        if not os.access(XVFB, os.X_OK):
+            return f"Xvfb is missing at {XVFB}"
+        if NO_POLICY:
+            log(op="test_no_policy", guard=not NO_GUARD, why="test only: started without the managed policy")
+            return ""
+        return browser_launch.policy_problem(POLICY)
+
+    async def start_vnc(self) -> str:
+        """x11vnc for this person's display, on a unix socket in a 0700
+        directory of the unit's private /tmp. Started only for a view."""
+        sock = os.path.join(VNC_DIR, f"{self.person}.sock")
+        if self.vnc and self.vnc.returncode is None and os.path.exists(sock):
+            return sock
+        if not os.access(X11VNC, os.X_OK):
+            raise CDPError("view_unavailable: x11vnc is missing")
+        os.makedirs(VNC_DIR, mode=0o700, exist_ok=True)
+        os.chmod(VNC_DIR, 0o700)
+        if os.path.exists(sock):
+            os.unlink(sock)
+        self.vnc = await asyncio.create_subprocess_exec(
+            *browser_launch.x11vnc_args(X11VNC, self.display, sock), stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL, start_new_session=True)
+        for _ in range(80):
+            if os.path.exists(sock):
+                log(op="view_started", person=self.person)
+                return sock
+            if self.vnc.returncode is not None:
+                break
+            await asyncio.sleep(0.1)
+        await self.stop_vnc()
+        raise CDPError("view_unavailable: the live view did not start")
+
+    async def stop_vnc(self) -> None:
+        p, self.vnc = self.vnc, None
+        if p and p.returncode is None:
+            try:
+                os.killpg(p.pid, signal.SIGTERM)
+                await asyncio.wait_for(p.wait(), 5)
+            except (ProcessLookupError, asyncio.TimeoutError):
+                try:
+                    os.killpg(p.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            log(op="view_stopped", person=self.person)
+
+    async def guard(self, target: str, url: str) -> None:
+        """The backstop behind the managed policy: a tab on anything but the
+        web or about:blank goes straight back to about:blank."""
+        self.guarded += 1
+        log(op="nonweb_blocked", person=self.person, scheme=url.split(":", 1)[0][:20])
+        try:
+            if target == self.target and self.session:
+                await self.cdp.send("Page.navigate", {"url": "about:blank"}, session=self.session)
+                return
+            r = await self.cdp.send("Target.attachToTarget", {"targetId": target, "flatten": True})
+            await self.cdp.send("Page.navigate", {"url": "about:blank"}, session=r["sessionId"])
+            await self.cdp.send("Target.detachFromTarget", {"sessionId": r["sessionId"]})
+        except (CDPError, asyncio.TimeoutError, KeyError):
+            try:
+                await self.cdp.send("Target.closeTarget", {"targetId": target})
+            except (CDPError, asyncio.TimeoutError):
+                log(op="nonweb_guard_failed", person=self.person)
+
+    async def _start_display(self) -> None:
+        n = browser_launch.free_display(DISPLAYS)
+        DISPLAYS.add(n)
+        self.display = f":{n}"
+        self.xvfb = await asyncio.create_subprocess_exec(
+            *browser_launch.xvfb_args(XVFB, n, MODE), stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL, start_new_session=True)
+        sock = os.path.join(browser_launch.X_SOCKET_DIR, f"X{n}")
+        for _ in range(100):
+            if os.path.exists(sock) or self.xvfb.returncode is not None:
+                break
+            await asyncio.sleep(0.1)
+        if not os.path.exists(sock):
+            await self._stop_display()
+            raise CDPError("headed_unavailable: the virtual display did not start")
+
+    async def _stop_display(self) -> None:
+        for p in (self.vnc, self.xvfb):
+            if p and p.returncode is None:
+                try:
+                    os.killpg(p.pid, signal.SIGTERM)
+                    await asyncio.wait_for(p.wait(), 5)
+                except (ProcessLookupError, asyncio.TimeoutError):
+                    try:
+                        os.killpg(p.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+        if self.display:
+            DISPLAYS.discard(int(self.display[1:]))
+        self.vnc, self.xvfb, self.display = None, None, ""
+
     async def ensure(self) -> None:
         if self.cdp and not self.cdp.closed and self.session:
             return
         await self.close()
         os.makedirs(self.profile, mode=0o700, exist_ok=True)
+        env = None
+        if MODE == "headed":
+            why = self.headed_problem()
+            if why:
+                # Never a quiet headless start against a signed-in profile:
+                # that changes how the browser looks to the site.
+                log(op="headed_unavailable", person=self.person, why=why[:200])
+                raise CDPError(f"headed_unavailable: {why}")
+            browser_launch.prepare_profile(self.profile)
+            await self._start_display()
+            env = {**os.environ, "DISPLAY": self.display}
         to_chrome_r, to_chrome_w = os.pipe()
         from_chrome_r, from_chrome_w = os.pipe()
         args = browser_launch.chrome_args(self.profile, self.forward_port, MODE)
@@ -173,35 +302,47 @@ class Browser:
         self.proc = await asyncio.create_subprocess_exec(
             "/bin/bash", "-c", shell, BIN, *args, pass_fds=(to_chrome_r, from_chrome_w, to_chrome_w, from_chrome_r),
             stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
-            start_new_session=True)
+            start_new_session=True, env=env)
         os.close(to_chrome_r)
         os.close(from_chrome_w)
         os.set_blocking(from_chrome_r, False)
         self.cdp = CDP(from_chrome_r, to_chrome_w)
         self.cdp.listeners.append(self._event)
         self.cdp.start()
-        await self.cdp.send("Browser.setDownloadBehavior", {"behavior": "deny"})
+        try:
+            await self.cdp.send("Browser.setDownloadBehavior", {"behavior": "deny"})
+        except CDPError:
+            # Under the managed policy (DownloadRestrictions=3, which a headed
+            # start requires) Chromium refuses this call: downloads are
+            # already blocked. Anywhere else it must work.
+            if MODE != "headed" or NO_POLICY:
+                raise
+            log(op="downloads_by_policy", person=self.person)
         await self.cdp.send("Target.setDiscoverTargets", {"discover": True})
         pages = [t for t in (await self.cdp.send("Target.getTargets"))["targetInfos"] if t["type"] == "page"]
         target = pages[0]["targetId"] if pages else \
             (await self.cdp.send("Target.createTarget", {"url": "about:blank"}))["targetId"]
         await self._attach(target)
-        log(op="launch", person=self.person, pid=self.proc.pid)
+        log(op="launch", person=self.person, pid=self.proc.pid, mode=MODE)
 
     async def _attach(self, target: str) -> None:
         r = await self.cdp.send("Target.attachToTarget", {"targetId": target, "flatten": True})
         self.session, self.target, self.refs = r["sessionId"], target, {}
         for m in ("Page.enable", "DOM.enable", "Accessibility.enable", "Runtime.enable"):
             await self.cdp.send(m, session=self.session)
-        await self.cdp.send("Emulation.setDeviceMetricsOverride",
-                            {"width": WIDTH, "height": HEIGHT, "deviceScaleFactor": 1, "mobile": False},
-                            session=self.session)
+        if MODE != "headed":
+            # A headed window has its own real size.
+            await self.cdp.send("Emulation.setDeviceMetricsOverride",
+                                {"width": WIDTH, "height": HEIGHT, "deviceScaleFactor": 1, "mobile": False},
+                                session=self.session)
 
     def _event(self, msg: dict) -> None:
         method, p = msg.get("method"), msg.get("params") or {}
-        if method == "Target.targetCreated":
+        if method in ("Target.targetCreated", "Target.targetInfoChanged"):
             info = p.get("targetInfo") or {}
-            if info.get("type") == "page" and info.get("openerId"):
+            if info.get("type") == "page" and not NO_GUARD and nonweb(str(info.get("url") or "")):
+                asyncio.ensure_future(self.guard(info["targetId"], str(info.get("url"))))
+            elif method == "Target.targetCreated" and info.get("type") == "page" and info.get("openerId"):
                 asyncio.ensure_future(self._attach(info["targetId"]))
         elif method == "Target.targetDestroyed" and p.get("targetId") == self.target:
             self.session = None
@@ -242,6 +383,7 @@ class Browser:
                 except OSError:
                     pass
         self.proc, self.cdp, self.session, self.target, self.refs = None, None, None, None, {}
+        await self._stop_display()
 
     # ── helpers ────────────────────────────────────────────────────────────
     async def s(self, method: str, params: Optional[dict] = None, timeout: float = 20) -> dict:
@@ -405,10 +547,16 @@ class Browser:
         op = req.get("op")
         if op == "status":
             running = bool(self.cdp and not self.cdp.closed and self.session)
-            return {"ok": True, "running": running, **((await self.where()) if running else {})}
+            out = {"ok": True, "running": running, "mode": MODE, **((await self.where()) if running else {})}
+            if running and MODE == "headed":
+                out.update({"display": self.display, "viewing": self.viewers > 0, "guarded": self.guarded})
+            return out
         if op == "close":
             await self.close()
             return {"ok": True, "running": False}
+        if op == "view_stop":
+            await self.stop_vnc()
+            return {"ok": True}
         await self.ensure()
         if op == "open":
             url = str(req.get("url") or "")
@@ -587,6 +735,27 @@ async def _pipe(r: asyncio.StreamReader, w: asyncio.StreamWriter) -> None:
             pass
 
 
+async def _relay(r: asyncio.StreamReader, w: asyncio.StreamWriter, b: "Browser", sent: list, i: int) -> None:
+    """_pipe for a live view: bytes are counted, never logged, and keep the
+    browser from being closed as idle."""
+    try:
+        while True:
+            data = await r.read(65536)
+            if not data:
+                break
+            sent[i] += len(data)
+            b.last_used = time.monotonic()
+            w.write(data)
+            await w.drain()
+    except (ConnectionError, asyncio.CancelledError):
+        pass
+    finally:
+        try:
+            w.close()
+        except Exception:
+            pass
+
+
 async def _forward(cr: asyncio.StreamReader, cw: asyncio.StreamWriter) -> None:
     try:
         er, ew = await asyncio.open_unix_connection(EGRESS)
@@ -608,6 +777,9 @@ def _private_namespace() -> bool:
 async def main() -> None:
     if not BIN or not os.path.isfile(BIN) or not PROFILE or not EGRESS:
         log(op="refused", why="JARVIS_BROWSER_BIN, JARVIS_BROWSER_PROFILE and JARVIS_EGRESS_SOCKET are required")
+        sys.exit(2)
+    if MODE not in browser_launch.MODES:
+        log(op="refused", why=f"JARVIS_BROWSER_MODE must be one of {browser_launch.MODES}")
         sys.exit(2)
     if not _private_namespace() and os.environ.get("JARVIS_BROWSER_TEST") != "1":
         log(op="refused", why="not in a private network namespace (PrivateNetwork=yes)")
@@ -636,16 +808,46 @@ async def main() -> None:
                 await idle_one.close()
             return b
 
+    async def view(person: str, r: asyncio.StreamReader, w: asyncio.StreamWriter) -> None:
+        """After one JSON line back, this connection carries the RFB bytes of
+        this person's display, and nobody else's. Not under the browser's
+        lock: the agent's status requests still answer while a person looks."""
+        b = browsers.get(person)
+        if MODE != "headed" or b is None or not b.proc or not b.display:
+            w.write(json.dumps({"ok": False, "error": "not_running"}).encode() + b"\n")
+            await w.drain()
+            return
+        try:
+            sock = await b.start_vnc()
+            vr, vw = await asyncio.open_unix_connection(sock)
+        except (CDPError, OSError) as exc:
+            w.write(json.dumps({"ok": False, "error": str(exc)[:200]}).encode() + b"\n")
+            await w.drain()
+            return
+        w.write(b'{"ok": true}\n')
+        await w.drain()
+        b.viewers += 1
+        sent = [0, 0]
+        log(op="view_open", person=person[:64])
+        try:
+            await asyncio.gather(_relay(r, vw, b, sent, 0), _relay(vr, w, b, sent, 1))
+        finally:
+            b.viewers -= 1
+            log(op="view_close", person=person[:64], bytes_in=sent[0], bytes_out=sent[1])
+
     async def handle(r: asyncio.StreamReader, w: asyncio.StreamWriter) -> None:
         try:
             line = await asyncio.wait_for(r.readline(), 10)
             req = json.loads(line or b"{}")
             person = str(req.get("person") or "")
+            if req.get("op") == "view" and PERSON.fullmatch(person):
+                await view(person, r, w)
+                return
             if not PERSON.fullmatch(person):
                 out = {"ok": False, "error": "every request names the person whose browser it is"}
             else:
                 try:
-                    b = await browser_for(person, req.get("op") not in ("status", "close"))
+                    b = await browser_for(person, req.get("op") not in ("status", "close", "view_stop"))
                     async with b.lock:
                         b.last_used = time.monotonic()
                         try:
@@ -677,7 +879,7 @@ async def main() -> None:
             os.unlink(path)
         server = await asyncio.start_unix_server(handle, path=path)
         os.chmod(path, 0o600)
-    log(op="ready", forward_port=port, max_open=MAX_OPEN, chrome=os.path.basename(os.path.dirname(BIN)))
+    log(op="ready", forward_port=port, max_open=MAX_OPEN, chrome=os.path.basename(os.path.dirname(BIN)), mode=MODE)
     stop = asyncio.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
         asyncio.get_running_loop().add_signal_handler(sig, stop.set)
@@ -687,7 +889,7 @@ async def main() -> None:
             await asyncio.sleep(15)
             now = time.monotonic()
             for b in list(browsers.values()):
-                if b.proc and now - b.last_used > IDLE_CLOSE_S and not b.lock.locked():
+                if b.proc and now - b.last_used > IDLE_CLOSE_S and not b.lock.locked() and not b.viewers:
                     await b.close()
             last = max([b.last_used for b in browsers.values()] + [started])
             if now - last > IDLE_EXIT_S and not any(b.lock.locked() for b in browsers.values()):

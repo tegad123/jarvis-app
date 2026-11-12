@@ -117,7 +117,8 @@ def main() -> int:
            and bl.headed_binary("/opt/jarvis/browser/chrome-1234/chrome"))
         x = bl.xvfb_args("/usr/bin/Xvfb", 7)
         ck("Xvfb listens on neither TCP nor an abstract socket",
-           x[x.index("-nolisten") + 1] == "tcp" and "local" in x and "-displayfd" in x)
+           x[x.index("-nolisten") + 1] == "tcp" and "local" in x and x[1] == ":7")
+        ck("a display already in use is never handed out", bl.free_display({10, 11}) not in (10, 11))
         v = bl.x11vnc_args("/usr/bin/x11vnc", ":3", "/tmp/s/dana.sock")
         ck("x11vnc: unix socket only, nothing sent to the viewer's clipboard",
            v[v.index("-rfbport") + 1] == "0" and v[v.index("-rfbportv6") + 1] == "-1" and "-noipv6" in v
@@ -178,6 +179,27 @@ def main() -> int:
         except SystemExit:
             ck("an invalid browser_mode is refused", True)
         ck("absent browser_mode means headless", pt.browser_mode({"browser": "enabled"}) == "headless")
+        print("the runtime installer (into a temp directory, never /opt or /etc):")
+        import install_browser_runtime as ibr  # noqa: PLC0415
+        src = tmp / "src"
+        src.mkdir()
+        (src / "chrome").write_text("#!/bin/sh\necho 'Chromium 151 test'\n")
+        (src / "chrome").chmod(0o777)
+        ibr.check = lambda runtime, binary: None
+        rt = tmp / "opt" / "chrome-1234"
+        ibr.install(src, rt, rt / "chrome")
+        mode = (rt / "chrome").stat().st_mode & 0o777
+        ck("the full build is copied root-owned and not writable by others", (rt / "chrome").stat().st_uid == 0
+           and not mode & 0o022, oct(mode))
+        pf = tmp / "etc" / "managed" / "jarvis.json"
+        ibr.install_policy(pf)
+        ck("the policy is written root-owned 0644 and passes the check", oct(pf.stat().st_mode & 0o777) == "0o644"
+           and pf.stat().st_uid == 0 and bl.policy_problem(str(pf)) == "")
+        try:
+            ibr.install(tmp / "nowhere", tmp / "opt" / "x", tmp / "opt" / "x" / "chrome")
+            ck("with no Chromium to copy it refuses and downloads nothing", False)
+        except SystemExit as exc:
+            ck("with no Chromium to copy it refuses and downloads nothing", "nothing is downloaded" in str(exc))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"{sum(ok)}/{len(ok)} passed")
