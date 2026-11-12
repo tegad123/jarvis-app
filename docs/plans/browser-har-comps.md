@@ -546,11 +546,14 @@ CREATE INDEX IF NOT EXISTS comps_runs_person ON comps_runs (person_key, started_
   once older than `comps.keep_days`. The clearing runs when a new run starts
   and logs how many rows it cleared.
 - `tenant_delete.py` deletes SQLite tables by listing them, so the data goes
-  with the tenant; its verify script counts tables and must be updated. The
-  profile directories on disk are a separate matter: find where tenant
-  deletion handles `/var/lib/jarvis-browser/<slug>` today (teardown removes
-  it; in-app deletion did not appear to) and make sure profiles do not
-  outlive a deleted tenant or a removed person.
+  with the tenant; its verify script counts tables and must be updated.
+- The profile directories on disk are a separate matter. Operator teardown in
+  `provision_tenant.py` removes `/var/lib/jarvis-browser/<slug>`. In-app
+  deletion (`tenant_delete.py`) only clears the in-memory "needs you" list
+  and does not touch profiles, and nothing in `accounts.py` or `team.py`
+  mentions the browser when a person is removed. Step 17 closes both, so a
+  signed-in HAR session does not outlive a deleted tenant or a removed
+  person.
 
 ## 7. Settings and switches
 
