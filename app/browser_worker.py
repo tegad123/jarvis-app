@@ -509,7 +509,8 @@ class Browser:
             return {}
         href, action = str(v.get("href") or "")[:500], str(v.get("form_action") or "")[:500]
         return {"href": href, "link_site": site_of(href) if href else "", "download": bool(v.get("download")),
-                "form_method": str(v.get("form_method") or "")[:10], "form_site": site_of(action) if action else "",
+                "form_method": str(v.get("form_method") or "")[:10], "form_action": action,
+                "form_site": site_of(action) if action else "",
                 "contenteditable": bool(v.get("contenteditable"))}
 
     async def _center(self, backend: int):

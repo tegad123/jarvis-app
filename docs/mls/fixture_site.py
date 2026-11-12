@@ -3,9 +3,11 @@
 Made-up pages only. /Matrix/Search is the search form; posting it answers by
 the Area field (see RESULTS_BY_AREA) and records every post so a test can
 assert which filters were entered. /f/<name> serves any fixture as is;
-/f/too_many.html answers 429 like a rate-limited site.
+/f/too_many.html answers 429 like a rate-limited site. /__log (for the test,
+fetched directly, never through the browser) lists every load and post.
 """
 import http.server
+import json
 import pathlib
 import threading
 from typing import Dict, List
@@ -50,6 +52,14 @@ class Site(http.server.BaseHTTPRequestHandler):
         if u.path == "/Matrix/Results":
             page = parse_qs(u.query).get("page", ["1"])[0]
             return self._send("results_table_p2.html" if page == "2" else "results_table.html")
+        if u.path == "/__log":
+            with self.lock:
+                body = json.dumps({"loads": self.loads, "posts": self.posts}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            return self.wfile.write(body)
         if u.path == "/Matrix/Login":
             return self._send("login.html")
         if u.path == "/recaptcha/frame":

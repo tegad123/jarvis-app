@@ -13,11 +13,13 @@ name is never read, which is what keeps listing agents' names, phones and
 emails, showing instructions and remarks out of a Listing.
 """
 import json
+import random
 import re
+import time
 from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
 
-from .mls import Listing
+from .mls import Listing, Result
 
 # header text (normalised by _norm) → Listing field
 COLUMNS = {
@@ -302,3 +304,141 @@ def boxes(snapshot: str, table: Dict[str, Tuple[str, ...]]) -> Dict[str, str]:
             if name in labels and value not in found:
                 found[value] = ref
     return found
+
+
+# ── the page flow ────────────────────────────────────────────────────────────
+
+SEARCH_BUTTON_NAMES = ("search", "search now", "show results", "view results", "results")
+NEXT_NAMES = ("next", "next page", "next ›", "next »", "›", "»")
+STOP_SAY = {
+    "login": "Matrix is asking you to sign in. Tap Take over, sign in yourself, then tap I'm done and ask again.",
+    "captcha": "Matrix is showing a human check. Tap Take over and complete it yourself, then ask again.",
+    "two_factor": "Matrix is asking for a verification code. Tap Take over and enter it yourself, then ask again.",
+    "taken_over": "You're using the browser yourself right now. Hand it back, then ask again.",
+    "allow_reading": "Allow Jarvis to keep reading {site} (the card in the browser window), then ask again.",
+}
+_sleep = time.sleep
+_uniform = random.uniform
+
+
+class Stop(Exception):
+    def __init__(self, result: Result):
+        super().__init__(result.state)
+        self.result = result
+
+
+def _fmt(fld: str, v: Any) -> str:
+    if fld.startswith("date"):
+        d = date.fromisoformat(v)
+        return f"{d.month:02d}/{d.day:02d}/{d.year}"
+    if fld == "zip_codes":
+        return ", ".join(v)
+    if isinstance(v, float):
+        return f"{v:g}"
+    return str(v)
+
+
+def _checked(snapshot: str, ref: str) -> bool:
+    m = re.search(r"\[" + re.escape(ref) + r"\] checkbox \"[^\"]*\"([^\n]*)", snapshot)
+    return bool(m and "[checked]" in m.group(1))
+
+
+def _named(snapshot: str, roles: Tuple[str, ...], names: Tuple[str, ...]) -> Optional[str]:
+    return next((ref for ref, role, name in controls(snapshot) if role in roles and name in names), None)
+
+
+def read(q, budget, ctx: Dict[str, Any], gate=None) -> Result:
+    """One search on Matrix through the person's own browser. Every page load
+    draws on the budget and waits a random pause first; every gesture goes
+    through browser.gate() as the person, so the ledger, Take over and the
+    read allowance all apply. Never retries: any stop ends the run."""
+    from . import browser  # noqa: PLC0415
+    g = gate or browser.gate
+    person, s, gctx = ctx["person"], ctx["settings"], ctx["gate_ctx"]
+
+    def call(op: str, args: Dict[str, Any], loads: bool) -> Dict[str, Any]:
+        if loads:
+            budget.draw()
+            lo, hi = s["pause_seconds"]
+            _sleep(_uniform(lo, hi))
+        st, body = g(op, args, gctx, person)
+        if st == 200:
+            return body
+        err = body.get("error")
+        if err == "taken_over":
+            raise Stop(Result("needs_person", stop_kind="taken_over", detail=STOP_SAY["taken_over"]))
+        if err == "approval_required" and body.get("reading"):
+            site = body.get("site") or s["site"]
+            raise Stop(Result("needs_person", stop_kind="allow_reading",
+                              detail=STOP_SAY["allow_reading"].format(site=site)))
+        if err == "browser_unavailable":
+            raise Stop(Result("failed", stop_kind="browser_unavailable", detail="The browser isn't running right now."))
+        if st == 502:
+            return body
+        raise Stop(Result("failed", detail=f"The browser refused a step of the search ({err or st})."))
+
+    def look() -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
+        page = call("tables", {"snapshot": True}, False)
+        cls, det = classify(page)
+        if cls in ("login", "captcha", "two_factor"):
+            site = browser.site_key(page.get("url") or "") or s["site"]
+            browser.mark_site(person, site, "needs_signin")
+            browser._ask_person(person, STOP_SAY[cls], gctx, site, f"mls_{cls}")
+            raise Stop(Result("needs_person", stop_kind=cls, detail=STOP_SAY[cls]))
+        if cls == "blocked":
+            raise Stop(Result("blocked", stop_kind="blocked",
+                              detail="Matrix refused or slowed the search. Searches stop for a while; nothing was retried."))
+        if cls == "ambiguous":
+            raise Stop(Result("ambiguous", choices=det.get("choices") or [],
+                              detail="The area or address matches more than one thing on Matrix."))
+        if cls == "unknown":
+            raise Stop(Result("unreadable", detail="Matrix showed a page the reader doesn't recognise; nothing was guessed."))
+        return cls, page, det
+
+    try:
+        call("open", {"url": s["start_url"]}, True)
+        cls, page, _ = look()
+        if cls != "search":
+            raise Stop(Result("unreadable", detail="The Matrix start page isn't the search form."))
+        snap = page.get("snapshot") or ""
+        for fld in FILTER_LABELS:
+            v = getattr(q, fld, None)
+            if v in (None, (), ""):
+                continue
+            ref = search_fields(snap).get(fld)
+            if not ref:
+                raise Stop(Result("unreadable", detail=f"The search page has no field for {fld.replace('_', ' ')}."))
+            snap = call("type", {"element": ref, "text": _fmt(fld, v)}, False).get("snapshot") or snap
+        for wanted, table, label in ((set(q.statuses), STATUS_BOXES, "status"),
+                                     (set(q.property_types), TYPE_BOXES, "property type")):
+            if not wanted:
+                continue
+            refs = boxes(snap, table)
+            missing = wanted - set(refs)
+            if missing:
+                raise Stop(Result("unreadable", detail=f"The search page has no {label} box for {sorted(missing)[0]}."))
+            for value, ref in refs.items():
+                if (value in wanted) != _checked(snap, ref):
+                    snap = call("click", {"element": ref}, False).get("snapshot") or snap
+        button = _named(snap, ("button",), SEARCH_BUTTON_NAMES)
+        if not button:
+            raise Stop(Result("unreadable", detail="The search page has no Search button."))
+        call("click", {"element": button}, True)
+        cls, page, det = look()
+        rows: List[Listing] = list(det.get("rows") or [])
+        truncated = False
+        while cls == "results":
+            nxt = _named(page.get("snapshot") or "", ("link", "button"), NEXT_NAMES)
+            if not nxt:
+                break
+            if len(rows) >= q.max_results or budget.used >= budget.limit:
+                truncated = True
+                break
+            call("click", {"element": nxt}, True)
+            cls, page, det = look()
+            rows += det.get("rows") or []
+        if cls == "search":
+            raise Stop(Result("unreadable", detail="Matrix went back to the search form instead of showing results."))
+        return Result("done", listings=rows, truncated=truncated)
+    except Stop as stop:
+        return stop.result

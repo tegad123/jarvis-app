@@ -28,10 +28,25 @@ and embedded-data pages parse to the same hand-worked rows; agent contact
 columns never reach a Listing; the search form's fields and boxes are found
 and the read rule treats only status and type boxes as filters.
 
---canary breaks three things on purpose; these checks must FAIL: the
+Step 14 (a real headless worker, egress and the fixture site, the broker
+route through FastAPI's TestClient with real actor refs): without a read
+allowance the run stops after one page and files one read card; with one,
+Heights/active reads two pages, drops the other-status rows and records one
+executed ledger row per load and gesture under the allowance; the form gets
+only the filters asked for; comps get a suggested range; a filter the form
+lacks, login, captcha, two-factor, ambiguous, unknown, empty and 429 pages
+each end the run their own way before anything more is loaded; a shared
+channel, no place, Take over and a busy tenant are refused with no run; the
+tool shows in the person's status only when the browser is theirs and the
+start page is set; the pauses are real.
+
+--canary breaks four things on purpose; these checks must FAIL: the
 person's browser feature is ignored (browser_feature_off), the re-check
-keeps every row (three re-check checks), and an unknown page reads as empty
-(two classify checks).
+keeps every row (three re-check checks), an unknown page reads as empty
+(two classify checks), and every thread reads as the person's direct line
+(the shared-channel check, and the no-run checks after it, which then see
+the run it let through; mls_result for another person, read off their
+channel, is refused direct_only instead of 404).
 """
 import json
 import os
@@ -543,6 +558,310 @@ def step13(env) -> None:
        pg["results_table.html"]["keys"])
 
 
+CHILD14 = r'''
+import json, os, sys, time, types, urllib.request
+from datetime import timedelta
+sys.path.insert(0, os.environ["APP_ROOT"])
+tc = types.ModuleType("tenant_config")
+CFG = {"app": {"browser": {"mode": "headed"}}}
+def _get(key, default=None):
+    cur = CFG
+    for part in key.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return default
+        cur = cur[part]
+    return cur
+tc.get = _get
+tc.timezone_name = lambda: "America/Chicago"
+sys.modules["tenant_config"] = tc
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from app import (accounts, actor_refs, agent_status, browser, mls, mls_limits, mls_matrix, platform_db,
+                 platform_store as store, sentinel, threads)
+SITE = os.environ["SITE"]
+K = SITE.split("//")[1].split(":")[0]
+# The fixture site is http on loopback, which app.mls refuses (step 11 proves
+# that). Same shape and the same checks otherwise: settings() as it returns.
+S = dict(mls_limits.DEFAULTS, site=K, start_url=SITE + "/Matrix/Search", pause_seconds=[3, 3],
+         max_requests_per_person_per_day=20, max_page_loads_per_person_per_day=100, max_results=100)
+CUR = {"s": S}
+mls.settings = lambda: (dict(CUR["s"]), True)
+SLEEPS = []
+real_sleep = mls_matrix._sleep
+mls_matrix._sleep = lambda v: SLEEPS.append(v)
+if os.environ.get("CANARY") == "1":
+    _get_thread = threads.get_thread
+    threads.get_thread = lambda tid: dict(_get_thread(tid) or {}, direct_for="omar")
+app = FastAPI(); app.include_router(mls.broker_router)
+c = TestClient(app, client=("127.0.0.1", 50123))
+H = {"Authorization": "Bearer " + os.environ["API_SERVER_KEY"]}
+def count(n):
+    return threads.bump_counter(n, 0)
+def log():
+    lg = json.loads(urllib.request.urlopen(SITE + "/__log", timeout=10).read())
+    return {"loads": [x for x in lg["loads"] if x != "/__log"], "posts": lg["posts"]}
+DM = threads.ensure_direct("omar")["thread_id"]
+CH = threads.create_thread("verify-mls " + os.urandom(3).hex())["thread_id"]
+REF = actor_refs.mint("omar", DM, "member")
+REF_CH = actor_refs.mint("omar", CH, "member")
+REF_DANA = actor_refs.mint("dana", threads.ensure_direct("dana")["thread_id"], "owner")
+def search(ref=None, **params):
+    r = c.post("/api/broker/mls", json={"ref": ref or REF, "op": "search", **params}, headers=H)
+    return r.status_code, r.json()
+def ledger(run_id, method=None):
+    with platform_db.connect() as cx:
+        q = "SELECT method, count(*) AS n FROM actions WHERE run_id=%s AND outcome='executed' GROUP BY method"
+        return {r["method"]: r["n"] for r in cx.execute(q, (f"mls-{run_id}",)).fetchall()}
+def allowance(who, site):
+    aid = store.create_approval(origin="seed", user_id=who, kind="action", skill="jarvis", summary="verify read",
+                                action={"type": "browser_read", "site": site}, status="approved",
+                                decided_at=sentinel.utcnow(), decided_by=who)
+    act = sentinel.Action(connector=browser.READ_CONNECTOR, method="read", cls=sentinel.EXTERNAL_SEND,
+                          destinations=(f"@{site}",), skill="jarvis", user=who)
+    g = sentinel.grant_from_approval(aid, act, sentinel.SCOPE_ALWAYS, sentinel.utcnow())
+    store.create_grant(g, approval_id=aid, action_class=sentinel.EXTERNAL_SEND, created_by=who)
+    return g.id
+def pending_reads(who, site):
+    return [r["id"] for r in store.list_approvals() if r["status"] == "pending" and r.get("user_id") == who
+            and (r.get("action_json") or {}).get("type") == "browser_read" and (r.get("action_json") or {}).get("site") == site]
+def clean():
+    conn = mls._db()
+    with conn:
+        conn.execute("DELETE FROM mls_runs WHERE person_key IN ('omar', 'dana')")
+    browser._clear_needs_you("omar")
+clean()
+for aid in pending_reads("omar", K):
+    store.resolve_approval(aid, "rejected", "omar", {"reason": "verify cleanup"})
+accounts.set_feature("omar", "browser", True, by="dana")
+browser.call("close", "omar")
+today = mls._today()
+out = {}
+
+# 1. No read allowance yet: the first gesture files the card and the run stops for the person.
+st, b = search(area="Heights")
+out["no_allowance"] = {"st": st, "error": b.get("error"), "kind": b.get("kind"), "page_loads": b.get("page_loads"),
+                       "pending": len(pending_reads("omar", K))}
+grant = allowance("omar", K)
+clean()
+
+# 2. "Active listings in the Heights": the whole flow.
+n0 = len(log()["posts"]); SLEEPS.clear(); d0 = count("mls_rows_dropped")
+st, b = search(area="Heights")
+lg = log()
+out["heights"] = {"st": st, "state": b.get("state"), "detail": b.get("detail"), "count": b.get("count"), "dropped": b.get("dropped"),
+                  "addresses": [x["address"] for x in b.get("listings") or []], "page_loads": b.get("page_loads"),
+                  "summary": b.get("summary"), "query": b.get("query"), "ledger": ledger(b.get("run_id")),
+                  "posts": lg["posts"][n0:], "sleeps": list(SLEEPS), "dropped_delta": count("mls_rows_dropped") - d0,
+                  "grant_rows": 0}
+with platform_db.connect() as cx:
+    out["heights"]["grant_rows"] = cx.execute("SELECT count(*) AS n FROM actions WHERE run_id=%s AND grant_id=%s",
+                                              (f"mls-{b.get('run_id')}", grant)).fetchone()["n"]
+# mls_result reads the same run back; another person can't.
+rid = b.get("run_id")
+r = c.post("/api/broker/mls", json={"ref": REF, "op": "result", "run_id": rid}, headers=H)
+out["result_same"] = [r.status_code, r.json().get("count")]
+r = c.post("/api/broker/mls", json={"ref": REF_DANA, "op": "result", "run_id": rid}, headers=H)
+out["result_other"] = [r.status_code, r.json().get("error")]
+
+# 3. Comps: sold near an address with the subject's size.
+n0 = len(log()["posts"])
+st, b = search(statuses=["sold"], address="1300 Sample Ave", subject_sqft=2000,
+               date_from=(today - timedelta(days=180)).isoformat())
+out["comps"] = {"st": st, "count": b.get("count"), "addresses": sorted(x["address"] for x in b.get("listings") or []),
+                "unverified": b.get("unverified"), "summary": b.get("summary"), "posts": log()["posts"][n0:]}
+
+# 4. Every filter typed: 3-bed single-family under 600k in 77008, pending this month.
+n0 = len(log()["posts"])
+st, b = search(statuses=["pending"], zip_codes=["77008"], beds_min=3, price_max=600000,
+               property_types=["single_family"], date_from=today.replace(day=1).isoformat())
+out["pending"] = {"st": st, "count": b.get("count"), "addresses": [x["address"] for x in b.get("listings") or []],
+                  "posts": log()["posts"][n0:]}
+
+# 5. A filter the form doesn't have stops the run, naming it.
+CUR["s"] = dict(S, start_url=SITE + "/f/search_basic.html")
+n0 = len(log()["loads"])
+st, b = search(area="Heights", price_min=300000)
+out["missing_filter"] = {"st": st, "error": b.get("error"), "detail": b.get("detail"),
+                         "loads_after_start": [x for x in log()["loads"][n0:] if x != "/f/search_basic.html"]}
+CUR["s"] = S
+
+# 6. Stops: sign-in wall, human check, code; each asks the person and loads nothing more.
+for area, kind in (("wall", "login"), ("check", "captcha"), ("code", "two_factor")):
+    clean()
+    n0 = len(log()["loads"])
+    st, b = search(area=area)
+    loads = log()["loads"][n0:]
+    out[f"stop_{kind}"] = {"st": st, "error": b.get("error"), "kind": b.get("kind"), "page_loads": b.get("page_loads"),
+                           "loads": loads, "needs_you": bool(browser.needs_you("omar")),
+                           "site_state": (browser.site_row("omar", K) or {}).get("state")}
+clean()
+# 7. Ambiguous, unreadable, no results.
+st, b = search(area="Height")
+out["ambiguous"] = {"st": st, "error": b.get("error"), "choices": b.get("choices")}
+st, b = search(area="odd")
+out["unreadable"] = {"st": st, "error": b.get("error")}
+st, b = search(area="Nowhere")
+out["empty"] = {"st": st, "state": b.get("state"), "count": b.get("count")}
+# 8. A block: the run ends blocked and the next search waits out the cooldown.
+c0 = count("mls_refused_cooldown")
+st, b = search(area="busy")
+st2, b2 = search(area="Heights")
+out["blocked"] = {"st": st, "error": b.get("error"), "then": [st2, b2.get("error"), bool(b2.get("until"))],
+                  "delta": count("mls_refused_cooldown") - c0}
+clean()
+# 9. Refusals before anything runs.
+def runs():
+    return mls._db().execute("SELECT count(*) FROM mls_runs WHERE person_key='omar'").fetchone()[0]
+r0, c0 = runs(), count("mls_refused_channel")
+st, b = search(ref=REF_CH, area="Heights")
+out["channel"] = {"st": st, "error": b.get("error"), "delta": count("mls_refused_channel") - c0, "runs": runs() - r0}
+st, b = search(statuses=["sold"])
+out["no_place"] = {"st": st, "error": b.get("error"), "runs": runs() - r0}
+with browser._takeover_lock:
+    browser._takeover["omar"] = time.monotonic()
+st, b = search(area="Heights")
+with browser._takeover_lock:
+    browser._takeover.pop("omar", None)
+out["taken_over"] = {"st": st, "error": b.get("error"), "runs": runs() - r0}
+conn = mls._db()
+with conn:
+    conn.execute("INSERT INTO mls_runs (person_key, thread_id, query_json, state, started_at) VALUES "
+                 "('dana', 't', '{}', 'running', ?)", (sentinel.utcnow().isoformat(),))
+st, b = search(area="Heights")
+out["busy"] = {"st": st, "error": b.get("error")}
+clean()
+accounts.set_feature("omar", "browser", False, by="dana")
+st, b = search(area="Heights")
+stat_off = agent_status.status("member", "omar")
+accounts.set_feature("omar", "browser", True, by="dana")
+stat_on = agent_status.status("member", "omar")
+out["feature_off"] = {"st": st, "error": b.get("error"), "why": b.get("why"),
+                      "off_available": "search_mls" in stat_off["available"],
+                      "off_switched": "search_mls" in stat_off["switched_off"],
+                      "on_available": "search_mls" in stat_on["available"],
+                      "on_line": "MLS search" in agent_status.render(stat_on, "Omar")}
+out["allowed_ready"] = "search_mls" in agent_status.allowed_now()
+CUR["s"] = dict(S, start_url="")
+out["allowed_unconfigured"] = "search_mls" in agent_status.allowed_now()
+out["status_unconfigured"] = "search_mls" in agent_status.status("member", "omar")["available"]
+st, b = search(area="Heights")
+out["unconfigured"] = {"st": st, "error": b.get("error"), "why": b.get("why")}
+CUR["s"] = S
+# 10. Pauses are real: three page loads at 3 seconds each.
+mls_matrix._sleep = real_sleep
+t0 = time.monotonic()
+st, b = search(area="Heights")
+out["timed"] = {"st": st, "page_loads": b.get("page_loads"), "elapsed": time.monotonic() - t0}
+clean()
+store.revoke_grant(grant, by="omar", reason="verify done")
+for aid in pending_reads("omar", K):
+    store.resolve_approval(aid, "rejected", "omar", {"reason": "verify cleanup"})
+print("RESULT " + json.dumps(out, default=str))
+'''
+
+
+def step14(env) -> None:
+    print("── step 14: the run and the tool")
+    sys.path.insert(0, str(HERE))
+    import fixture_site  # noqa: PLC0415
+    ip = f"127.{secrets.randbelow(250) + 3}.0.41"
+    srv, site = fixture_site.serve(ip)
+    scr = pathlib.Path("/tmp/verify-mls-14")
+    eg, w = start_worker(scr, site.split("//")[1])
+    try:
+        p = subprocess.run([sys.executable, "-c", CHILD14],
+                           env={**env, "JARVIS_BROWSER_SOCKET": str(scr / "w.sock"), "SITE": site,
+                                "JARVIS_SWITCH_BROKER": "on", "JARVIS_SWITCH_SENTINEL": "on",
+                                "JARVIS_SENTINEL_MODE": "enforce", "JARVIS_ALLOW_WRITES": "1",
+                                "API_SERVER_KEY": secrets.token_urlsafe(24)},
+                           cwd=str(ROOT), capture_output=True, text=True, timeout=600)
+    finally:
+        w.terminate(); eg.terminate(); w.wait(20); srv.shutdown()
+    line = [ln for ln in p.stdout.splitlines() if ln.startswith("RESULT ")]
+    if not line:
+        print(p.stderr[-4000:])
+        ck("step 14 child ran", False)
+        return
+    o = json.loads(line[-1][7:])
+    na = o["no_allowance"]
+    ck("no read allowance: the run stops needs_person/allow_reading after one page and files one read card",
+       na == {"st": 409, "error": "needs_person", "kind": "allow_reading", "page_loads": 1, "pending": 1}, na)
+    h = o["heights"]
+    ck("Heights active: done with the four active rows across two pages",
+       h["st"] == 200 and h["state"] == "done" and h["count"] == 4 and sorted(h["addresses"]) ==
+       sorted(["1201 Fixture St", "15 Mock Ct #2", "900 Placeholder Rd", "44 Invented Ln"]), h)
+    ck("Heights active: the five other-status rows the site returned are dropped and counted",
+       h["dropped"] == 5 and h["dropped_delta"] == 5, h)
+    ck("Heights active: three page loads (start, search, next), a pause before each",
+       h["page_loads"] == 3 and len(h["sleeps"]) == 3 and all(x == 3 for x in h["sleeps"]), h)
+    ck("Heights active: one executed ledger row per page load and per gesture",
+       h["ledger"].get("open") == 1 and h["ledger"].get("click", 0) == 3 and h["ledger"].get("type") == 1
+       and h["ledger"].get("tables") == 3, h["ledger"])
+    ck("Heights active: the gestures ran under the person's read allowance (grant id on the rows)",
+       h["grant_rows"] == 4, h["grant_rows"])
+    ck("Heights active: the form posted Area=Heights and only the Active box",
+       len(h["posts"]) == 1 and h["posts"][0].get("area") == ["Heights"] and h["posts"][0].get("st") == ["Active"]
+       and "remember" not in h["posts"][0] and "alert" not in h["posts"][0], h["posts"])
+    ck("Heights active: the summary is list prices with the filters used",
+       "list prices" in (h["summary"] or {}).get("note", "") and h["query"] == {"statuses": ["active"], "area": "Heights"},
+       (h["summary"], h["query"]))
+    ck("mls_result reads the same run back for the person", o["result_same"] == [200, 4], o["result_same"])
+    ck("mls_result: another person gets 404 for it", o["result_other"] == [404, "not_found"], o["result_other"])
+    cp = o["comps"]
+    ck("comps: three sold rows, unverified for distance (the page shows none), with a suggested range",
+       cp["st"] == 200 and cp["count"] == 3 and cp["addresses"] == ["1300 Sample Ave", "1410 Sample Ave", "48 Invented Ln"]
+       and cp["unverified"] == 3 and (cp["summary"] or {}).get("suggested_low") == 494000
+       and (cp["summary"] or {}).get("suggested_high") == 510000, cp)
+    post = (cp["posts"] or [{}])[0]
+    ck("comps: the form posted the address, a 1-mile radius, a date and only Sold",
+       post.get("addr") == ["1300 Sample Ave"] and post.get("radius") == ["1"] and post.get("st") == ["Sold"]
+       and bool(post.get("dfrom")), cp["posts"])
+    pd = o["pending"]
+    post = (pd["posts"] or [{}])[0]
+    ck("every filter typed: zip, beds, max price, type box and date reach the form",
+       post.get("zip") == ["77008"] and post.get("bmin") == ["3"] and post.get("pmax") == ["600000"]
+       and post.get("pt") == ["Single-Family"] and post.get("st") == ["Pending"] and bool(post.get("dfrom")), pd["posts"])
+    mf = o["missing_filter"]
+    ck("a filter the form lacks ends unreadable naming it, before any search is posted",
+       mf["st"] == 502 and mf["error"] == "unreadable" and "price min" in (mf["detail"] or "")
+       and mf["loads_after_start"] == [], mf)
+    for kind in ("login", "captcha", "two_factor"):
+        s = o[f"stop_{kind}"]
+        ck(f"{kind}: stops needs_person/{kind}, asks the person, marks the site needs_signin, loads nothing more",
+           s["st"] == 409 and s["error"] == "needs_person" and s["kind"] == kind and s["needs_you"]
+           and s["site_state"] == "needs_signin" and s["page_loads"] == 2
+           and s["loads"] == ["/Matrix/Search", "/Matrix/Results"] + (["/recaptcha/frame"] if kind == "captcha" else []), s)
+    ck("ambiguous area returns the site's choices",
+       o["ambiguous"]["st"] == 409 and o["ambiguous"]["error"] == "ambiguous" and len(o["ambiguous"]["choices"] or []) == 3,
+       o["ambiguous"])
+    ck("an unknown page is unreadable", o["unreadable"] == {"st": 502, "error": "unreadable"}, o["unreadable"])
+    ck("no results is done with zero rows", o["empty"] == {"st": 200, "state": "done", "count": 0}, o["empty"])
+    bl = o["blocked"]
+    ck("a 429 ends the run blocked; the next search is refused cooling_off with a time, counted",
+       bl["st"] == 409 and bl["error"] == "blocked" and bl["then"] == [409, "cooling_off", True] and bl["delta"] == 1, bl)
+    ck("a shared channel is refused direct_only, counted, no run", o["channel"] == {
+        "st": 403, "error": "direct_only", "delta": 1, "runs": 0}, o["channel"])
+    ck("no place is refused bad_request, no run", o["no_place"] == {"st": 400, "error": "bad_request", "runs": 0},
+       o["no_place"])
+    ck("during Take over the search is refused taken_over, no run",
+       o["taken_over"] == {"st": 409, "error": "taken_over", "runs": 0}, o["taken_over"])
+    ck("a run going on the tenant refuses another busy", o["busy"] == {"st": 409, "error": "busy"}, o["busy"])
+    fo = o["feature_off"]
+    ck("browser off for the person: refused unavailable/browser_feature_off; the tool is switched off in their status",
+       fo["st"] == 403 and fo["error"] == "unavailable" and fo["why"] == "browser_feature_off"
+       and not fo["off_available"] and fo["off_switched"], fo)
+    ck("browser on for the person: the tool is in their status with its line (presence twin)",
+       fo["on_available"] and fo["on_line"], fo)
+    ck("set up: the model may be offered search_mls; no start page: it may not, and their status drops it",
+       o["allowed_ready"] and not o["allowed_unconfigured"] and not o["status_unconfigured"],
+       (o["allowed_ready"], o["allowed_unconfigured"], o["status_unconfigured"]))
+    ck("no start page: refused unavailable/not_configured",
+       o["unconfigured"] == {"st": 403, "error": "unavailable", "why": "not_configured"}, o["unconfigured"])
+    t = o["timed"]
+    ck("pauses are real: three loads at 3 seconds take at least 9 seconds",
+       t["st"] == 200 and t["page_loads"] == 3 and t["elapsed"] >= 9, t)
+
+
 def provisioner_checks():
     sys.path.insert(0, str(ROOT / "scripts"))
     import provision_tenant as pt  # noqa: PLC0415
@@ -630,6 +949,7 @@ def main() -> int:
     ck("omar's browser feature restored", o["restored"])
     step12(env)
     step13(env)
+    step14(env)
     n, t = sum(ok), len(ok)
     print(f"\n{n}/{t} passed" + ("  (canary run: a FAIL above is the point)" if CANARY else ""))
     return 0 if n == t else 1

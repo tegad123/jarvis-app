@@ -20,7 +20,11 @@ from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
+
 from . import accounts
+from . import broker
 from . import browser
 from . import config
 from . import mls_limits
@@ -232,7 +236,7 @@ def parse_query(params: Dict[str, Any], today: date, ceiling: int = HARD_MAX_RES
     p = params
     statuses = _choices("statuses", p.get("statuses"), STATUSES) or ("active",)
     area = _text("area", p.get("area"), 2, 80)
-    address = _text("address", p.get("address"), 5, 200)
+    address = _text("address", p.get("address"), 5, 120)
     zips = p.get("zip_codes")
     if zips is not None:
         if not isinstance(zips, list) or not all(isinstance(z, str) and ZIP.fullmatch(z) for z in zips) \
@@ -528,7 +532,8 @@ def finish_run(run_id: int, q: Query, res: Result) -> Dict[str, Any]:
         if res.stop_kind:
             out["kind"] = res.stop_kind
         if res.choices:
-            out["choices"] = res.choices[:20]
+            out["choices"] = [str(c)[:120] for c in res.choices[:20]]
+        result_json = json.dumps({k: out[k] for k in ("detail", "kind", "choices") if k in out})
     conn = _db()
     with conn:
         conn.execute("UPDATE mls_runs SET state = ?, stop_kind = ?, page_loads = ?, result_count = ?, result_json = ?, "
@@ -543,6 +548,11 @@ def run_search(person: str, thread_id: str, q: Query, reader: Reader, s: Dict[st
                ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """One search, start to finish, in the calling thread."""
     run_id, limit = start_run(person, thread_id, q, s)
+    return execute(run_id, limit, person, q, reader, s, ctx)
+
+
+def execute(run_id: int, limit: int, person: str, q: Query, reader: Reader, s: Dict[str, Any],
+            ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     budget = Budget(limit)
     try:
         res = reader(q, budget, {**(ctx or {}), "person": person, "run_id": run_id, "settings": s})
@@ -560,3 +570,124 @@ def run_row(run_id: int, person: str) -> Optional[Dict[str, Any]]:
     """The run, only for the person who started it."""
     row = _db().execute("SELECT * FROM mls_runs WHERE id = ? AND person_key = ?", (run_id, person)).fetchone()
     return dict(row) if row else None
+
+
+def reply(run: Dict[str, Any]) -> Dict[str, Any]:
+    """The tool's answer for a stored run."""
+    out: Dict[str, Any] = {"run_id": run["id"], "state": run["state"], "page_loads": run["page_loads"],
+                           "query": json.loads(run["query_json"] or "{}")}
+    if run["state"] == "running":
+        return {**out, "ok": True}
+    body = json.loads(run["result_json"]) if run["result_json"] else None
+    if run["state"] == "done":
+        if body is None:
+            return {**out, "ok": False, "expired": True, "detail": "These results have expired."}
+        return {**out, "ok": True, **{k: v for k, v in body.items() if k != "query"}}
+    return {**out, "ok": False, **(body or {})}
+
+
+# ── the broker door for the Ask tools ────────────────────────────────────────
+
+broker_router = APIRouter(prefix="/api/broker")
+router = APIRouter(prefix="/api/mls")
+WAIT_S = 100.0
+_events: Dict[int, threading.Event] = {}
+_events_lock = threading.Lock()
+# A finished run's HTTP status and error, so the agent's tool tells the
+# person the right thing (plan section 8).
+STATE_HTTP = {"needs_person": (409, "needs_person"), "ambiguous": (409, "ambiguous"),
+              "unreadable": (502, "unreadable"), "blocked": (409, "blocked"), "failed": (502, "failed")}
+
+
+def _err(status: int, error: str, detail: str = "", **extra) -> JSONResponse:
+    return JSONResponse(status_code=status, content={"error": error, "detail": detail, **extra})
+
+
+def _today() -> date:
+    return _now().astimezone(_zone()).date()
+
+
+def _event(run_id: int) -> threading.Event:
+    with _events_lock:
+        return _events.setdefault(run_id, threading.Event())
+
+
+def _background(run_id: int, limit: int, person: str, q: Query, s: Dict[str, Any], gctx: Dict[str, str]) -> None:
+    from . import mls_matrix  # noqa: PLC0415
+    try:
+        execute(run_id, limit, person, q, mls_matrix.read, s, {"gate_ctx": gctx})
+    except Exception as exc:
+        threads_mod.bump_counter("mls_run_crashed")
+        log.error("mls: run %d crashed (%s)", run_id, type(exc).__name__)
+        conn = _db()
+        with conn:
+            conn.execute("UPDATE mls_runs SET state = 'failed', finished_at = ? WHERE id = ? AND state = 'running'",
+                         (_now().isoformat(), run_id))
+    finally:
+        _event(run_id).set()
+
+
+def _answer(run_id: int, person: str, wait: float):
+    ev = _event(run_id)
+    run = run_row(run_id, person)
+    if run and run["state"] == "running":
+        ev.wait(wait)
+        run = run_row(run_id, person)
+    if run is None:
+        return _err(404, "not_found", "No such search for this person.")
+    if run["state"] != "running":
+        with _events_lock:
+            _events.pop(run_id, None)
+    body = reply(run)
+    if run["state"] in STATE_HTTP:
+        status, error = STATE_HTTP[run["state"]]
+        return JSONResponse(status_code=status, content={"error": error, **body})
+    return body
+
+
+@broker_router.post("/mls")
+async def post_broker_mls(request: Request):
+    broker._authorize(request)
+    body = await broker._json_body(request)
+    entry = broker._turn_person(body.get("ref"))
+    if entry is None:
+        return _err(403, "no_turn", "No running chat turn.")
+    person = str(entry["person_key"])
+    op = body.get("op")
+    if op not in ("search", "result"):
+        return _err(400, "bad_request", "op must be search or result.")
+    why = available_for(person)
+    if why:
+        return _err(403, "unavailable", UNAVAILABLE[why], why=why)
+    thread_id = str(entry.get("thread_id") or "")
+    thread = threads_mod.get_thread(thread_id) if thread_id else None
+    if not thread or thread.get("direct_for") != person:
+        threads_mod.bump_counter("mls_refused_channel")
+        return _err(403, "direct_only", "MLS results are shown only in the person's own direct line.")
+    from starlette.concurrency import run_in_threadpool  # noqa: PLC0415
+    if op == "result":
+        rid = body.get("run_id")
+        if isinstance(rid, bool) or not isinstance(rid, int):
+            return _err(400, "bad_request", "run_id must be a whole number.")
+        return await run_in_threadpool(_answer, rid, person, WAIT_S)
+    s, _ = settings()
+    params = {k: v for k, v in body.items() if k not in ("ref", "op")}
+    try:
+        q = parse_query(params, _today(), s["max_results"])
+    except BadRequest as exc:
+        threads_mod.bump_counter("mls_refused_bad_request")
+        return _err(400, "bad_request", str(exc))
+    if browser.taken_over(person):
+        threads_mod.bump_counter("mls_refused_taken_over")
+        return _err(409, "taken_over", "They're using the browser themselves right now.")
+    try:
+        run_id, limit = start_run(person, thread_id, q, s)
+    except Refused as r:
+        return _err(r.status, r.error, **r.extra)
+    ctx = broker._context(request)
+    gctx = {"run": f"mls-{run_id}", "session": ctx.get("session", ""), "task": ctx.get("task", ""),
+            "skill": "jarvis", "source": f"chat_thread:{thread_id}" if broker.CONTEXT_VALUE.match(thread_id) else ""}
+    _event(run_id)
+    threading.Thread(target=_background, args=(run_id, limit, person, q, s, gctx), daemon=True,
+                     name=f"mls-run-{run_id}").start()
+    return await run_in_threadpool(_answer, run_id, person, WAIT_S)

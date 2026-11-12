@@ -413,6 +413,69 @@ def leads(op: str, a: dict) -> None:
     out(**r)
 
 
+MLS_SAY = {
+    "unavailable": "MLS search isn't available right now: {detail} Say so plainly.",
+    "direct_only": "MLS results are shown only in their own direct chat with you, not in a shared channel. Tell them "
+                   "to ask you there.",
+    "taken_over": "They're using the browser themselves right now. Say you'll search once they hand it back.",
+    "busy": "Another MLS search is already running for this team. Say so and offer to try again in a minute.",
+    "cooling_off": "Matrix refused or slowed a recent search, so searches are paused until {until}. Say so plainly; "
+                   "do not try another way.",
+    "daily_cap": "They've reached today's limit for MLS searches; it resets at {resets_at}. Say so plainly.",
+    "blocked": "Matrix refused or slowed the search, so it stopped and searches pause for a while. Say so plainly; "
+               "nothing was retried.",
+    "unreadable": "The search stopped: {detail} Nothing was guessed. Say so plainly.",
+    "failed": "The search didn't finish: {detail} Say so plainly.",
+    "not_found": "There's no such search for them. Run search_mls again if they still want it.",
+}
+NEEDS_PERSON_SAY = ("The search stopped because Matrix needs them: {detail} The browser window in this chat shows "
+                    "a Take over button. Tell them that in one sentence, then stop and wait; never ask for a password "
+                    "or code in chat.")
+
+
+def mls(op: str, a: dict) -> None:
+    payload = {"ref": os.environ.get("JARVIS_ACTOR_MSG", ""), "op": op, **a}
+    try:
+        r = app_broker.call("mls", payload, timeout=130)
+    except app_broker.BrokerError as exc:
+        b = exc.body if isinstance(exc.body, dict) else {}
+        err = b.get("error")
+        if err == "needs_person":
+            return out(ok=False, run_id=b.get("run_id"), say=NEEDS_PERSON_SAY.format(detail=b.get("detail") or ""))
+        if err == "ambiguous":
+            return out(ok=False, run_id=b.get("run_id"), choices=b.get("choices") or [],
+                       say="That place matches more than one area on Matrix. Ask which they mean, then search again "
+                           "with that exact name.")
+        if err == "bad_request":
+            return out(ok=False, say=f"Not searched: {b.get('detail') or 'a filter was out of range'}. Fix it or ask "
+                                     "them, then try again.")
+        if err in MLS_SAY:
+            return out(ok=False, say=MLS_SAY[err].format(detail=b.get("detail") or "", until=b.get("until") or "later",
+                                                         resets_at=b.get("resets_at") or "midnight"))
+        print(f"broker: {exc}", file=sys.stderr)
+        return out(ok=False, say="I couldn't run the MLS search just now. Say so plainly.")
+    if r.get("state") == "running":
+        return out(ok=True, state="running", run_id=r.get("run_id"),
+                   say="The search is still running. Call mls_result with this run_id to wait for it.")
+    if r.get("expired"):
+        return out(ok=False, say="Those results have expired. Run the search again if they want it.")
+    out(ok=True, state="done", run_id=r.get("run_id"), query=r.get("query"), count=r.get("count"),
+        truncated=r.get("truncated"), dropped=r.get("dropped"), unverified=r.get("unverified"),
+        summary=r.get("summary"), listings=r.get("listings"),
+        say="The app shows these listings to them as a table card under your reply. Give a short plain summary "
+            "(how many, the price range, anything that stands out) and answer from these rows only; say which "
+            "filters were used. Not an appraisal." + (" More listings matched than were read." if r.get("truncated")
+                                                     else ""))
+
+
+def search_mls(a):
+    mls("search", a)
+
+
+def mls_result(a):
+    mls("result", {"run_id": a.get("run_id")})
+
+
 def add_lead(a):
     leads("add", a)
 
@@ -481,7 +544,7 @@ ACTIONS = {f.__name__: f for f in (list_tasks, add_task, complete_task, calendar
                                    search_email, draft_email, connect_google, browser_open, browser_read,
                                    browser_scroll, browser_back, browser_click, browser_type, browser_press,
                                    browser_login, browser_request_access, browser_ask_person, imessage_search,
-                                   add_lead, log_lead_contact, list_my_followups)}
+                                   add_lead, log_lead_contact, list_my_followups, search_mls, mls_result)}
 
 if __name__ == "__main__":
     name = sys.argv[1] if len(sys.argv) > 1 else ""
