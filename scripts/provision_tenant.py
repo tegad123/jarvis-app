@@ -289,6 +289,21 @@ def browser_unit_vars(manifest: dict) -> Dict[str, str]:
                 f"Environment=JARVIS_BROWSER_POLICY={BROWSER_POLICY_FILE}"])}
 
 
+def mls(manifest: dict) -> dict:
+    """`mls: {site, start_url, caps…}`, rendered as app.mls. MLS search is
+    unavailable until start_url (the Matrix search page) is set, and then it
+    follows each person's browser feature; there is no other switch. Needs a
+    headed browser. Limits: app/mls_limits.py."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
+    import mls_limits  # noqa: PLC0415
+    out, bad = mls_limits.check(manifest.get("mls"))
+    if bad:
+        die("; ".join(bad))
+    if out["start_url"] and not (browser_enabled(manifest) and browser_mode(manifest) == "headed"):
+        die("mls.start_url needs browser: enabled and browser_mode: headed")
+    return out
+
+
 def browser_headed_problems() -> List[str]:
     """What a headed tenant needs on this server before it can start."""
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
@@ -994,6 +1009,8 @@ def build_client_config(manifest: dict, paths: dict, shipped: List[str], loadout
             "text_followup": text_followup(manifest),
             "lead_followup": lead_followup(manifest),
             "lead_cadence": lead_cadence(manifest),
+            "browser": {"mode": browser_mode(manifest)},
+            "mls": mls(manifest),
         },
         "schedule": schedule,
         "credentials": {},
