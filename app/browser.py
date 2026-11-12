@@ -62,6 +62,9 @@ TAKEOVER_IDLE_S = 900
 READ_OPS = ("open", "read", "scroll", "back")
 ACT_OPS = ("click", "type", "press", "login")
 OPS = READ_OPS + ACT_OPS + ("request_access", "ask_person", "status")
+# "tables" is for app code (app/mls.py) through gate(); it is not in OPS, so
+# the agent's browser tool can't ask for it.
+TABLE_KEYS = ("tables", "cards", "data", "lists", "signals")
 KEYS = ("Enter", "Tab", "Escape", "Backspace", "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "PageDown",
         "PageUp", "Home", "End", "Space")
 REF = re.compile(r"^e\d{1,5}$")
@@ -442,6 +445,10 @@ def gate(op: str, args: Dict[str, Any], ctx: Dict[str, str], person: str) -> Tup
             if not current.get("running"):
                 return 409, {"error": "nothing_open", "detail": "No page is open yet."}
             r = call(op, person, direction="up" if args.get("direction") == "up" else "down")
+        elif op == "tables":
+            if not current.get("running"):
+                return 409, {"error": "nothing_open", "detail": "No page is open yet."}
+            r = call("tables", person, snapshot=bool(args.get("snapshot")))
         elif op == "request_access":
             return _request_access(args, current, here, ctx, person)
         elif op == "ask_person":
@@ -466,7 +473,10 @@ def gate(op: str, args: Dict[str, Any], ctx: Dict[str, str], person: str) -> Tup
         broker._bump(f"browser_{op}")
         if r.get("site_refused"):
             broker._bump("browser_site_refused")
-    return (200 if r.get("ok") else 502), _say_page(r)
+    out = _say_page(r)
+    if op == "tables":
+        out.update({k: r[k] for k in TABLE_KEYS if k in r})
+    return (200 if r.get("ok") else 502), out
 
 
 def _request_access(args, current, here, ctx, person):

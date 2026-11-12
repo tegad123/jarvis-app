@@ -1,7 +1,8 @@
 """Which browser gestures only read, for a standing read allowance (docs/SPEC.md 8.6).
 
 An allowance is per person and per site. It covers clicking a link, tab,
-pagination or sort control, and typing into a search or filter field (and
+pagination or sort control, ticking a listing-status or property-type box in
+that site's own search form, and typing into a search or filter field (and
 submitting that search). Nothing else: the rule is default-deny, and a
 gesture it does not clearly recognise falls through to the ordinary 30-minute
 task approval. browser.risky() runs before this and still holds payments,
@@ -36,6 +37,12 @@ FILTER_FIELD = re.compile(
 SENSITIVE_FIELD = re.compile(r"e-?mail|phone|\btel\b|mobile|first.?name|last.?name|full.?name|your name|"
                              r"message|comment|note|password|passcode|one.?time|otp|(?<!zip )(?<!postal )\bcode\b|card|cvv|ssn|"
                              r"account|user(name)?|login|signature|recipient|subject|\bsend\b|\bcc\b", re.I)
+# Exact labels only: a box named anything else ("Remember me", "I agree",
+# "Email me updates") is not a search filter.
+FILTER_TOGGLE = re.compile(
+    r"^(active|active option( contract)?|option pending|pending|pending continue to show|sold|closed|"
+    r"single[- ]family( detached)?|townhouse ?/ ?condo|townhouse|condo(minium)?|multi[- ]family|"
+    r"lots?|land|lots? ?/ ?land|country homes? ?/ ?acreage)$", re.I)
 TEXT_TYPES = ("", "text", "search", "number", "date", "month")
 
 
@@ -46,7 +53,7 @@ def _norm(s: Any) -> str:
 def read_only_gesture(op: str, d: Dict[str, Any], text: str = "", submit: bool = False,
                       here: str = "") -> Optional[str]:
     """The kind of reading this gesture is ("link", "tab", "pagination",
-    "sort", "search"), or None when it is not clearly reading."""
+    "sort", "filter", "search"), or None when it is not clearly reading."""
     role = _norm(d.get("role")).lower()
     tag = _norm(d.get("tag")).lower()
     itype = _norm(d.get("input_type")).lower()
@@ -62,6 +69,9 @@ def read_only_gesture(op: str, d: Dict[str, Any], text: str = "", submit: bool =
             return "sort"
         if button:
             return "search" if SEARCH_BUTTON.match(name) else None
+        if role == "checkbox" or itype == "checkbox":
+            same_form = bool(_norm(d.get("form_method"))) and bool(here) and _norm(d.get("form_site")) == here
+            return "filter" if same_form and FILTER_TOGGLE.match(name) else None
         if role == "tab":
             return "tab"
         if role == "link" and tag == "a":

@@ -56,6 +56,47 @@ MODE = os.environ.get("JARVIS_BROWSER_MODE", "headless").strip().lower() or "hea
 WIDTH, HEIGHT = browser_launch.size(MODE)
 SNAPSHOT_CHARS = 12000
 LOAD_TIMEOUT_S = 15
+# The page's tables, label/value cards, embedded JSON data, short lists and
+# the signals a page classifier needs, for app/mls_matrix.py. Fixed here: the
+# app and the model never supply a script. Sizes are capped in the script and
+# again in Python.
+TABLES_JS = r"""(function(){
+  var clip = function(s, n){ s = String(s == null ? '' : s).replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n) : s; };
+  var out = {tables: [], cards: [], data: [], lists: [], signals: {}};
+  var tables = Array.prototype.slice.call(document.querySelectorAll('table')).slice(0, 8);
+  tables.forEach(function(t){
+    var rows = Array.prototype.slice.call(t.rows || []);
+    if (!rows.length) return;
+    var head = t.tHead && t.tHead.rows.length ? t.tHead.rows[t.tHead.rows.length - 1] : rows[0];
+    var headers = Array.prototype.slice.call(head.cells).slice(0, 40).map(function(c){ return clip(c.innerText, 80); });
+    var body = rows.filter(function(r){ return r !== head && !(t.tHead && t.tHead.contains(r)); }).slice(0, 200);
+    out.tables.push({headers: headers, rows: body.map(function(r){
+      return Array.prototype.slice.call(r.cells).slice(0, 40).map(function(c){ return clip(c.innerText, 200); }); })});
+  });
+  Array.prototype.slice.call(document.querySelectorAll('dl')).slice(0, 200).forEach(function(dl){
+    var card = [], dts = dl.querySelectorAll('dt');
+    Array.prototype.slice.call(dts).slice(0, 40).forEach(function(dt){
+      var dd = dt.nextElementSibling;
+      if (dd && dd.tagName === 'DD') card.push([clip(dt.innerText, 80), clip(dd.innerText, 200)]);
+    });
+    if (card.length) out.cards.push(card);
+  });
+  Array.prototype.slice.call(document.querySelectorAll('script[type="application/ld+json"],script[type="application/json"]'))
+    .slice(0, 5).forEach(function(s){ var x = String(s.textContent || ''); if (x.length <= 200000) out.data.push(x); });
+  Array.prototype.slice.call(document.querySelectorAll('ul,ol')).slice(0, 20).forEach(function(l){
+    var items = Array.prototype.slice.call(l.children).filter(function(c){ return c.tagName === 'LI'; })
+      .slice(0, 50).map(function(li){ return clip(li.innerText, 120); });
+    if (items.length) out.lists.push(items);
+  });
+  var frames = Array.prototype.slice.call(document.querySelectorAll('iframe')).map(function(f){ return String(f.src || ''); });
+  out.signals = {
+    password_field: !!document.querySelector('input[type=password]'),
+    otp_field: !!document.querySelector('input[autocomplete=one-time-code]'),
+    captcha_frame: frames.some(function(s){ return /recaptcha|hcaptcha|turnstile|captcha|arkoselabs|funcaptcha/i.test(s); }),
+    text: clip(document.body ? document.body.innerText : '', 4000)
+  };
+  return out;
+})()"""
 INTERACTIVE = {"button", "link", "textbox", "searchbox", "combobox", "checkbox", "radio", "menuitem", "tab",
                "switch", "option", "listbox", "slider", "spinbutton", "menuitemcheckbox", "menuitemradio",
                "treeitem", "textField", "TextField"}
@@ -90,6 +131,24 @@ def refused_text(site: str, code: int) -> str:
         return f"{site} is having trouble right now (HTTP {code}). Try again later."
     return f"{site} refused the request (HTTP {code})."
 
+
+def _tables(v: Any) -> Dict[str, Any]:
+    """The TABLES_JS result, re-capped: a page can't make the reply large."""
+    v = v if isinstance(v, dict) else {}
+
+    def cells(xs, n, size):
+        return [str(x)[:size] for x in (xs if isinstance(xs, list) else [])[:n]]
+    tables = [{"headers": cells(t.get("headers"), 40, 80),
+               "rows": [cells(r, 40, 200) for r in (t.get("rows") or [])[:200] if isinstance(r, list)]}
+              for t in (v.get("tables") or [])[:8] if isinstance(t, dict)]
+    cards = [[cells(pair, 2, 200) for pair in c[:40] if isinstance(pair, list)]
+             for c in (v.get("cards") or [])[:200] if isinstance(c, list)]
+    sig = v.get("signals") if isinstance(v.get("signals"), dict) else {}
+    return {"tables": tables, "cards": cards,
+            "data": [str(d)[:200000] for d in (v.get("data") or [])[:5]],
+            "lists": [cells(lst, 50, 120) for lst in (v.get("lists") or [])[:20]],
+            "signals": {"password_field": bool(sig.get("password_field")), "otp_field": bool(sig.get("otp_field")),
+                        "captcha_frame": bool(sig.get("captcha_frame")), "text": str(sig.get("text") or "")[:4000]}}
 
 class CDPError(RuntimeError):
     pass
@@ -644,6 +703,8 @@ class Browser:
             return await self.fill_login(req)
         if op == "forget_site":
             return await self.forget_site(str(req.get("site") or ""))
+        if op == "tables":
+            return {**(await self.page(with_snapshot=bool(req.get("snapshot")))), **_tables(await self.eval(TABLES_JS))}
         if op == "screen":
             shot = await self.s("Page.captureScreenshot", {"format": "jpeg", "quality": 60})
             return {"ok": True, **(await self.where()), "jpeg": shot["data"], "width": WIDTH, "height": HEIGHT}

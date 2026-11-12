@@ -15,18 +15,35 @@ Step 11, availability and settings:
   off-site start_url, unknown keys and a start_url on a headless or disabled
   browser are refused; a valid block renders with its defaults;
 - there is no MLS person feature: accounts.FEATURES is unchanged.
---canary makes the child ignore the person's browser feature: the
-browser_feature_off check must FAIL.
+
+Step 12 (fake reader, a fixed clock): the page budget, the daily request and
+page-load caps across the tenant's local midnight, the 100-row and tenant
+row caps, the re-check filter, parameter refusals, hand-worked summaries, the
+cooldown, one run at a time, stale runs, retention and run scoping.
+
+Step 13 (a real headless worker and egress, docs/mls/fixture_site.py on
+loopback): every fixture is opened and read through browser.gate() with the
+`tables` request, one ledger row each; each page gets its class; table, card
+and embedded-data pages parse to the same hand-worked rows; agent contact
+columns never reach a Listing; the search form's fields and boxes are found
+and the read rule treats only status and type boxes as filters.
+
+--canary breaks three things on purpose; these checks must FAIL: the
+person's browser feature is ignored (browser_feature_off), the re-check
+keeps every row (three re-check checks), and an unknown page reads as empty
+(two classify checks).
 """
 import json
 import os
 import pathlib
+import secrets
 import subprocess
 import sys
 
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 SB = pathlib.Path(os.environ.get("TASKS_SANDBOX", "/tmp/claude-0/-root/tasks-sandbox"))
+HEADLESS = "/root/.cache/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-linux64/chrome-headless-shell"
 CANARY = "--canary" in sys.argv
 
 ok = []
@@ -365,6 +382,167 @@ def step12(env) -> None:
        o["scoping"] == {"owner": True, "other": None}, o["scoping"])
 
 
+CHILD13 = r'''
+import json, os, re, sys
+sys.path.insert(0, os.environ["APP_ROOT"])
+from app import browser, browser_policy as bp, mls_matrix as mm, platform_db, threads
+if os.environ.get("CANARY") == "1":
+    real = mm.classify
+    mm.classify = lambda p: ("empty", {}) if real(p)[0] == "unknown" else real(p)
+SITE = os.environ["SITE"]
+K = SITE.split("//")[1].split(":")[0]
+ctx = {"run": "verify-mls-13-" + os.urandom(4).hex(), "session": "", "task": "", "skill": "jarvis",
+       "source": "verify:mls"}
+browser.call("close", "omar")
+out = {"pages": {}}
+def ledger(op):
+    with platform_db.connect() as c:
+        return c.execute("SELECT count(*) AS n FROM actions WHERE run_id=%s AND method=%s AND outcome='executed'",
+                         (ctx["run"], op)).fetchone()["n"]
+st, body = browser.gate("tables", {}, ctx, "omar")
+out["tables_nothing_open"] = [st, body.get("error")]
+for name in ("search.html", "results_table.html", "results_table_p2.html", "results_cards.html", "results_json.html",
+             "no_results.html", "ambiguous.html", "login.html", "captcha.html", "two_factor.html", "too_many.html",
+             "unknown.html"):
+    st, _ = browser.gate("open", {"url": SITE + "/f/" + name}, ctx, "omar")
+    st2, page = browser.gate("tables", {"snapshot": True}, ctx, "omar")
+    cls, det = mm.classify(page)
+    rows = [r.__dict__ for r in det.get("rows", [])]
+    out["pages"][name] = {"open": st, "tables": st2, "class": cls, "rows": rows, "choices": det.get("choices"),
+                          "keys": sorted(page), "fields": sorted(mm.search_fields(page.get("snapshot") or ""))}
+    if name == "search.html":
+        snap = page.get("snapshot") or ""
+        sb, tb = mm.boxes(snap, mm.STATUS_BOXES), mm.boxes(snap, mm.TYPE_BOXES)
+        out["boxes"] = {"status": sorted(sb), "type": sorted(tb)}
+        verdicts = {}
+        for label in ("Active", "Townhouse/Condo", "Remember my criteria", "Email me new listings"):
+            m = re.search(r"\[(e\d+)\] checkbox \"" + re.escape(label) + '"', snap)
+            d = browser.call("describe", "omar", ref=m.group(1)) if m else {}
+            verdicts[label] = bp.read_only_gesture("click", d, "", False, K) if m else "no element"
+        out["box_verdicts"] = verdicts
+out["ledger_tables"] = ledger("tables")
+out["ledger_open"] = ledger("open")
+print("RESULT " + json.dumps(out, default=str))
+'''
+
+STATUS = {"Active": "active", "Option Pending": "pending", "Pending": "pending", "Sold": "sold"}
+
+
+def expected_rows(raw):
+    """rows.json written out by hand-checkable rules, independent of the parser."""
+    def num(s):
+        return int(s.replace("$", "").replace(",", "")) if s else None
+
+    def day(s):
+        if not s:
+            return None
+        m, d, y = s.split("/")
+        return f"{y}-{int(m):02d}-{int(d):02d}"
+    out = []
+    for r in raw:
+        full, half = r["baths"].split("/")
+        out.append({"address": r["address"], "status": STATUS[r["st"]], "list_price": num(r["lp"]),
+                    "sold_price": num(r["sp"]), "list_date": day(r["ld"]), "pending_date": day(r["pd"]),
+                    "sold_date": day(r["cd"]), "beds": int(r["beds"]), "baths": int(full) + 0.5 * int(half),
+                    "sqft": num(r["sqft"]), "year_built": int(r["yb"]),
+                    "property_type": {"Single-Family": "single_family", "Townhouse/Condo": "townhouse_condo"}[r["type"]],
+                    "area": r["sub"], "zip_code": r["zip"], "days_on_market": int(r["dom"]), "mls_number": r["mls"],
+                    "distance_miles": None})
+    return out
+
+
+def start_worker(scr: pathlib.Path, allow: str):
+    sys.path.insert(0, str(ROOT / "docs" / "browser"))
+    import verify_browser_headed as h  # noqa: PLC0415
+    subprocess.run(["rm", "-rf", str(scr)], check=True)
+    scr.mkdir(parents=True)
+    base = {k: v for k, v in os.environ.items() if not k.startswith(("JARVIS_", "APP_", "ANTHROPIC", "DISPLAY"))}
+    eg = subprocess.Popen([sys.executable, "-I", str(ROOT / "app" / "browser_egress.py")],
+                          env={**base, "JARVIS_EGRESS_LISTEN": str(scr / "egress.sock"), "JARVIS_EGRESS_TEST_ALLOW": allow},
+                          stdout=open(scr / "egress.log", "w"), stderr=subprocess.STDOUT)
+    h.wait_for(scr / "egress.sock")
+    w = subprocess.Popen([sys.executable, "-I", str(ROOT / "app" / "browser_worker.py")],
+                         env={**base, "JARVIS_BROWSER_BIN": HEADLESS, "JARVIS_BROWSER_PROFILE": str(scr / "profiles"),
+                              "JARVIS_EGRESS_SOCKET": str(scr / "egress.sock"),
+                              "JARVIS_BROWSER_LISTEN": str(scr / "w.sock"), "JARVIS_BROWSER_TEST": "1",
+                              "JARVIS_BROWSER_MAX_OPEN": "3"},
+                         stdout=open(scr / "w.log", "w"), stderr=subprocess.STDOUT)
+    h.wait_for(scr / "w.sock")
+    return eg, w
+
+
+def step13(env) -> None:
+    print("── step 13: reading pages")
+    sys.path.insert(0, str(HERE))
+    import fixture_site  # noqa: PLC0415
+    ip = f"127.{secrets.randbelow(250) + 3}.0.31"
+    srv, site = fixture_site.serve(ip)
+    scr = pathlib.Path("/tmp/verify-mls-13")
+    eg, w = start_worker(scr, site.split("//")[1])
+    try:
+        p = subprocess.run([sys.executable, "-c", CHILD13],
+                           env={**env, "JARVIS_BROWSER_SOCKET": str(scr / "w.sock"), "SITE": site,
+                                "JARVIS_SWITCH_BROKER": "on", "JARVIS_SWITCH_SENTINEL": "on",
+                                "JARVIS_SENTINEL_MODE": "enforce"},
+                           cwd=str(ROOT), capture_output=True, text=True, timeout=300)
+    finally:
+        w.terminate(); eg.terminate(); w.wait(20); srv.shutdown()
+    line = [ln for ln in p.stdout.splitlines() if ln.startswith("RESULT ")]
+    if not line:
+        print(p.stderr[-3000:])
+        ck("step 13 child ran", False)
+        return
+    o = json.loads(line[-1][7:])
+    pg = o["pages"]
+    raw = json.loads((HERE / "fixtures" / "rows.json").read_text())
+    want1, want2 = expected_rows(raw["page1"]), expected_rows(raw["page2"])
+    ck("tables with nothing open is refused nothing_open", o["tables_nothing_open"] == [409, "nothing_open"],
+       o["tables_nothing_open"])
+    ck("every fixture opened and was read through the gate",
+       all(v["open"] == 200 and v["tables"] in (200, 502) for v in pg.values()),
+       {k: (v["open"], v["tables"]) for k, v in pg.items()})
+    ck("each tables read is one executed ledger row, as is each open",
+       o["ledger_tables"] == len(pg) and o["ledger_open"] == len(pg), (o["ledger_tables"], o["ledger_open"]))
+    want_cls = {"search.html": "search", "results_table.html": "results", "results_table_p2.html": "results",
+                "results_cards.html": "results", "results_json.html": "results", "no_results.html": "empty",
+                "ambiguous.html": "ambiguous", "login.html": "login", "captcha.html": "captcha",
+                "two_factor.html": "two_factor", "too_many.html": "blocked", "unknown.html": "unknown"}
+    for name, cls in want_cls.items():
+        ck(f"classify {name} → {cls}", pg[name]["class"] == cls, pg[name]["class"])
+    ck("unknown page is unreadable, never an empty result", pg["unknown.html"]["class"] == "unknown"
+       and pg["unknown.html"]["rows"] == [], pg["unknown.html"])
+    ck("the results table parses to the hand-worked rows (statuses, F/H baths, dates, prices)",
+       pg["results_table.html"]["rows"] == want1, pg["results_table.html"]["rows"][:2])
+    ck("page 2 parses to its three rows", pg["results_table_p2.html"]["rows"] == want2)
+    ck("the card and the embedded-data pages parse to the same rows as the table",
+       pg["results_cards.html"]["rows"] == want1 and pg["results_json.html"]["rows"] == want1,
+       (pg["results_cards.html"]["rows"][:1], pg["results_json.html"]["rows"][:1]))
+    blob = json.dumps([pg[n]["rows"] for n in pg])
+    ck("listing agents' names, phones, emails and remarks never reach a Listing",
+       not any(s in blob for s in ("Pat Fixture", "555", "agent.example", "Lovely")) and "1201 Fixture St" in blob)
+    ck("no-results page gives zero rows", pg["no_results.html"]["rows"] == [])
+    ck("ambiguous page lists the site's choices",
+       pg["ambiguous.html"]["choices"] == ["Heights Fixture Addn", "Heights Fixture Terrace", "Sample Heights"],
+       pg["ambiguous.html"]["choices"])
+    ck("the search page's filter fields are all found by label",
+       pg["search.html"]["fields"] == sorted(["area", "zip_codes", "address", "radius_miles", "price_min", "price_max",
+                                             "beds_min", "beds_max", "baths_min", "baths_max", "sqft_min", "sqft_max",
+                                             "year_built_min", "year_built_max", "date_from", "date_to"]),
+       pg["search.html"]["fields"])
+    ck("status and type boxes are found", o["boxes"] == {
+        "status": ["active", "pending", "sold"],
+        "type": ["lot_land", "multi_family", "single_family", "townhouse_condo"]}, o["boxes"])
+    v = o["box_verdicts"]
+    ck("read rule: ticking Active or Townhouse/Condo in the site's own form is a filter",
+       v["Active"] == "filter" and v["Townhouse/Condo"] == "filter", v)
+    ck("read rule: 'Remember my criteria' and 'Email me new listings' are not reading",
+       v["Remember my criteria"] is None and v["Email me new listings"] is None, v)
+    ck("tables reply carries only the page keys and the five table keys",
+       set(pg["results_table.html"]["keys"]) <= {"ok", "url", "title", "site", "snapshot", "http_status",
+                                                 "site_refused", "tables", "cards", "data", "lists", "signals"},
+       pg["results_table.html"]["keys"])
+
+
 def provisioner_checks():
     sys.path.insert(0, str(ROOT / "scripts"))
     import provision_tenant as pt  # noqa: PLC0415
@@ -451,6 +629,7 @@ def main() -> int:
        o["features"] == ["ask", "leads", "tasks", "send", "browser", "imessage"], o["features"])
     ck("omar's browser feature restored", o["restored"])
     step12(env)
+    step13(env)
     n, t = sum(ok), len(ok)
     print(f"\n{n}/{t} passed" + ("  (canary run: a FAIL above is the point)" if CANARY else ""))
     return 0 if n == t else 1
