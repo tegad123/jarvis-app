@@ -8,10 +8,12 @@ export interface FilterChipsProps {
   onChange?: (value: string | null) => void
   format?: (value: string) => string
   allLabel?: string
+  /** A pick-one control rather than a filter: no All chip. */
+  hideAll?: boolean
   className?: string
 }
 
-export function FilterChips({ label, options, active = null, onChange, format, allLabel = 'All', className }: FilterChipsProps) {
+export function FilterChips({ label, options, active = null, onChange, format, allLabel = 'All', hideAll, className }: FilterChipsProps) {
   const opts = options.map((o) => (typeof o === 'string' ? { value: o, label: format ? format(o) : o } : o))
   if (!opts.length) return null
 
@@ -46,7 +48,7 @@ export function FilterChips({ label, options, active = null, onChange, format, a
       )}
       {/* Padding keeps the focus ring clear of the scroller's clip. */}
       <div className="-m-1 flex min-w-0 flex-1 gap-jm-2 overflow-x-auto p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {chip(null, allLabel)}
+        {!hideAll && chip(null, allLabel)}
         {opts.map((o) => chip(o.value, o.label))}
       </div>
     </div>

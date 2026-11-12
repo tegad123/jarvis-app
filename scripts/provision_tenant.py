@@ -324,6 +324,53 @@ def text_followup(manifest: dict) -> dict:
             "older_than_hours": hours, "lookback_days": days}
 
 
+def lead_followup(manifest: dict) -> dict:
+    """`lead_followup: {enabled, time_local, suggest}`: each agent with leads
+    due gets one morning email from their own Gmail to themselves, with a
+    suggested message per lead. Off unless enabled: true."""
+    v = manifest.get("lead_followup") or {}
+    if not isinstance(v, dict):
+        die("lead_followup must be a mapping")
+    unknown = set(v) - {"enabled", "time_local", "suggest"}
+    if unknown:
+        die(f"lead_followup has unknown keys: {sorted(unknown)}")
+    t = v.get("time_local", "07:00")
+    if not isinstance(t, str) or not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", t):
+        die("lead_followup.time_local must be a time like '07:00'")
+    if "suggest" in v and not isinstance(v["suggest"], bool):
+        die("lead_followup.suggest must be true or false")
+    return {"enabled": v.get("enabled") is True, "time_local": t, "suggest": v.get("suggest", True)}
+
+
+def _cadence_day(n, label: str) -> int:
+    if isinstance(n, bool) or not isinstance(n, int) or not 0 <= n <= 365:
+        die(f"lead_cadence.{label} must be a whole number of days, 0 to 365")
+    return n
+
+
+def lead_cadence(manifest: dict) -> dict:
+    """`lead_cadence: {hot, warm, other, later}`: days until the first follow-up,
+    then the ladder after each logged contact. Absent means the in-app default
+    (hot 1, warm 2, other 3, then 7, 14, 30). This does not turn email on, and
+    it is not a claim about the original tracker workbook."""
+    v = manifest.get("lead_cadence") or {}
+    if not isinstance(v, dict):
+        die("lead_cadence must be a mapping")
+    unknown = set(v) - {"hot", "warm", "other", "later"}
+    if unknown:
+        die(f"lead_cadence has unknown keys: {sorted(unknown)}")
+    out = {"hot": 1, "warm": 2, "other": 3, "later": [7, 14, 30]}
+    for key in ("hot", "warm", "other"):
+        if key in v:
+            out[key] = _cadence_day(v[key], key)
+    if "later" in v:
+        later = v["later"]
+        if not isinstance(later, list) or not 1 <= len(later) <= 12:
+            die("lead_cadence.later must be 1 to 12 whole numbers of days")
+        out["later"] = [_cadence_day(n, "later") for n in later]
+    return out
+
+
 def browser_unit_names(slug: str) -> List[str]:
     return [f"{slug}-browser.socket", f"{slug}-browser.service", f"{slug}-egress.socket", f"{slug}-egress.service"]
 
@@ -905,6 +952,8 @@ def build_client_config(manifest: dict, paths: dict, shipped: List[str], loadout
             "imessage": {"history_days": imessage_history_days(manifest)},
             "channels": {"categories": channel_categories(manifest)},
             "text_followup": text_followup(manifest),
+            "lead_followup": lead_followup(manifest),
+            "lead_cadence": lead_cadence(manifest),
         },
         "schedule": schedule,
         "credentials": {},

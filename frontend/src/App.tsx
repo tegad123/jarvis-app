@@ -404,7 +404,7 @@ function Shell({
         content = <Tasks role={role} personKey={personKey} people={people} onUnauthorized={unauthorized} />
         break
       case 'leads':
-        content = <Leads personKey={personKey} onUnauthorized={unauthorized} />
+        content = <Leads role={role} personKey={personKey} people={people} onUnauthorized={unauthorized} />
         break
       case 'settings':
         content = canSeeSettings(role) ? (
