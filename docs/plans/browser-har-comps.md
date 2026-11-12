@@ -551,7 +551,7 @@ CREATE TABLE IF NOT EXISTS mls_runs (
     thread_id     TEXT NOT NULL,
     query_json    TEXT NOT NULL,
     state         TEXT NOT NULL,      -- running | done | needs_person | blocked | unreadable | ambiguous | failed
-    stop_kind     TEXT,               -- login | captcha | two_factor | blocked
+    stop_kind     TEXT,               -- login | captcha | two_factor | allow_reading | taken_over | blocked | browser_unavailable
     page_loads    INTEGER NOT NULL DEFAULT 0,
     result_count  INTEGER NOT NULL DEFAULT 0,
     result_json   TEXT,               -- rows and summary; cleared after mls.keep_days
@@ -645,7 +645,7 @@ missing.
 | `statuses` | list of `active`, `pending`, `sold` | `["active"]` | 1 to 3, no repeats |
 | `area` | string | none | 2 to 80 characters: a neighbourhood, subdivision or market area ("the Heights") |
 | `zip_codes` | list of strings | none | up to 10 five-digit codes |
-| `address` | string | none | 5 to 200 characters |
+| `address` | string | none | 5 to 120 characters |
 | `radius_miles` | number | none; 1.0 when `address` is given | 0.25 to 5; only with `address` |
 | `price_min`, `price_max` | integer | none | 0 to 100,000,000 |
 | `beds_min`, `beds_max` | integer | none | 0 to 12 |
@@ -725,13 +725,15 @@ pattern `LEADS_SAY` uses), so the agent tells the person the right thing.
 | 403 | `unavailable` + `why` | Which line of section 7 failed |
 | 403 | `direct_only` | Asked in a shared channel; results are shown in the person's own direct line |
 | 400 | `bad_request` + `detail` | A parameter is out of range, or no place was given |
-| 409 | `needs_person` + `kind` | Sign-in, human check, 2FA or block; the person must take over |
+| 409 | `needs_person` + `kind` | `login`, `captcha` or `two_factor`: the person must take over; `allow_reading`: the person has not allowed reading this site yet (one read card is filed); `taken_over`: the person took the browser mid-run |
+| 409 | `taken_over` | The person is using the browser themselves; no run is started |
+| 409 | `blocked` | The site answered 403/429 or "unusual activity"; the cooldown starts |
 | 409 | `busy` | That person (or the tenant) already has a run going |
 | 409 | `cooling_off` + `until` | A block was met recently |
 | 429 | `daily_cap` + `resets_at` | Daily cap reached |
 | 409 | `ambiguous` + `choices` | The area or address matches more than one thing on the site |
 | 502 | `unreadable` | The page was not one the reader recognises; nothing was guessed |
-| 503 | `browser_unavailable` | The browser could not be reached |
+| 502 | `failed` (`kind` `browser_unavailable`) | The browser could not be reached |
 
 **Where the result appears.** The direct-line check is: the turn's thread has
 `direct_for` equal to the requesting person. When the run ends `done`, the
@@ -794,6 +796,14 @@ table is the single place to edit when the real pages are seen.
 | `two_factor` | a one-time-code field or wording | stop, `needs_person` |
 | `blocked` | HTTP 403 or 429, or "access denied" / "unusual activity" wording | stop, start the cooldown |
 | `unknown` | none of the above | stop, `unreadable` |
+
+**Ticking status and type boxes.** The read allowance (step 10) treats a
+checkbox as reading only when it is in a form posting to the same site and
+its label is exactly a status or property-type name (`FILTER_TOGGLE` in
+`app/browser_policy.py`: Active, Pending, Sold, Single-Family,
+Townhouse/Condo and the like). "Remember my criteria", "Email me new
+listings" and any other box stay task-approval clicks, so a search can never
+save a search or start an alert.
 
 `empty` and `unknown` are deliberately different. A page the reader does not
 understand must never be reported as "no sales found".
