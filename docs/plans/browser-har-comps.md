@@ -1,4 +1,4 @@
-# Plan: a real browser for Ask Jarvis, and HAR comps
+# Plan: a real browser for Ask Jarvis, and HAR MLS search
 
 Status: approved (PR #4), being implemented on `cursor/browser-har-comps-build-3d4d`.
 Nothing is deployed or switched on. Written 2026-11-12 against `platform` at `e017f36`.
@@ -15,10 +15,25 @@ says otherwise.
 4. The Chromium automation marker is hidden (`--disable-blink-features=AutomationControlled`).
    Still no captcha solving and no 2FA bypass.
 5. Tega saves and sanitises the real Matrix pages after the PR; the build uses
-   made-up fixtures and leaves a capture guide (`docs/comps/FIXTURE-CAPTURE.md`).
+   made-up fixtures and leaves a capture guide (`docs/mls/FIXTURE-CAPTURE.md`).
 6. **No licensed-feed source.** The Trestle stub, its settings and the
-   pluggable data-source layer are dropped. Comps reads Matrix through the
-   asking person's own browser session only, in one module (`app/comps_matrix.py`).
+   pluggable data-source layer are dropped. The search reads Matrix through
+   the asking person's own browser session only, in one module (`app/mls_matrix.py`).
+7. **No comps switches and no notice acknowledgement.** The tenant switch,
+   the per-person `comps` feature and the owner's HAR-notice acknowledgement
+   are dropped. The search tool is offered to any person whenever the browser
+   itself is available to them (tenant browser on, headed mode, that person's
+   `browser` feature on) and the Matrix start page is configured.
+8. **General MLS search, not only sold comps.** The tool takes a search in
+   plain words ("active listings in the Heights under $600k", "what sold on
+   my street this year") as filters: status (active, pending, sold), area or
+   neighbourhood, zip, address and radius, price, beds, baths, sqft, property
+   type, year built and a date range. Ask maps the request to those filters,
+   the person's own Matrix session runs it, and the person gets a table and a
+   short summary. Sold comps for a subject property are one case of this.
+   Kept from before: own login only, read-only, stop at sign-in, captcha or
+   2FA and hand off through Take over, the page and daily caps and pauses,
+   results shown only to the person who asked, at most 100 rows per search.
 
 This plan is for a second run that will implement it. Each step in section 13
 is sized to be done, tested and committed on its own, in order.
@@ -64,9 +79,11 @@ Six things, in the order they depend on each other.
    named site (follow links, page through results, use search filters) without
    a fresh approval every 30 minutes. Typing into or submitting any other form
    still needs approval, exactly as today.
-5. **Matrix comps.** An Ask tool that pulls sold comparables for an address
+5. **MLS search.** An Ask tool that runs a property search described in
+   plain words (status, area, zip, price, beds, baths, sqft, type, dates)
    through the requesting person's own HAR MLS Matrix session, read-only and
-   low-volume, and returns a comps table and a short summary to that person only.
+   low-volume, and returns a table and a short summary to that person only.
+   Sold comps for an address are one kind of search.
 6. **One thing built but left off.** An optional outbound proxy setting for
    the browser's egress.
 
@@ -84,15 +101,15 @@ From `AGENTS.md` and the brief. The implementing run must hold to these.
 - `AGENTS.md` rule 6 needs an explicit human yes for new dependencies and
   schema changes. This build needs the following, and the PR must list each
   one with where the yes was given. The 21:02 brief asked for noVNC, Xvfb and
-  the comps storage by name, which covers the intent; section 15 asks Tega to
-  confirm the exact list.
+  the comps storage by name, which covers the intent; Tega confirmed the list
+  on 2026-11-12 (decision 1), and decision 7 removed two of the four tables.
 
   | Needs a yes | What |
   |---|---|
   | Frontend dependency | `@novnc/novnc`, pinned to an exact version |
   | Server package | `x11vnc` (apt). `xvfb` is already installed |
   | Browser runtime | the full Chromium build, copied from the Playwright cache already on the box |
-  | SQLite tables | `browser_sites`, `comps_settings`, `comps_ack`, `comps_runs` (section 6) |
+  | SQLite tables | `browser_sites`, `mls_runs` (section 6) |
   | Shared service change | WebSocket forwarding in `front/main.py`, which every tenant's traffic passes through |
 
   No Postgres migration is needed (section 6). No Python dependency is added:
@@ -292,7 +309,7 @@ x11vnc → Xvfb display of that person
 
 A small table records, per person and site, that the person signed in there
 (section 6). A row is written when a person hands back from Take over on a
-site and confirms "I'm signed in". Comps marks a row `needs_signin` when it
+site and confirms "I'm signed in". An MLS search marks a row `needs_signin` when it
 meets a sign-in wall.
 
 Settings gets a "Connected sites" section listing site, state ("Signed in" or
@@ -348,77 +365,100 @@ Everything else on the site keeps today's rules.
 - **Recording it.** Every gesture run under the allowance writes a ledger row
   with the grant id, as acting gestures do today.
 
-### 4.5 Comps
+### 4.5 MLS search
 
 ```
-Ask turn ─ find_comps tool ─ run_action.py ─ POST /api/broker/comps
+Ask turn ─ search_mls tool ─ run_action.py ─ POST /api/broker/mls
                                                    │
-                         app/comps.py: switches, direct-line check, caps
-                                                   │ starts a run (comps_runs row)
-                         app/comps_matrix.py: the Matrix reader
+                         app/mls.py: availability, direct-line check, caps
+                                                   │ starts a run (mls_runs row)
+                         app/mls_matrix.py: the Matrix reader
                                       every page load goes through browser.gate()
                                                    │
                          result stored on the run; card drawn in the chat
 ```
 
-- A comps request is a **run**: one row in `comps_runs` holding who asked,
-  what they asked for, how many pages were loaded, how it ended, and the
-  result.
+- A search is a **run**: one row in `mls_runs` holding who asked, the
+  filters, how many pages were loaded, how it ended, and the result.
 - Runs take longer than one tool call allows (ten page loads with pauses).
-  The run executes in the app in the background. `find_comps` waits up to 100
+  The run executes in the app in the background. `search_mls` waits up to 100
   seconds for it; if it is still going, the tool returns the run id and the
-  agent calls `comps_result` to wait again.
+  agent calls `mls_result` to wait again.
 - Every page the run loads goes through `browser.gate()` as that person, so
   each load is a ledger row and the Take over rule, the egress rule and the
-  feature switch all apply without being re-implemented.
+  person's `browser` feature all apply without being re-implemented.
 - The run stops at the first sign-in wall, human check, 2FA prompt or block.
   It marks the site `needs_signin`, asks the person to take over (the existing
   `_ask_person` path), and returns `needs_person`. It never retries on its
   own.
 - The result is shown as a card the app draws, read from the stored run, not
   as text the model wrote. The model also receives the rows so the person can
-  ask follow-up questions (section 15 flags this for a decision).
+  ask follow-up questions (decision 3).
 
 ### 4.6 Shapes
 
 There is one source, Matrix through the person's own browser, so there is no
-source interface and no source setting. `app/comps.py` holds three plain
-dataclasses the reader returns and the summary consumes:
+source interface and no source setting. `app/mls.py` holds three plain
+dataclasses; the reader returns them and the summary consumes them:
 
 ```python
+STATUSES = ("active", "pending", "sold")
+PROPERTY_TYPES = ("single_family", "townhouse_condo", "multi_family", "lot_land")
+
 @dataclass(frozen=True)
-class CompsQuery:
-    address: str
-    radius_miles: float
-    months_back: int
+class Query:
+    statuses: Tuple[str, ...]             # one or more of STATUSES; default ("active",)
+    area: Optional[str]                   # neighbourhood, subdivision or market area, as the person said it
+    zip_codes: Tuple[str, ...]            # up to 10 five-digit codes
+    address: Optional[str]                # a street address: the centre for radius_miles, the subject for comps
+    radius_miles: Optional[float]         # only with address
+    price_min: Optional[int]; price_max: Optional[int]
     beds_min: Optional[int]; beds_max: Optional[int]
     baths_min: Optional[float]; baths_max: Optional[float]
     sqft_min: Optional[int]; sqft_max: Optional[int]
+    year_built_min: Optional[int]; year_built_max: Optional[int]
+    property_types: Tuple[str, ...]       # subset of PROPERTY_TYPES; empty = any
+    date_from: Optional[str]; date_to: Optional[str]   # YYYY-MM-DD; see "Dates" below
+    subject_sqft: Optional[int]           # comps only: the subject's size, for a suggested range
     max_results: int                      # never above 100
 
 @dataclass(frozen=True)
-class Comp:
+class Listing:
     address: str
-    sold_date: str                        # YYYY-MM-DD
-    sold_price: int
-    sqft: Optional[int]
+    status: str                           # one of STATUSES, as mapped from the page
+    list_price: Optional[int]
+    sold_price: Optional[int]
+    list_date: Optional[str]; pending_date: Optional[str]; sold_date: Optional[str]
     beds: Optional[int]; baths: Optional[float]
+    sqft: Optional[int]
     year_built: Optional[int]
+    property_type: Optional[str]
+    area: Optional[str]                   # subdivision or market area as the page shows it
+    zip_code: Optional[str]
     days_on_market: Optional[int]
+    mls_number: Optional[str]
     distance_miles: Optional[float]       # None when the page does not give it
 
 @dataclass
 class Result:
     state: str        # done | needs_person | blocked | unreadable | ambiguous | failed
-    comps: List[Comp]
+    listings: List[Listing]
     page_loads: int
+    truncated: bool
     detail: str       # plain words for the person; never page content
     choices: List[str]            # for "ambiguous"
 ```
 
-- `distance`, `$ per sqft`, the filters and the summary are computed or
-  re-checked in `app/comps.py` after the reader returns; the site's own
-  filters are not trusted.
+- A query needs at least one place: `area`, `zip_codes` or `address`. A
+  search of the whole MLS is refused as `bad_request`.
+- **Dates.** `date_from`/`date_to` apply to the sold date for sold listings,
+  the pending date for pending ones and the list date for active ones. Ask
+  turns "the last six months" into dates itself; the tool takes dates only.
+- Listing agent names, phone numbers, emails, showing instructions and
+  remarks are not read into `Listing` at all.
+- `$ per sqft`, the filters and the summary are computed or re-checked in
+  `app/mls.py` after the reader returns; the site's own filters are not
+  trusted (section 9, flow step 7).
 
 ### 4.7 Optional outbound proxy
 
@@ -449,37 +489,36 @@ that upstream proxy instead of connecting directly.
 | `app/browser_egress.py` | Optional upstream proxy |
 | `app/platform_store.py` | `revoke_grant` |
 | `app/approvals.py` | Scopes and display for `browser_read` |
-| `app/comps.py` (new) | Switches, acknowledgement, caps, runs, summary, broker endpoint, person routes |
-| `app/comps_matrix.py` (new) | The Matrix reader: page classifier, parsers, page flow |
-| `app/accounts.py` | `comps` feature, off by default, including for the owner |
-| `app/team.py` | Accept `comps` in the feature patch; allow it for the owner |
-| `app/agent_status.py` | `COMPS_TOOLS`; status line for comps; chat card for comps |
-| `app/chat.py`, `app/threads.py` | Emit and persist the comps card reference |
+| `app/mls.py` (new) | Shapes, availability check, caps, runs, summary, broker endpoint, person routes |
+| `app/mls_limits.py` (new) | Settings defaults and hard limits; shared with `provision_tenant.py` |
+| `app/mls_matrix.py` (new) | The Matrix reader: page classifier, parsers, page flow |
+| `app/agent_status.py` | `MLS_TOOLS`; status line for MLS search; chat card |
+| `app/chat.py`, `app/threads.py` | Emit and persist the MLS card reference |
 | `app/tenant_delete.py` | Count the new tables; remove browser profiles |
-| `app/main.py` | Register the comps routers |
+| `app/main.py` | Register the MLS routers |
 | `front/main.py` | WebSocket forwarding for `/api/browser/view` |
-| `scripts/hermes_plugin/jarvis/tools.json` | `find_comps`, `comps_result` |
+| `scripts/hermes_plugin/jarvis/tools.json` | `search_mls`, `mls_result` |
 | `scripts/hermes_plugin/jarvis/run_action.py` | The two tool functions and their plain-words replies |
-| `scripts/provision_tenant.py` | `BROWSER_CODE_FILES`; `browser_mode`; `comps`; `browser_proxy`; headed binary path; unit checks |
+| `scripts/provision_tenant.py` | `BROWSER_CODE_FILES`; `browser_mode`; `mls`; `browser_proxy`; headed binary path; unit checks |
 | `scripts/install_browser_runtime.py` | Copy the full Chromium as well as the headless shell |
 | `scripts/templates/browser.service` | Mode, Xvfb and x11vnc paths, memory |
 | `scripts/templates/egress.service` | Upstream proxy settings and credential |
 | `frontend/package.json` | `@novnc/novnc` |
 | `frontend/src/components/BrowserWindow.tsx` | Live view during Take over |
-| `frontend/src/components/CompsCard.tsx` (new) | The comps table and summary |
-| `frontend/src/screens/Settings.tsx` | Connected sites; comps switch and notice; `comps` chip in Team |
+| `frontend/src/components/MlsCard.tsx` (new) | The search results table and summary |
+| `frontend/src/screens/Settings.tsx` | Connected sites |
 | `frontend/src/lib/api.ts`, `lib/types.ts` | New calls and types |
 | `docs/browser/verify_browser.py` | Headed, view, sites, allowance checks |
-| `docs/comps/verify_comps.py` (new) | Comps checks |
-| `docs/comps/fixtures/` (new) | Made-up HAR-like pages |
-| `docs/team/verify_team.py` | Feature list now includes `comps: False` |
+| `docs/mls/verify_mls.py` (new) | MLS search checks |
+| `docs/mls/fixtures/` (new) | Made-up Matrix-like pages |
+| `docs/mls/FIXTURE-CAPTURE.md`, `docs/mls/sanitize_fixture.py` (new) | How Tega saves and sanitises real Matrix pages |
 | `docs/accounts/verify_tenant_delete.py` | New tables and profile removal |
 | `docs/front/verify_front.mjs` | WebSocket forwarding |
 | `docs/SPEC.md` | Section 8.6 and "Not in v1" |
 
-The skills repo's `identity.py` drops feature names it does not know, so the
-`comps` switch is enforced in the app only. Check that `write_team_file()`
-does not start listing `comps` as switched off for everyone.
+There is no new person feature: the search follows the existing `browser`
+feature, so `accounts.FEATURES`, the Team screen and `write_team_file()` are
+unchanged.
 
 ## 6. Database changes
 
@@ -489,9 +528,10 @@ does not start listing `comps` as switched off for everyone.
 approval's action JSON, as `browser_task` does today; the `approvals.kind`
 column stays `action`, which is one of the two values its check allows.
 
-**SQLite, accounts database.** Four additive tables, created with
+**SQLite, accounts database.** Two additive tables (four were approved; the
+comps switch and notice tables were dropped with decision 7), created with
 `CREATE TABLE IF NOT EXISTS` in the same lazy way `browser_logins` is. No
-existing table changes. Each is a schema change under `AGENTS.md` rule 6.
+existing table changes.
 
 ```sql
 -- A site a person signed in to in their own browser. No credentials.
@@ -504,25 +544,8 @@ CREATE TABLE IF NOT EXISTS browser_sites (
     PRIMARY KEY (person_key, site)
 );
 
--- The tenant's comps switch. One row, id = 1.
-CREATE TABLE IF NOT EXISTS comps_settings (
-    id          INTEGER PRIMARY KEY CHECK (id = 1),
-    enabled     INTEGER NOT NULL DEFAULT 0,
-    changed_by  TEXT NOT NULL,
-    changed_at  TEXT NOT NULL
-);
-
--- Who acknowledged the HAR notice, and which wording. Rows are never updated.
-CREATE TABLE IF NOT EXISTS comps_ack (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    notice_version  TEXT NOT NULL,
-    notice_sha256   TEXT NOT NULL,
-    person_key      TEXT NOT NULL,
-    acked_at        TEXT NOT NULL
-);
-
--- One comps request. Also the counter for the daily caps.
-CREATE TABLE IF NOT EXISTS comps_runs (
+-- One MLS search. Also the counter for the daily caps.
+CREATE TABLE IF NOT EXISTS mls_runs (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     person_key    TEXT NOT NULL,
     thread_id     TEXT NOT NULL,
@@ -531,20 +554,19 @@ CREATE TABLE IF NOT EXISTS comps_runs (
     stop_kind     TEXT,               -- login | captcha | two_factor | blocked
     page_loads    INTEGER NOT NULL DEFAULT 0,
     result_count  INTEGER NOT NULL DEFAULT 0,
-    result_json   TEXT,               -- rows and summary; cleared after comps.keep_days
+    result_json   TEXT,               -- rows and summary; cleared after mls.keep_days
     started_at    TEXT NOT NULL,
     finished_at   TEXT
 );
-CREATE INDEX IF NOT EXISTS comps_runs_person ON comps_runs (person_key, started_at);
+CREATE INDEX IF NOT EXISTS mls_runs_person ON mls_runs (person_key, started_at);
 ```
 
-- `person_features` is unchanged. For `comps` a missing row means off; for the
-  other six a missing row still means on.
-- `messages` is unchanged. The comps card is stored in the existing
-  `messages.actions` JSON array as the string `comps:<run id>`.
-- `result_json` holds sold prices. It is cleared (set to NULL, the row kept)
-  once older than `comps.keep_days`. The clearing runs when a new run starts
-  and logs how many rows it cleared.
+- `person_features` is unchanged.
+- `messages` is unchanged. The MLS card is stored in the existing
+  `messages.actions` JSON array as the string `mls:<run id>`.
+- `result_json` holds listing prices. It is cleared (set to NULL, the row
+  kept) once older than `mls.keep_days`. The clearing runs when a new run
+  starts and logs how many rows it cleared.
 - `tenant_delete.py` deletes SQLite tables by listing them, so the data goes
   with the tenant; its verify script counts tables and must be updated.
 - The profile directories on disk are a separate matter. Operator teardown in
@@ -555,44 +577,48 @@ CREATE INDEX IF NOT EXISTS comps_runs_person ON comps_runs (person_key, started_
   signed-in HAR session does not outlive a deleted tenant or a removed
   person.
 
-## 7. Settings and switches
+## 7. Settings and availability
 
-Comps runs for a person only when **every** line below is true. Each refusal
-names the line that failed and bumps its own counter.
+There is no MLS switch (decision 7). The search is available to a person
+exactly when the browser is, plus the one piece of configuration it cannot
+run without. Each refusal names the line that failed and bumps
+`mls_refused_<why>`.
 
-| # | Switch | Where it lives | Who sets it | Default |
+| # | Condition | Where it lives | Who sets it | Default |
 |---|---|---|---|---|
 | 1 | Browser on for the tenant | manifest `browser: enabled` | operator | off |
-| 2 | Browser mode | manifest `browser_mode: headed` | operator | `headless` |
-| 3 | Comps available to the tenant | manifest `comps: available`, read as `app.comps.available` | operator | off |
-| 4 | Comps on for the tenant | `comps_settings.enabled` | owner, in Settings | off |
-| 5 | HAR notice acknowledged | a `comps_ack` row for the current notice version | owner | none |
-| 6 | Browser on for the person | `person_features` | owner or admin | on |
-| 7 | Comps on for the person | `person_features` | owner or admin | **off, including the owner** |
+| 2 | Browser mode | manifest `browser_mode: headed`, read as `app.browser.mode` | operator | `headless` |
+| 3 | Matrix start page configured | manifest `mls: start_url`, read as `app.mls.start_url` | operator | none |
+| 4 | A signed-in person | the session | | |
+| 5 | Browser on for the person | `person_features` `browser` | owner or admin | on |
 
-Line 4 cannot be turned on without line 5 in the same request. If the notice
-wording changes (new `notice_version`), line 5 fails until the owner
-acknowledges the new wording. Comps requires headed mode: a headless browser
-has no way for the person to complete a sign-in challenge.
+Line 3 is configuration, not a switch: the Matrix hostname and search page
+are not known yet (section 9) and there is no guessed default. The search
+needs headed mode because a headless browser gives the person no way to
+complete a sign-in challenge.
 
-Other settings, all read through `tenant_config` under `app.comps.*` and
-rendered from a validated manifest block the way `lead_followup` is:
+Other settings, all read through `tenant_config` under `app.mls.*` and
+rendered from a validated manifest block the way `lead_followup` is. Defaults
+and limits live in `app/mls_limits.py`, which the provisioner imports too:
 
 | Setting | Default | Hard limit in code |
 |---|---|---|
 | `site` | `harmls.com` | one site per tenant (the Matrix host's registrable name) |
-| `start_url` | none: comps is unavailable until set | an `https` address on `site`, the Matrix search page Tega confirms |
+| `start_url` | none: the search is unavailable until set | an `https` address on `site`, the Matrix search page Tega confirms |
 | `max_page_loads_per_request` | 10 | 10 |
 | `max_requests_per_person_per_day` | 5 | 20 |
 | `max_page_loads_per_person_per_day` | 40 | 100 |
 | `max_results` | 25 | 100 |
-| `pause_seconds` | `[4, 9]` (random between) | minimum 3 |
-| `cooldown_hours_after_block` | 24 | minimum 1 |
+| `pause_seconds` | `[4, 9]` (random between) | 3 to 60 |
+| `cooldown_hours_after_block` | 24 | 1 to 336 |
 | `keep_days` | 30 | maximum 90 |
-| (shared channels) | never | not a setting: comps answer only in the person's direct line |
+| (shared channels) | never | not a setting: results go only to the person's direct line |
 
 A setting can lower a hard limit and never raise it. A value outside the
-limit is refused when the manifest is validated, not clamped silently.
+limit is refused when the manifest is validated, not clamped silently, and an
+invalid `app.mls` read by the app makes the search unavailable with
+`mls_config_invalid` rather than running with guessed values. A `start_url`
+with a headless or disabled browser is refused at provisioning.
 
 Browser settings:
 
@@ -604,86 +630,115 @@ Browser settings:
 
 ## 8. The Ask tool contract
 
-Two tools in `tools.json`, both with `"needs": ["browser", "comps"]`. They are
-offered to the agent only when all seven lines in section 7 hold for the
-person; otherwise they are absent from the allowlist and the status block
-says, in one line, why comps is not available.
+Two tools in `tools.json`, both with `"needs": ["browser"]`. They are offered
+to the agent only when every line in section 7 holds for the person;
+otherwise they are absent from the allowlist and the status block says, in
+one line, why MLS search is not available.
 
-**`find_comps`**
+**`search_mls`.** Ask maps the person's words to these filters. The tool
+description tells the model to pass only what the person said or clearly
+implied, never to invent a filter, and to ask the person when the place is
+missing.
 
 | Parameter | Type | Default | Range |
 |---|---|---|---|
-| `address` | string, required | | 5 to 200 characters |
-| `radius_miles` | number | 1.0 | 0.25 to 5 |
-| `months_back` | integer | 6 | 1 to 24 |
+| `statuses` | list of `active`, `pending`, `sold` | `["active"]` | 1 to 3, no repeats |
+| `area` | string | none | 2 to 80 characters: a neighbourhood, subdivision or market area ("the Heights") |
+| `zip_codes` | list of strings | none | up to 10 five-digit codes |
+| `address` | string | none | 5 to 200 characters |
+| `radius_miles` | number | none; 1.0 when `address` is given | 0.25 to 5; only with `address` |
+| `price_min`, `price_max` | integer | none | 0 to 100,000,000 |
 | `beds_min`, `beds_max` | integer | none | 0 to 12 |
 | `baths_min`, `baths_max` | number | none | 0 to 12 |
 | `sqft_min`, `sqft_max` | integer | none | 200 to 20000 |
+| `year_built_min`, `year_built_max` | integer | none | 1800 to next year |
+| `property_types` | list of `single_family`, `townhouse_condo`, `multi_family`, `lot_land` | any | no repeats |
+| `date_from`, `date_to` | `YYYY-MM-DD` | none | not in the future; at most 36 months back |
+| `subject_sqft` | integer | none | 200 to 20000; comps only |
 | `max_results` | integer | 25 | 1 to 100 |
 
-**`comps_result`**: `run_id` (integer, required). Waits up to 100 seconds for
-a run that `find_comps` reported as still running. Only the person who started
-the run can read it.
+At least one of `area`, `zip_codes` or `address` is required. Every min must
+not exceed its max.
 
-**Broker endpoint.** `POST /api/broker/comps`, body
-`{"ref": <turn ref>, "op": "find" | "result", ...parameters}`. Same shape as
+Examples of the mapping (in the tool description, for the model):
+
+- "active listings in the Heights" → `statuses: [active], area: "Heights"`.
+- "3-bed houses under 600k in 77008 that went pending this month" →
+  `statuses: [pending], zip_codes: [77008], beds_min: 3,
+  property_types: [single_family], price_max: 600000, date_from: <first of month>`.
+- "comps for 123 Main St, 2,000 sqft, last 6 months" → `statuses: [sold],
+  address: "123 Main St", radius_miles: 1, date_from: <today − 6 months>,
+  subject_sqft: 2000`.
+
+**`mls_result`**: `run_id` (integer, required). Waits up to 100 seconds for
+a run that `search_mls` reported as still running. Only the person who
+started the run can read it.
+
+**Broker endpoint.** `POST /api/broker/mls`, body
+`{"ref": <turn ref>, "op": "search" | "result", ...parameters}`. Same shape as
 `lead_tools.py`: `broker._authorize`, the person from `broker._turn_person`,
-then the checks in this order: switches (section 7), direct line, caps.
+then the checks in this order: availability (section 7), direct line,
+parameters, caps.
 
 **Success.**
 
 ```json
 {
   "ok": true, "state": "done", "run_id": 41,
-  "subject": {"address": "..."},
-  "count": 18, "truncated": false, "page_loads": 6,
+  "query": {"statuses": ["active"], "area": "Heights"},
+  "count": 18, "truncated": false, "page_loads": 3,
+  "dropped": 1, "unverified": 0,
   "summary": {
-    "used": 16,
-    "median_price_per_sqft": 212,
-    "price_per_sqft_low": 188, "price_per_sqft_high": 241,
-    "suggested_low": 398000, "suggested_high": 452000,
-    "note": "Based on 16 sales. Not an appraisal."
+    "by_status": {"active": 18},
+    "median_price": 549000, "price_low": 465000, "price_high": 689000,
+    "median_price_per_sqft": 298,
+    "median_days_on_market": 24,
+    "note": "18 active listings. Prices are list prices."
   },
-  "comps": [
-    {"address": "...", "sold_date": "2026-08-14", "sold_price": 415000,
-     "price_per_sqft": 207, "beds": 3, "baths": 2.0, "sqft": 2004,
-     "year_built": 1998, "days_on_market": 21, "distance_miles": 0.4}
+  "listings": [
+    {"address": "...", "status": "active", "list_price": 549000, "sold_price": null,
+     "list_date": "2026-10-02", "sold_date": null, "price_per_sqft": 298,
+     "beds": 3, "baths": 2.0, "sqft": 1842, "year_built": 1925,
+     "property_type": "single_family", "area": "Heights", "zip_code": "77008",
+     "days_on_market": 41, "mls_number": "...", "distance_miles": null}
   ]
 }
 ```
 
 Still running: `{"ok": true, "state": "running", "run_id": 41}`.
 
-**Summary rules.** `price_per_sqft` is sold price divided by sqft, rounded.
-The median uses only rows that have both. Low and high are the 25th and 75th
-percentiles. `suggested_low` and `suggested_high` are those multiplied by the
-subject's sqft, and are present only when the subject's sqft is known and at
-least three rows were used. With fewer than three, the summary says there are
-too few sales to suggest a range. `truncated` is true when the page had more
-rows than `max_results`.
+**Summary rules.** The price of a row is its sold price when sold and its
+list price otherwise; the note says which. `price_per_sqft` is that price
+divided by sqft, rounded. Medians use only rows that have the field; low and
+high are the 25th and 75th percentiles. When every row is sold, `address` and
+`subject_sqft` are given and at least three rows have a price per sqft, the
+summary adds `suggested_low` and `suggested_high` (the percentiles times
+`subject_sqft`) and the note says "Not an appraisal". With fewer than three,
+it says there are too few sales to suggest a range. `truncated` is true when
+the page had more rows than `max_results`.
 
 **Refusals.** Each has a fixed plain-words line in `run_action.py` (the
 pattern `LEADS_SAY` uses), so the agent tells the person the right thing.
 
 | HTTP | `error` | Meaning |
 |---|---|---|
-| 403 | `feature_off` + `layer` | Which line of section 7 failed |
-| 403 | `direct_only` | Asked in a shared channel; comps are shown in the person's own direct line |
+| 403 | `unavailable` + `why` | Which line of section 7 failed |
+| 403 | `direct_only` | Asked in a shared channel; results are shown in the person's own direct line |
+| 400 | `bad_request` + `detail` | A parameter is out of range, or no place was given |
 | 409 | `needs_person` + `kind` | Sign-in, human check, 2FA or block; the person must take over |
-| 409 | `busy` | That person already has a run going |
+| 409 | `busy` | That person (or the tenant) already has a run going |
 | 409 | `cooling_off` + `until` | A block was met recently |
 | 429 | `daily_cap` + `resets_at` | Daily cap reached |
-| 409 | `ambiguous` + `choices` | More than one property matches the address |
+| 409 | `ambiguous` + `choices` | The area or address matches more than one thing on the site |
 | 502 | `unreadable` | The page was not one the reader recognises; nothing was guessed |
-| 503 | `unavailable` | Browser not running, or `start_url` is not set |
-| 400 | `bad_request` | A parameter is out of range |
+| 503 | `browser_unavailable` | The browser could not be reached |
 
 **Where the result appears.** The direct-line check is: the turn's thread has
 `direct_for` equal to the requesting person. When the run ends `done`, the
 turn requests the chat card (the mechanism `connect_google` uses through
 `actor_refs.request_action`), the stream emits
-`{"type": "comps", "run_id": 41}`, and the reply row stores `comps:41` in
-`messages.actions`. The frontend fetches `GET /api/comps/runs/41` and draws
+`{"type": "mls", "run_id": 41}`, and the reply row stores `mls:41` in
+`messages.actions`. The frontend fetches `GET /api/mls/runs/41` and draws
 the table. That route requires a signed-in person, refuses the break-glass
 operator, and returns 404 unless the run belongs to the caller.
 
@@ -698,21 +753,22 @@ address that is a guess; do not use it.
 **How the build proceeds without that knowledge.**
 
 1. The implementing run writes its own made-up pages that look like a listing
-   site (`docs/comps/fixtures/`): a search form, a results table, a results
+   site (`docs/mls/fixtures/`): a search form, a results table, a results
    page of cards, a "no results" page, a sign-in wall, a human-check page, a
    2FA page, a "too many requests" page, and a page of an unknown shape. All
    names, addresses and prices are invented and use `.example` where an
    address is needed.
 2. The reader is built and tested against those.
-3. A person (Spencer or Tega), signed in on their own machine, saves the real
+3. Tega, signed in on their own machine, saves the real
    pages by hand and passes them through a sanitising script that replaces
    every address, price, name, MLS number, phone, email and image before the
-   file is committed. That is a human step after the PR, listed in section 15.
+   file is committed (`docs/mls/FIXTURE-CAPTURE.md`, `docs/mls/sanitize_fixture.py`).
+   That is a human step after the PR.
 4. The first run against the real site happens on a test tenant with a person
    watching, after deploy, with the caps set to their lowest. That is also
    after the PR.
 
-**Reading a page.** All parsing is Python in `app/comps_matrix.py`, so it is
+**Reading a page.** All parsing is Python in `app/mls_matrix.py`, so it is
 testable without a browser. The worker gets one new request, `tables`, which
 runs a fixed script shipped in the worker (never one supplied by the model or
 by the app at run time) and returns, capped in size:
@@ -724,7 +780,7 @@ by the app at run time) and returns, capped in size:
 The parser tries, in order: an embedded data block; a table whose headers map
 to known column names; labelled cards. Columns are found by header text
 through one mapping table (for example "Sold Price", "Close Price" →
-`sold_price`), never by CSS class names, which change often. The mapping
+`sold_price`; "Status" values "A", "Active" → `active`), never by CSS class names, which change often. The mapping
 table is the single place to edit when the real pages are seen.
 
 **Classifying a page before reading it.** `classify(page)` returns one of:
@@ -744,27 +800,31 @@ understand must never be reported as "no sales found".
 
 **The flow.**
 
-1. Check switches, direct line and caps; create the run row.
-2. Open the search starting page for the configured site. If the site lets a
-   search be expressed in the address, use that. Otherwise fill the search
-   filters with the read-allowance gestures: address, radius, sold status,
-   date range, beds, baths, sqft.
+1. Check availability, direct line, parameters and caps; create the run row.
+2. Open `start_url`. If the site lets a search be expressed in the address,
+   use that. Otherwise fill the search filters with the read-allowance
+   gestures: status, area, zip, address and radius, price, beds, baths, sqft,
+   year built, property type, date range. A filter the reader cannot find on
+   the page ends the run as `unreadable` naming the filter; it is never
+   silently left out.
 3. Classify. Stop on anything but `results` or `empty`.
-4. If more than one property matches the address, return `ambiguous` with the
-   choices as the site shows them.
+4. If the area or address matches more than one thing, return `ambiguous`
+   with the choices as the site shows them.
 5. Read the rows. Page forward only while rows are needed and the page budget
    allows. Pause a random time within `pause_seconds` before every load.
 6. Stop reading at `max_results` rows.
-7. Re-check every row in the app against the request (sold date within
-   `months_back`, beds, baths, sqft, radius when the page gives distance)
-   and drop rows that fail, counting how many were dropped. Do not trust the
-   site's filters to have applied.
+7. Re-check every row in the app against every filter (status, zip, price,
+   beds, baths, sqft, year built, type, the date for its status, radius when
+   the page gives distance) and drop rows that fail, counting them as
+   `dropped`. A row missing a field a filter needs is kept and counted as
+   `unverified`, and the card says so. Do not trust the site's filters to
+   have applied.
 8. Compute the summary, store the result, finish the run.
 
 **Controls the run may use.** Only controls whose names match a short
 allowlist: search, apply filters, next page, sort. It never uses a control
 whose name matches save, contact, email, message, share, schedule, favourite,
-print, export or download. That deny list is checked in `comps_matrix.py` in
+print, export or download. That deny list is checked in `mls_matrix.py` in
 addition to the gate's own rules, and downloads stay denied at the browser.
 
 **Failure handling.**
@@ -776,16 +836,16 @@ addition to the gate's own rules, and downloads stay denied at the browser.
   far; the pages already loaded still count against the daily cap.
 - A run still `running` after ten minutes is marked `failed` by the next
   request, with a counter.
-- After `blocked`, that person's comps are refused until the cooldown ends.
+- After `blocked`, that person's searches are refused until the cooldown ends.
 
 ## 10. Caps and rate limits
 
 | Cap | Default | Enforced where |
 |---|---|---|
 | Page loads per request | 10 | a `Budget` object the reader must draw from before each load; the eleventh draw raises |
-| Requests per person per day | 5 | counted from `comps_runs` before a run starts |
-| Page loads per person per day | 40 | summed from `comps_runs.page_loads` |
-| Sold rows per request | 25, never above 100 | in `app/comps.py`, after the reader returns, whatever the reader did |
+| Requests per person per day | 5 | counted from `mls_runs` before a run starts |
+| Page loads per person per day | 40 | summed from `mls_runs.page_loads` |
+| Rows per request | 25, never above 100 | in `app/mls.py`, after the reader returns, whatever the reader did |
 | Pause between page loads | random 4 to 9 seconds | in the reader, before each load |
 | Runs at once | one per person, one per tenant | a lock; a second request gets `busy` |
 | Cooldown after a block | 24 hours | from the latest `blocked` run |
@@ -797,10 +857,11 @@ addition to the gate's own rules, and downloads stay denied at the browser.
   disagree with them.
 - A run counts against the daily caps from the moment it starts, however it
   ends.
-- Health counters, each bumped at the point of refusal: `comps_started`,
-  `comps_done`, `comps_needs_person`, `comps_blocked`, `comps_unreadable`,
-  `comps_refused_<layer>`, `comps_refused_daily_cap`, `comps_refused_busy`,
-  `comps_refused_cooldown`, `comps_refused_channel`, `comps_rows_dropped`.
+- Health counters, each bumped at the point of refusal: `mls_started`,
+  `mls_done`, `mls_needs_person`, `mls_blocked`, `mls_unreadable`,
+  `mls_refused_<why>`, `mls_refused_daily_cap`, `mls_refused_busy`,
+  `mls_refused_cooldown`, `mls_refused_channel`, `mls_rows_dropped`,
+  `mls_rows_unverified`.
 
 ## 11. Security
 
@@ -808,10 +869,10 @@ addition to the gate's own rules, and downloads stay denied at the browser.
 
 - Every route takes the person from the signed-in session
   (`browser._person(sess)`), never from a parameter. The break-glass operator
-  has no browser and no comps.
-- Comps runs under the requesting person's profile only. There is no code
+  has no browser and no MLS search.
+- A search runs under the requesting person's profile only. There is no code
   path that names another person's profile.
-- The owner cannot view a member's browser, read a member's comps run, or
+- The owner cannot view a member's browser, read a member's search run, or
   decide a member's browser approvals.
 - **A new risk that headed mode creates, and its required fix.** Every
   person's profile in a tenant is owned by the same unix user. Today that is
@@ -862,23 +923,24 @@ machine into the remote browser is allowed, so a password manager works.
 
 - Passwords: the build stores none. Chromium's password saving is switched
   off in the profile. `browser_logins` keeps its existing encryption and is
-  not used by comps; comps relies on the session the person created.
+  not used by the search, which relies on the session the person created.
 - Session cookies live in the person's profile directory (0700, the tenant's
   browser user). They are never read by the app, never returned by a worker
   request, and never logged. `forget_site` deletes them by site.
 - Logs carry sites, never full addresses with query strings from a signed-in
-  site, never page text, never sold prices. The worker's existing redaction
+  site, never page text, never prices. The worker's existing redaction
   stays in the path.
 - Proxy credentials: section 4.7.
 
-### 11.4 Sold prices
+### 11.4 Search results
 
 - Returned only in the requesting person's direct line; refused in shared
-  channels unless `allow_in_channels` is set.
-- Stored only in `comps_runs.result_json`, readable only by that person,
+  channels, with no setting to allow them.
+- Stored only in `mls_runs.result_json`, readable only by that person,
   cleared after `keep_days`.
-- The agent's reply text in that direct line may quote prices and is stored
-  with the thread like any reply, visible to that person.
+- Sent to the model for that person's turn so it can answer follow-ups
+  (decision 3). The agent's reply text in that direct line may quote prices
+  and is stored with the thread like any reply, visible to that person.
 - Not written to logs, counters, the ledger's `actions` rows, or the activity
   feed. The ledger records that a page on the site was read, not what it said.
 
@@ -914,8 +976,9 @@ person's go-ahead at the time, and every restart is named.
 **Per tenant** (test tenant first, then dev34 when Tega says so).
 
 1. Add to the manifest: `browser_mode: headed`, `browser_limits.memory_max`
-   at the measured value, and, only if comps is wanted, `comps: available`
-   with any cap overrides.
+   at the measured value, and, only if MLS search is wanted, an `mls:` block
+   with `start_url` (the Matrix search page Tega confirms) and any cap
+   overrides.
 2. Run the existing upgrade path in `provision_tenant.py` (`upgrade()`); check
    its options with `--help`. It copies the worker files, re-renders the units
    and reports unit problems. It restarts the tenant's app, gateway and
@@ -923,15 +986,16 @@ person's go-ahead at the time, and every restart is named.
 3. Check, as a signed-in person on that tenant: the browser opens a public
    page; `status` reports `headed`; Take over shows a live view; a second
    person cannot see the first person's view; handing back closes the view.
-4. Comps stays off until the owner turns it on in Settings and acknowledges
-   the notice, and turns it on for each person.
-5. First real comps request: one person, signed in to HAR by their own hand
+4. There is no MLS switch (decision 7): once `start_url` is set, every person
+   with the browser feature on can run searches. To limit who can, switch the
+   `browser` feature off for those people in Team before the upgrade.
+5. First real search: one person, signed in to Matrix by their own hand
    through Take over, with someone watching the browser and the counters.
 
 **Rolling back.** Set `browser_mode: headless` and run the upgrade again. Both
-Chromium builds are the same revision, so a profile works in either. Setting
-`comps: off` in the manifest disables comps regardless of the owner's switch.
-The new tables are additive and can stay.
+Chromium builds are the same revision, so a profile works in either. Removing
+`mls.start_url` from the manifest (and upgrading) makes MLS search
+unavailable for everyone. The new tables are additive and can stay.
 
 ## 13. Implementation steps
 
@@ -1035,48 +1099,61 @@ grant id; typing into a non-search form and clicking a risky button are still
 held. Canary: an `always` read grant alone does not satisfy `_active_grant()`.
 After revoking, the same link click asks again.
 
-### E. Comps
+### E. MLS search
 
-**Step 11. Switches and the notice.**
-`comps` in `FEATURES`, off by default for everyone including the owner;
-`feature_on(None, "comps")` is false; `comps_settings` and `comps_ack`; owner
-routes to read the notice, acknowledge and switch on, and switch off; the
-Settings notice and switch; the Team chip.
-Proof: a fresh tenant has comps off at every layer; a member or admin cannot
-acknowledge or switch the tenant on; switching on without acknowledging is
-refused; acknowledging stores who and when; a new notice version turns comps
-off again until acknowledged; `docs/team/verify_team.py` updated and passing.
+**Step 11. Availability and settings.**
+`app/mls_limits.py`; the manifest `mls:` block validated in
+`provision_tenant.py` and rendered as `app.mls`, plus `app.browser.mode`;
+`mls.available_for(person)` walking section 7 in order. No new person
+feature and no tenant switch.
+Proof: each line of section 7 off in turn gives its own `why` and bumps its
+own counter, and all on gives available (presence check); an out-of-range
+setting is refused by the provisioner and, read by the app, makes the search
+unavailable with `mls_config_invalid`; `start_url` with a headless browser is
+refused at provisioning; `docs/team/verify_team.py` still passes with the
+feature list unchanged.
 
 **Step 12. Shapes, summary, caps, runs.**
-The shapes in `comps.py`; `comps_runs`; the
-`Budget`; the cap checks; the summary; the re-check filter; retention.
+The shapes and parameter checks in `mls.py`; `mls_runs`; the `Budget`; the
+cap checks; the summary; the re-check filter; retention.
 Proof with a fake reader: the tenth page load is allowed and the eleventh is
 refused; the fifth request of the day is allowed and the sixth is refused, and
 allowed again on the next local day; 100 rows come back from a reader that
-offers 150, with `truncated` true; the re-check drops a row outside the date
-range and counts it; the summary matches hand-worked numbers; fewer than three
-rows gives no suggested range; no `start_url` gives `unavailable`.
+offers 150, with `truncated` true; the re-check drops a row with the wrong
+status, one outside the price range and one outside the date range for its
+status, and counts each, and keeps a row missing sqft as unverified; a query
+with no place is refused; the summary matches hand-worked numbers for an
+active search and for a sold-comps search; fewer than three sold rows gives
+no suggested range; no `start_url` gives `unavailable`.
 
 **Step 13. Reading pages.**
-The worker's `tables` request; the fixtures; `classify` and the parsers.
+The worker's `tables` request; the fixtures (search form with every filter,
+results table with mixed statuses, results cards, "no results", an
+ambiguous-area picker, sign-in wall, human check, 2FA, "too many requests",
+unknown page); `classify` and the parsers.
 Proof: every fixture page gets the expected class; the table and the card
-fixtures parse to the same rows; the unknown page gives `unreadable` and
-never an empty result; the "no results" page gives zero rows.
+fixtures parse to the same rows; status words map to `active`, `pending`,
+`sold`; the unknown page gives `unreadable` and never an empty result; the
+"no results" page gives zero rows; agent names, phones and emails on the
+fixture never reach a `Listing`.
 
 **Step 14. The run and the tool.**
-The Matrix reader's flow through `browser.gate()`; pauses; stops and handoff;
-the broker endpoint; `tools.json`; `run_action.py`; `agent_status.py`.
-Proof on the fixture site standing in for the listing site: a full run
-returns the expected rows and writes one ledger row per page load; a sign-in
-wall stops the run, marks the site `needs_signin`, asks the person, and loads
-no further page; a block starts the cooldown; a request in a channel is
-refused; a person with comps off does not have the tools in their allowlist;
-a second run while one is going gets `busy`; pauses are honoured (use a short
-test range and assert the elapsed time).
+The Matrix reader's flow through `browser.gate()`; filling each filter with
+read gestures; pauses; stops and handoff; the broker endpoint; `tools.json`;
+`run_action.py`; `agent_status.py`.
+Proof on the fixture site standing in for Matrix: an "active in the Heights"
+search and a sold-comps search each return the expected rows and write one
+ledger row per page load; a filter missing from the form ends `unreadable`
+naming it; a sign-in wall stops the run, marks the site `needs_signin`, asks
+the person, and loads no further page; a block starts the cooldown; a request
+in a channel is refused; a person with `browser` off does not have the tools
+in their allowlist while a person with it on does; a second run while one is
+going gets `busy`; pauses are honoured (use a short test range and assert the
+elapsed time).
 
-**Step 15. The comps card.**
-The stream event, `messages.actions`, `GET /api/comps/runs/{id}`,
-`CompsCard.tsx`.
+**Step 15. The results card.**
+The stream event, `messages.actions`, `GET /api/mls/runs/{id}`,
+`MlsCard.tsx`.
 Proof: the card survives a reload; another member, the owner and the operator
 each get 404 for someone else's run; a cleared run shows "these results have
 expired" rather than an empty table.
@@ -1111,9 +1188,9 @@ check asserts a counter or row count before and after.
 |---|---|
 | Headed launch, profile persistence, view relay, sites, allowance | `docs/browser/verify_browser.py` |
 | Take over scoping (a member cannot view another's browser) | `docs/browser/verify_browser.py` |
-| Comps parsing, caps, switches, direct-line rule, run scoping | `docs/comps/verify_comps.py` |
+| MLS search parsing, caps, availability, direct-line rule, run scoping | `docs/mls/verify_mls.py` |
 | Front WebSocket forwarding | `docs/front/verify_front.mjs` |
-| Feature list | `docs/team/verify_team.py` |
+| Feature list unchanged | `docs/team/verify_team.py` |
 | Deletion | `docs/accounts/verify_tenant_delete.py` |
 
 **Existing suites to run at the end**, with their output pasted:
@@ -1132,21 +1209,8 @@ Those are only learned in the supervised first run after deploy.
 
 ## 15. Open risks and decisions
 
-**Decisions for Tega before the build starts.**
-
-1. Confirm the yes list in section 2 (noVNC package, `x11vnc`, the full
-   Chromium, four SQLite tables, the change to the shared front).
-2. Which surface comps should read: HAR.com's member pages or Matrix. The plan
-   assumes one site per tenant, default `har.com`. Ask Spencer which page he
-   uses for comps today. Matrix searches are form posts, which sit closer to
-   the "no form submits beyond search filters" line.
-3. Whether the comps rows go to the model. The plan sends them so the agent
-   can answer follow-ups, which means sold prices are part of the text sent to
-   the model provider for that turn. The alternative is to send the model the
-   summary only and show the rows in the card alone.
-4. Whether to pass the flag that clears `navigator.webdriver`, if step 3 finds
-   it set.
-5. Who saves and sanitises the real pages (section 9), and when.
+**Decisions.** All settled on 2026-11-12; see the list at the top of this
+document. They replace the five questions this section asked at planning time.
 
 **Risks.**
 
@@ -1154,7 +1218,8 @@ Those are only learned in the supervised first run after deploy.
 |---|---|
 | The real pages do not match the made-up fixtures | One mapping table to edit; unknown pages stop as `unreadable`; supervised first run |
 | HAR blocks or challenges the browser anyway | Stop, hand to the person, cooldown; no retry, no solving |
-| An account is flagged or fined | Low caps, off by default, owner's acknowledgement on record; the risk itself is accepted by the team, not removed |
+| An account is flagged or fined | Low caps and pauses, unavailable until `start_url` is set; the risk itself is accepted by the team, not removed. With no switch or acknowledgement (decision 7), every person with the browser can search once it is configured |
+| Ask maps words to the wrong filter | Only stated filters are passed; the card shows the filters used; every filter is re-checked on the rows; a filter the form lacks stops the run |
 | Cross-person file access through the address bar | Section 11.1; the build stops if its test cannot pass |
 | Shared front change breaks other tenants | One path only, verify script, quiet-window restart in the runbook |
 | Memory: headed browsers are heavier | Measured in step 3; limit raised from the measurement |
@@ -1171,8 +1236,8 @@ Those are only learned in the supervised first run after deploy.
 In plain words, for the PR description.
 
 This feature signs nobody in. Each agent signs in to HAR themselves, in their
-own browser session on the server, and Jarvis then reads sold listings through
-that session on the agent's request.
+own browser session on the server, and Jarvis then runs MLS searches
+(active, pending or sold listings) through that session on the agent's request.
 
 The brief records that the team has been told of, and accepts, these points.
 They are repeated here as the brief stated them; HAR's current documents were
@@ -1187,10 +1252,10 @@ not re-read during planning.
 
 How the build responds: no password is stored or typed by Jarvis; each
 session is one agent's own; requests are few and slow, capped per request and
-per day; no more than 100 sold rows per request; nothing is saved, sent or
-submitted on the site beyond search filters; sold prices go only to the agent
-who asked; the feature is off until the owner reads the notice and turns it
-on. None of that makes automated access permitted if HAR's terms forbid it.
+per day; no more than 100 rows per request; nothing is saved, sent or
+submitted on the site beyond search filters; results go only to the agent
+who asked. There is no separate on switch or acknowledgement: it is available
+to everyone with the browser once the operator sets the Matrix start page. None of that makes automated access permitted if HAR's terms forbid it.
 It lowers the volume and keeps each agent inside their own login.
 
 What to confirm with HAR and the brokerage:
@@ -1200,10 +1265,8 @@ What to confirm with HAR and the brokerage:
    handed over.
 2. Whether HAR offers an approved route for this use. (A licensed feed is
    out of scope for this build; adding one later would be new work.)
-3. Whether sold prices may be stored for 30 days, and whether that period
-   should be shorter.
-4. Who at the brokerage acknowledges the notice, since their name is what is
-   recorded.
+3. Whether listing and sold prices may be stored for 30 days, and whether
+   that period should be shorter.
 
 ## 17. Work in progress that already exists
 
