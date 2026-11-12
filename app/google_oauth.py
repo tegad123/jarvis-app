@@ -598,6 +598,9 @@ def granted_all(granted: str, scopes: tuple) -> bool:
 
 def callback(request: Request, response: Response):
     """Dispatch on signed-state purpose. Login is unauthenticated; connect is not."""
+    from . import tenant_delete  # noqa: PLC0415
+    if tenant_delete.closed():
+        return JSONResponse({"detail": "This team was deleted. Sign-in is off."}, status_code=401)
     if auth.throttled(request):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,

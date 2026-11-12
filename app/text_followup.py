@@ -318,6 +318,10 @@ def _save_state(state: Dict[str, Any]) -> None:
 def tick(now: Optional[datetime] = None) -> Dict[str, str]:
     """Serve the latest passed slot to everyone not yet served it. Returns
     {person: what happened} for this tick."""
+    from . import tenant_delete  # noqa: PLC0415
+    if tenant_delete.closed():
+        log.warning("text_followup: skipped because this team was deleted")
+        return {"_": "tenant_closed"}
     cfg = settings()
     if not cfg.get("enabled"):
         return {}

@@ -278,8 +278,14 @@ def current_session(
     change or a removal applies to the web and the phone on the next request.
 
     Only a bearer that carries the app-token prefix is read here. The gateway's
-    API_SERVER_KEY bearer and anything else fall through to the cookie."""
+    API_SERVER_KEY bearer and anything else fall through to the cookie.
+
+    A closed team refuses both, before the cookie or the token is trusted."""
     from . import devices  # noqa: PLC0415
+    from . import tenant_delete  # noqa: PLC0415
+    if tenant_delete.closed():
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="This team was deleted. Sign-in is off.")
     token = devices.bearer_token(authorization)
     if token:
         return _live(devices.session_from_access(token))
