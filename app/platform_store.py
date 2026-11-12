@@ -148,6 +148,21 @@ def create_grant(grant: sentinel.Grant, *, approval_id: str, action_class: str, 
                                        "user_id": grant.user}, {"scope": grant.scope})
 
 
+def revoke_grant(grant_id: str, *, by: str, reason: str) -> bool:
+    """Ends a grant now (revoked_at; the row stays for the audit). False if it
+    was already revoked or never existed."""
+    with platform_db.connect() as c:
+        row = c.execute("UPDATE grants SET revoked_at=now() WHERE id=%s AND revoked_at IS NULL "
+                        "RETURNING id, user_id, connector, skill, action_class, destination",
+                        (grant_id,)).fetchone()
+    if row is None:
+        return False
+    record_action("grant", "revoked", {"grant_id": row["id"], "connector": row["connector"], "skill": row["skill"],
+                                       "action_class": row["action_class"], "destinations": [row["destination"]],
+                                       "user_id": row["user_id"]}, {"by": by, "reason": reason[:200]})
+    return True
+
+
 def new_approval_id() -> str:
     return "apr_" + uuid.uuid4().hex[:12]
 

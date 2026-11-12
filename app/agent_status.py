@@ -15,7 +15,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from . import broker, config, google_connection
 
@@ -26,9 +26,12 @@ TOOLS: Dict[str, dict] = {t["name"]: t for t in SPEC["tools"]}
 ALLOWED = frozenset(TOOLS)
 BROWSER_TOOLS = frozenset(n for n, t in TOOLS.items() if "browser" in t["needs"])
 LEAD_TOOLS = frozenset({"add_lead", "log_lead_contact", "list_my_followups"})
+MLS_TOOLS = frozenset({"search_mls", "mls_result"})
 PERSONAL_TOOLS = BROWSER_TOOLS | {"imessage_search"} | LEAD_TOOLS
 CONNECT_ROLES = ("owner", "admin", "member")
 CHAT_ACTIONS = ("connect_google",)
+# An MLS search's results card, saved under the reply as "mls:<run id>".
+MLS_ACTION = re.compile(r"mls:([1-9][0-9]{0,11})")
 WORKING = "Working on it"
 
 
@@ -72,10 +75,32 @@ def browser_on() -> bool:
     return browser.enabled()
 
 
+def mls_run_of(action: str) -> Optional[int]:
+    m = MLS_ACTION.fullmatch(action) if isinstance(action, str) else None
+    return int(m.group(1)) if m else None
+
+
+def mls_card_ok(run_id: int, person_key: str, thread_id: Optional[str] = None) -> bool:
+    """The card is drawn only for the person whose search it was (and, while
+    the turn runs, only in the thread it ran from)."""
+    from . import mls  # noqa: PLC0415
+    run = mls.run_row(run_id, person_key) if person_key else None
+    return bool(run) and (thread_id is None or run["thread_id"] == thread_id)
+
+
+def mls_tenant_ready() -> bool:
+    """MLS search is set up for this tenant: everything in plan section 7
+    that isn't about a particular person holds."""
+    from . import mls  # noqa: PLC0415
+    return mls.available_for(None, count=False) == "not_a_person"
+
+
 def allowed_now() -> frozenset:
     """The tools the model may be offered on this tenant right now: the
-    browser's only where it is switched on."""
-    return ALLOWED if browser_on() else ALLOWED - BROWSER_TOOLS
+    browser's only where it is switched on, MLS search only where it is set up."""
+    if not browser_on():
+        return ALLOWED - BROWSER_TOOLS
+    return ALLOWED if mls_tenant_ready() else ALLOWED - MLS_TOOLS
 
 
 def mac_connected(person_key: str) -> bool:
@@ -113,6 +138,8 @@ def status(role: str, person_key: str = "") -> dict:
     g = google_state(person_key)
     mode = "practice" if practice() else "live"
     hidden = set() if browser_on() else set(BROWSER_TOOLS)
+    if not hidden and not mls_tenant_ready():
+        hidden |= MLS_TOOLS
     # Each person's browser is their own; someone who is nobody has none.
     barred = set() if person_key else set(PERSONAL_TOOLS) - hidden
     off = switched_off(person_key) - hidden
@@ -142,6 +169,8 @@ _CAN = {
     "add_lead": "add a lead to their lead tracker",
     "log_lead_contact": "log a call, text or meeting with a lead and set the next follow-up",
     "list_my_followups": "list the leads they're due to follow up with",
+    "search_mls": "search HAR MLS Matrix through their own signed-in browser (active, pending or sold listings, "
+                  "comps), read-only, with the results shown only to them",
 }
 _CAN_LIVE = {
     "add_calendar_event": "put things on their calendar and invite the people they name, each one only after they tap Approve in the Approvals tab",
@@ -182,6 +211,11 @@ def render(st: dict, name: str) -> str:
                      "browser_request_access once with the whole task; they allow it right in that window. Never "
                      "ask for or type a password: browser_login uses a saved login, and otherwise they sign in "
                      "themselves by tapping Take over in the window. Do the same for a code or a CAPTCHA.")
+    if "search_mls" in st["available"]:
+        lines.append("- MLS search: search_mls runs a Matrix search through their own browser session and the app "
+                     "shows the table to them. Map what they ask to its filters and pass nothing they didn't say. If "
+                     "Matrix wants a sign-in, a code or a human check, the search stops and they take over; never ask "
+                     "for a password or code. Results go only to them, in their direct chat.")
     if "imessage_search" in st["available"]:
         lines.append("- iMessage: " + ("their Mac is connected, so imessage_search reads their texts from the last 30 "
                                        "days. You cannot send texts; say so if asked." if st.get("mac")
@@ -246,20 +280,31 @@ def shape_prompt(text: str) -> tuple:
     return "\n\n".join(out), kept, dropped
 
 
-ACTION_LABELS = {"connect_google": "Connect your Google account"}
+ACTION_LABELS = {"connect_google": "Connect your Google account", "mls": "MLS search results"}
 
 
 def action_ok(action: str, role: str, person_key: str) -> bool:
     """Whether the app's control would work now for this person; a dead button is not shown."""
     if action == "connect_google":
         return bool(person_key) and google_state(person_key) != "connected" and can_connect(role)
+    rid = mls_run_of(action)
+    if rid is not None:
+        return mls_card_ok(rid, person_key)
     return False
 
 
 def live_actions(actions: List[str], role: str, person_key: str) -> List[dict]:
-    """Saved controls still worth drawing for this reader, as {action, label}."""
-    return [{"action": a, "label": ACTION_LABELS[a]} for a in actions
-            if a in CHAT_ACTIONS and a in ACTION_LABELS and action_ok(a, role, person_key)]
+    """Saved controls still worth drawing for this reader, as {action, label}
+    (an MLS card also carries its run_id)."""
+    out = []
+    for a in actions:
+        rid = mls_run_of(a)
+        if rid is not None:
+            if action_ok(a, role, person_key):
+                out.append({"action": "mls", "run_id": rid, "label": ACTION_LABELS["mls"]})
+        elif a in CHAT_ACTIONS and a in ACTION_LABELS and action_ok(a, role, person_key):
+            out.append({"action": a, "label": ACTION_LABELS[a]})
+    return out
 
 
 def strip_disallowed(tools: List[dict]) -> tuple:

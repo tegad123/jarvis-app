@@ -14,6 +14,9 @@ tokens. A state that starts with "front." is the front door's own sign-in.
 Requests carry X-Forwarded-For (replaced, never passed through), which is how
 an account knows a request came from the public side. Agent-only routes
 (/api/broker, /api/model) are refused here.
+
+One WebSocket path is relayed, /api/browser/view (a person's live Take over
+view); every other WebSocket is refused. The account's app does the checks.
 """
 import base64
 import hashlib
@@ -27,8 +30,13 @@ import time
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qs, urlencode
 
+import asyncio
+
 import httpx
-from fastapi import FastAPI, Request
+import websockets
+from fastapi import FastAPI, Request, WebSocket
+from starlette.websockets import WebSocketDisconnect
+from websockets.asyncio.client import connect as ws_connect
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from starlette.background import BackgroundTask
@@ -45,6 +53,8 @@ PORT_SUFFIX = os.environ.get("FRONT_URL_PORT", "").strip()
 MOCK = os.environ.get("FRONT_OAUTH_MOCK", "").strip().lower() in ("1", "true", "yes")
 CLIENT = os.environ.get("FRONT_OAUTH_CLIENT", "").strip()
 INTERNAL = ("/api/broker/", "/api/broker", "/api/model/")
+WS_PATHS = ("/api/browser/view",)
+WS_PASS = ("cookie", "origin", "user-agent")
 HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "trailers",
        "transfer-encoding", "upgrade", "host", "x-forwarded-for", "x-forwarded-proto", "x-forwarded-host"}
 STATE_COOKIE, SIGNUP_COOKIE, WAIT_COOKIE = "front_state", "front_signup", "front_wait"
@@ -422,6 +432,82 @@ async def entry(request: Request, rest: str) -> Response:
             return await forward(request, slug, int(row["port"]))
     _bump("front_unknown_host")
     return page("Jarvis", "<h1>Jarvis</h1><p>No Jarvis at this address.</p>", 404)
+
+
+def _ws_port(ws: WebSocket) -> Optional[int]:
+    host = _host(ws)  # type: ignore[arg-type]
+    if host == JOIN or not host.endswith("." + BASE):
+        return None
+    slug = host[: -len(BASE) - 1]
+    row = store.route(store.connect(), slug) if store.SLUG_RE.fullmatch(slug) else None
+    return int(row["port"]) if row else None
+
+
+@app.websocket("/{rest:path}")
+async def ws_entry(ws: WebSocket, rest: str) -> None:
+    path = "/" + rest
+    if path not in WS_PATHS:
+        _bump("front_ws_refused_path")
+        await ws.close(code=4404)
+        return
+    port = _ws_port(ws)
+    if port is None:
+        _bump("front_ws_refused_host")
+        await ws.close(code=4404)
+        return
+    headers = [(k, v) for k, v in ws.headers.items() if k in WS_PASS and k != "origin"]
+    peer = ws.headers.get("cf-connecting-ip") or (ws.client.host if ws.client else "unknown")
+    headers += [("x-forwarded-for", peer), ("x-forwarded-proto", SCHEME), ("x-forwarded-host", _host(ws))]  # type: ignore[arg-type]
+    offered = [p.strip() for p in ws.headers.get("sec-websocket-protocol", "").split(",") if p.strip()]
+    try:
+        up = await ws_connect(f"ws://127.0.0.1:{port}{path}", additional_headers=headers,
+                              origin=ws.headers.get("origin") or None, subprotocols=offered or None,
+                              max_size=None, compression=None, open_timeout=10, ping_interval=None,
+                              user_agent_header=None)
+    except websockets.InvalidStatus as exc:
+        _bump("front_ws_refused_upstream")
+        await ws.close(code=4403 if exc.response.status_code == 403 else 4401 if exc.response.status_code == 401
+                       else 1011)
+        return
+    except (OSError, asyncio.TimeoutError, websockets.WebSocketException) as exc:
+        _bump("front_upstream_unreachable")
+        log.warning("front: ws to port %d unreachable: %s", port, type(exc).__name__)
+        await ws.close(code=1011)
+        return
+    await ws.accept(subprotocol=up.subprotocol)
+    _bump("front_ws_opened")
+
+    async def down() -> None:
+        async for msg in up:
+            if isinstance(msg, bytes):
+                await ws.send_bytes(msg)
+            else:
+                await ws.send_text(msg)
+
+    async def upward() -> None:
+        while True:
+            msg = await ws.receive()
+            if msg["type"] == "websocket.disconnect":
+                return
+            if msg.get("bytes") is not None:
+                await up.send(msg["bytes"])
+            elif msg.get("text") is not None:
+                await up.send(msg["text"])
+
+    tasks = [asyncio.create_task(down()), asyncio.create_task(upward())]
+    try:
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    except (WebSocketDisconnect, websockets.WebSocketException):
+        pass
+    finally:
+        for t in tasks:
+            t.cancel()
+        await up.close()
+        try:
+            await ws.close()
+        except RuntimeError:
+            pass
+        _bump("front_ws_closed")
 
 
 def main() -> None:

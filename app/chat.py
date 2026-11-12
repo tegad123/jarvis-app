@@ -683,6 +683,16 @@ async def _turn(thread_id, message, attachment_ids, person_key, role, channel,
                            "label": agent_status.ACTION_LABELS["connect_google"]})
         else:
             _bump("chat_action_connect_google_dropped")
+    for a in requested:
+        rid = agent_status.mls_run_of(a)
+        if rid is None:
+            continue
+        if agent_status.mls_card_ok(rid, person_key or "", thread_id):
+            _bump("chat_action_mls_shown")
+            shown.append(a)
+            yield _ndjson({"type": "mls", "run_id": rid})
+        else:
+            _bump("chat_action_mls_dropped")
 
     # Persist the turn only if something was actually said. A failed turn with
     # partial text is still worth keeping so the next question has context.

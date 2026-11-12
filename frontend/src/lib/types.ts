@@ -289,6 +289,63 @@ export interface ChatMessage {
 export interface SavedChatAction {
   action: string
   label: string
+  /** action 'mls': the search whose results card sits under the reply. */
+  run_id?: number
+}
+
+/** One MLS listing as the server read it from the person's own Matrix session. */
+export interface MlsListing {
+  address: string
+  status: 'active' | 'pending' | 'sold' | null
+  list_price: number | null
+  sold_price: number | null
+  list_date: string | null
+  pending_date: string | null
+  sold_date: string | null
+  beds: number | null
+  baths: number | null
+  sqft: number | null
+  year_built: number | null
+  property_type: string | null
+  area: string | null
+  zip_code: string | null
+  days_on_market: number | null
+  mls_number: string | null
+  distance_miles: number | null
+  price_per_sqft: number | null
+}
+
+export interface MlsSummary {
+  by_status: Record<string, number>
+  median_price?: number
+  price_low?: number
+  price_high?: number
+  median_price_per_sqft?: number
+  median_days_on_market?: number
+  suggested_low?: number
+  suggested_high?: number
+  note: string
+}
+
+/** GET /api/mls/runs/{id}: the stored run, never the model's words. */
+export interface MlsRun {
+  run_id: number
+  state: 'running' | 'done' | 'needs_person' | 'blocked' | 'unreadable' | 'ambiguous' | 'failed'
+  ok: boolean
+  page_loads: number
+  query: Record<string, unknown>
+  count?: number
+  truncated?: boolean
+  dropped?: number
+  unverified?: number
+  summary?: MlsSummary
+  listings?: MlsListing[]
+  expired?: boolean
+  detail?: string
+  kind?: string
+  choices?: string[]
+  started_at?: string
+  finished_at?: string | null
 }
 
 export interface ChatHistoryResponse {
@@ -348,6 +405,8 @@ export interface Approval {
   /** What this signed-in person may do with a pending request; the server enforces it. */
   can_approve?: boolean
   can_reject?: boolean
+  /** Signed answers, one per scope the request offers (e.g. until, always). */
+  callbacks?: { reject: string | null; approve: Record<string, string> }
   decided_by?: string
   decided_at?: string
 }
@@ -362,6 +421,8 @@ export interface BrowserStatus {
   access?: { site: string; until: string | null }[]
   /** Set when Jarvis needs them to take over (no saved login, a code, a check); the card's reason line. */
   needs_you?: string | null
+  /** A headed browser: Take over can show the page live (noVNC) instead of stills. */
+  live_view?: boolean
 }
 
 export interface BrowserScreen {
@@ -413,6 +474,17 @@ export interface ReplyReminder {
   google_status: string
   send_on: boolean
   last: { slot: string; result: string; at: string } | null
+}
+
+/** A site the person signed in to in their own browser. Never a username, password or cookie. */
+export interface ConnectedSite {
+  site: string
+  /** null: only a standing read allowance, never confirmed as signed in. */
+  state: 'connected' | 'needs_signin' | null
+  connected_at: string | null
+  last_used_at: string | null
+  read_allowance: boolean
+  saved_login: boolean
 }
 
 export interface WebsiteLogin {
@@ -617,6 +689,8 @@ export type ChatStreamEvent =
   | { type: 'verified'; ok: boolean; message: string; task_ids?: string[] }
   /** One of the app's own controls, asked for by the agent and drawn by the app. */
   | { type: 'action'; action: string; label?: string }
+  /** An MLS search ran this turn; the app draws its results card from the stored run. */
+  | { type: 'mls'; run_id: number }
   /** Channels: the person's message is saved (first line, always), and
    *  whether Jarvis is answering it. */
   | { type: 'posted'; message: ChatHistoryResponse['messages'][number]; jarvis: boolean }

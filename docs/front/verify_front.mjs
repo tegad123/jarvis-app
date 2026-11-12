@@ -14,7 +14,7 @@
  * path that is not Jarvis. The Google-only, callback and pairing checks must FAIL.
  */
 import { chromium } from '/usr/local/lib/hermes-agent/node_modules/playwright/index.mjs'
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, writeFileSync, existsSync, statSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
@@ -31,7 +31,7 @@ const JOIN = `http://join.front.test:${PORT}`
 const DIRECT = 'http://127.0.0.1:8711'
 const SB = process.env.TASKS_SANDBOX || '/tmp/claude-0/-root/tasks-sandbox'
 const FRONT_DB = '/tmp/front-verify/front.db'
-const RESOLVE = ['verify', 'join', 'nope'].flatMap((h) => ['--resolve', `${h}.front.test:${PORT}:127.0.0.1`])
+const RESOLVE = ['verify', 'join', 'nope', 'wsecho'].flatMap((h) => ['--resolve', `${h}.front.test:${PORT}:127.0.0.1`])
 const PINS = JSON.parse(readFileSync('/opt/jarvis-verify-fixture/SEEDED_PINS.json', 'utf8'))
 const pinOf = (who) => (typeof PINS[who] === 'object' ? PINS[who].pin : PINS[who])
 const DANA_EMAIL = 'dana@testco.example.com'
@@ -72,6 +72,30 @@ const json = (r) => {
   }
 }
 
+
+// A WebSocket through the front door, by Host, from a Python client.
+function wsTry(host, path, { origin, cookie, send } = {}) {
+  const out = execFileSync(PY, ['-c', `
+import asyncio, json, sys
+import websockets
+from websockets.asyncio.client import connect
+host, port, path, origin, cookie, send = sys.argv[1:7]
+async def go():
+    try:
+        async with connect(f"ws://{host}.front.test:{port}{path}", host="127.0.0.1", port=int(port),
+                           origin=origin or None, subprotocols=["binary"], open_timeout=10,
+                           additional_headers=[("cookie", cookie)] if cookie else []) as ws:
+            out = {"status": "open", "proto": ws.subprotocol}
+            out["first"] = (await asyncio.wait_for(ws.recv(), 5)).decode()
+            if send:
+                await ws.send(send.encode())
+                out["echo"] = (await asyncio.wait_for(ws.recv(), 5)).decode()
+            return out
+    except websockets.InvalidStatus as exc:
+        return {"status": "refused", "http": exc.response.status_code}
+print(json.dumps(asyncio.run(go())))`, host, String(PORT), path, origin || '', cookie || '', send || '']).toString()
+  return JSON.parse(out)
+}
 
 // Same-origin calls from inside the page: the page's resolver maps *.front.test.
 async function api(page, path, { method = 'GET', body } = {}) {
@@ -118,6 +142,47 @@ try {
   ck('   and counted', frontCounter('front_internal_refused') === n0 + 2)
   r = curl(`${DIRECT}/api/broker/counters`, { method: 'POST', body: {} })
   ck('   twin: the same route on loopback is the app answering (not 404)', r.status !== 404, `HTTP ${r.status}`)
+
+  console.log('\nthe live view WebSocket (one path, relayed; everything else refused)')
+  const echoLog = join(mkdtempSync(join(tmpdir(), 'jv-ws-')), 'echo.log')
+  writeFileSync(echoLog, '')
+  const echo = spawn(PY, [join(HERE, 'ws_echo.py'), '0', echoLog], { stdio: ['ignore', 'pipe', 'inherit'] })
+  const echoPort = await new Promise((ok, fail) => {
+    echo.stdout.once('data', (d) => ok(Number(String(d).trim())))
+    echo.once('exit', () => fail(new Error('ws_echo.py did not start')))
+  })
+  const frontEnv = { ...process.env, FRONT_DB, FRONT_BASE_DOMAIN: 'front.test', FRONT_JOIN_HOST: 'join.front.test', FRONT_SCHEME: 'http', FRONT_URL_PORT: `:${PORT}`, FRONT_OAUTH_MOCK: '1', FRONT_SECRET: readFileSync('/tmp/front-verify/secret', 'utf8') }
+  execFileSync(PY, ['-m', 'front.cli', 'route', 'wsecho', String(echoPort)], { cwd: REPO, env: frontEnv })
+  const echoed = () => readFileSync(echoLog, 'utf8').split('\n').filter(Boolean).length
+  try {
+    const origin = `http://wsecho.front.test:${PORT}`
+    let o0 = frontCounter('front_ws_opened')
+    let w = wsTry('wsecho', '/api/browser/view?person=dana', { origin, cookie: 'jarvis_session=fixture', send: 'ping-ü' })
+    const seen = w.first ? JSON.parse(w.first) : {}
+    ck('the view path is relayed to that account', w.status === 'open' && seen.path === '/api/browser/view' && echoed() === 1, JSON.stringify(w))
+    ck('   both ways, bytes intact', w.echo === 'ping-ü')
+    ck("   with the person's cookie, their page's Origin and the binary subprotocol", seen.cookie === 'jarvis_session=fixture' && seen.origin === origin && seen.proto === 'binary' && w.proto === 'binary', JSON.stringify(seen))
+    ck('   the query is not passed on (the person comes from the session)', !String(seen.path).includes('person'))
+    ck('   X-Forwarded-For is set by the front door', !!seen.xff && seen.xfh === 'wsecho.front.test')
+    ck('   opened counted (+1)', frontCounter('front_ws_opened') === o0 + 1)
+    let n1 = frontCounter('front_ws_refused_path')
+    const others = ['/api/stream', '/api/browser/view/x', '/', '/api/browser/screen'].map((p) => wsTry('wsecho', p, { origin }))
+    ck('any other WebSocket path is refused before reaching the account', others.every((x) => x.status === 'refused') && echoed() === 1, others.map((x) => x.http).join(','))
+    ck('   counted (+4)', frontCounter('front_ws_refused_path') === n1 + 4)
+    n1 = frontCounter('front_ws_refused_host')
+    const hosts = ['nope', 'join'].map((h) => wsTry(h, '/api/browser/view', { origin }))
+    ck('an unknown host (and the join address) is refused', hosts.every((x) => x.status === 'refused') && echoed() === 1, hosts.map((x) => x.http).join(','))
+    ck('   counted (+2)', frontCounter('front_ws_refused_host') === n1 + 2)
+    const a0 = counter('browser_view_refused_browser_off')
+    n1 = frontCounter('front_ws_refused_upstream')
+    w = wsTry('verify', '/api/browser/view', { origin: ACCT })
+    ck("the real account's app answers for itself: browser off there, refused", w.status === 'refused' && w.http === 403, JSON.stringify(w))
+    ck("   in that account's own ledger (+1), and the front door's (+1)", counter('browser_view_refused_browser_off') === a0 + 1 && frontCounter('front_ws_refused_upstream') === n1 + 1)
+  } finally {
+    echo.kill()
+  }
+  r = curl(`${ACCT}/api/ping`)
+  ck('ordinary HTTP forwarding is unchanged', r.status === 200 && curl(`${ACCT}/api/broker/counters`, { method: 'POST', body: {} }).status === 404)
 
   console.log('\nGoogle-only on the public side')
   const pub = json(curl(`${ACCT}/api/auth/methods`))

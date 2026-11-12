@@ -58,6 +58,21 @@ browser._db().execute(
     "INSERT INTO browser_logins (person_key, site, username, secret_cipher, created_at, updated_at) "
     "VALUES ('omar','example.test','o',X'00','t','t')")
 browser._db().commit()
+from app import mls
+for who in ("omar", "dana"):
+    browser._db().execute("INSERT INTO browser_sites (person_key, site, state, connected_at) VALUES (?, 'harmls.com', 'connected', 't')", (who,))
+    mls._db().execute("INSERT INTO mls_runs (person_key, thread_id, query_json, state, result_json, started_at) "
+                      "VALUES (?, 'dm', '{}', 'done', '{\"listings\": []}', 't')", (who,))
+browser._db().execute(
+    "INSERT INTO browser_logins (person_key, site, username, secret_cipher, created_at, updated_at) "
+    "VALUES ('dana','example.test','d',X'00','t','t')")
+browser._db().commit()
+mls._db().commit()
+def per_person():
+    q = lambda sql: {k: n for k, n in browser._db().execute(sql).fetchall()}
+    return {"sites": q("SELECT person_key, COUNT(*) FROM browser_sites GROUP BY person_key"),
+            "logins": q("SELECT person_key, COUNT(*) FROM browser_logins GROUP BY person_key"),
+            "runs": q("SELECT person_key, COUNT(*) FROM mls_runs GROUP BY person_key")}
 imessage._db().execute(
     "INSERT INTO imessages (person_key, guid, is_from_me, sent_at, text_cipher) "
     "VALUES ('omar','g1',0,'t',X'00')")
@@ -155,16 +170,23 @@ out["member"] = c.post("/api/account/tenant-deletion", headers=HDR,
     json={"confirm": PHRASE, "pin": pins["omar"], "nonce": "not-a-real-nonce"}).status_code
 login("priya")
 out["admin"] = c.post("/api/account/tenant-deletion/challenge", headers=HDR).status_code
+PB = per_person()
 r = c.post("/api/account/deletion-request", json={"confirm": "request-account-deletion", "pin": pins["priya"], "person_key": "omar"})
 body = r.json()
 out["personal"] = [r.status_code, body.get("deleted"), body.get("deletion"), counts(dbs["leads"]) >= before["leads"]]
+out["personal_browser_before"] = PB
+out["personal_browser"] = per_person()
+out["personal_erased_counter"] = threads.bump_counter("browser_person_erased", 0)
+out["personal_erase_failed"] = threads.bump_counter("browser_person_erase_failed", 0)
 login("maya")
 maya = c.cookies.get("jarvis_session")
 op = c.post("/api/login", json={"passphrase": "test-operator-pass"})
 out["operator_before"] = op.status_code
 login("dana")
 snap = {k: counts(v) for k, v in dbs.items()}
-out["get"] = c.get("/api/account/tenant-deletion").status_code
+g = c.get("/api/account/tenant-deletion")
+out["get"] = g.status_code
+out["removes_text"] = " ".join(g.json().get("removes") or [])
 out["get_same"] = {k: counts(v) for k, v in dbs.items()} == snap
 ch = c.post("/api/account/tenant-deletion/challenge", headers=HDR)
 out["challenge"] = ch.status_code
@@ -195,6 +217,9 @@ out["done"] = [done.status_code, body.get("action"), body.get("deleted_local"), 
                "Backups" in " ".join(body.get("still_exists") or [])]
 out["done_detail"] = body.get("detail")
 out["after"] = {k: counts(v) for k, v in dbs.items()}
+out["after_named"] = {t: accounts._ensure().execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                      for t in ("browser_sites", "browser_logins", "mls_runs")}
+out["removed"] = body.get("removed")
 out["files_gone"] = not (att / "note.txt").exists() and not (spool / "audio.bin").exists() and not Path(os.environ["JARVIS_ACTIVITY_FEED"]).exists() and not ident.exists()
 out["skill_kept"] = (ident.parent / "keep.txt").read_text() == "SKILL-CODE"
 out["tenant_b"] = (b / "keep.txt").read_text() == "TENANT-B-KEEP" and counts(b / "leads.db") == 1 and counts(b / "platform.sqlite") > 0 and "other" in (b / "identity.json").read_text()
@@ -281,6 +306,13 @@ def main() -> int:
     ck("an admin cannot start team deletion", r["admin"] == 403, r["admin"])
     ck("a personal deletion request is still not a deletion and leaves the leads",
        r["personal"] == [200, False, "pending", True], r["personal"])
+    pb, pa = r["personal_browser_before"], r["personal_browser"]
+    ck("seeded: omar and dana each have a connected site and an MLS run, and saved logins (presence)",
+       pb["sites"] == {"omar": 1, "dana": 1} and pb["runs"] == {"omar": 1, "dana": 1}
+       and pb["logins"] == {"omar": 1, "dana": 1}, pb)
+    ck("removing omar clears his connected sites, saved logins and MLS runs, and only his",
+       pa == {"sites": {"dana": 1}, "logins": {"dana": 1}, "runs": {"dana": 1}}
+       and r["personal_erased_counter"] >= 1, (pa, r["personal_erased_counter"], r["personal_erase_failed"]))
     ck("an operator can sign in before deletion", r["operator_before"] == 200, r["operator_before"])
     ck("reading the description does not delete", r["get"] == 200 and r["get_same"] is True, r["get"])
     ck("a challenge is issued to the owner", r["challenge"] == 200)
@@ -295,6 +327,12 @@ def main() -> int:
        r["done"][0] == 200 and r["done"][1:] == ["team-deleted", True, True, True, True],
        [r["done"], r.get("done_detail")])
     ck("tenant A databases are empty", all(v == 0 for v in r["after"].values()), r["after"])
+    ck("the browser and MLS tables are among them (named)",
+       r["after_named"] == {"browser_sites": 0, "browser_logins": 0, "mls_runs": 0}, r["after_named"])
+    ck("the description names browser profiles and MLS results",
+       "Browser profiles" in r["removes_text"] and "MLS search results" in r["removes_text"], r["removes_text"])
+    ck("browser off here: no profile claim either way (not listed removed, no failure line)",
+       "browser_profiles" not in (r["removed"] or []), r["removed"])
     ck("attachments, spool, feed and identity for A are gone, and skill code is not",
        r["files_gone"] is True and r["skill_kept"] is True, [r["files_gone"], r["skill_kept"]])
     ck("tenant B is unchanged", r["tenant_b"] is True, r["tenant_b"])

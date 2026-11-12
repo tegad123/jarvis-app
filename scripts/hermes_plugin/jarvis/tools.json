@@ -565,6 +565,165 @@
       }
     },
     {
+      "name": "search_mls",
+      "authz": null,
+      "label": "Searching the MLS",
+      "needs": [
+        "browser"
+      ],
+      "description": "Search HAR MLS Matrix through their own signed-in browser and get a table of listings and a short summary; the app shows the table to them as a card. Use it for any property search they describe: \"active listings in the Heights\", \"3-bed houses under 600k in 77008 that went pending this month\", or comps (sold listings near an address, with subject_sqft for a suggested range). Pass only filters they said or clearly implied; never invent one. It needs a place (area, zip_codes or address): if they gave none, ask. Turn relative dates into YYYY-MM-DD yourself from today's date. Read-only and slow on purpose; it may take a minute or two. Results are only for the person you're talking to.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "statuses": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "active",
+                "pending",
+                "sold"
+              ]
+            },
+            "description": "Listing statuses to include. Default active. Comps are sold."
+          },
+          "area": {
+            "type": "string",
+            "description": "A neighbourhood, subdivision or market area as they said it, e.g. Heights."
+          },
+          "zip_codes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Up to 10 five-digit zip codes."
+          },
+          "address": {
+            "type": "string",
+            "description": "A street address: the centre of the search, or the subject property for comps."
+          },
+          "radius_miles": {
+            "type": "number",
+            "minimum": 0.25,
+            "maximum": 5,
+            "description": "Only with address. Default 1."
+          },
+          "price_min": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100000000,
+            "description": "Lowest price in dollars."
+          },
+          "price_max": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100000000,
+            "description": "Highest price in dollars."
+          },
+          "beds_min": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 12,
+            "description": "Fewest bedrooms."
+          },
+          "beds_max": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 12,
+            "description": "Most bedrooms."
+          },
+          "baths_min": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 12,
+            "description": "Fewest bathrooms; a half bath is 0.5."
+          },
+          "baths_max": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 12,
+            "description": "Most bathrooms."
+          },
+          "sqft_min": {
+            "type": "integer",
+            "minimum": 200,
+            "maximum": 20000,
+            "description": "Smallest living area in square feet."
+          },
+          "sqft_max": {
+            "type": "integer",
+            "minimum": 200,
+            "maximum": 20000,
+            "description": "Largest living area in square feet."
+          },
+          "year_built_min": {
+            "type": "integer",
+            "description": "Built in or after this year."
+          },
+          "year_built_max": {
+            "type": "integer",
+            "description": "Built in or before this year."
+          },
+          "property_types": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "single_family",
+                "townhouse_condo",
+                "multi_family",
+                "lot_land"
+              ]
+            },
+            "description": "Only these kinds of property. Leave out for any."
+          },
+          "date_from": {
+            "type": "string",
+            "description": "YYYY-MM-DD. Sold date for sold, pending date for pending, list date for active. At most 36 months back."
+          },
+          "date_to": {
+            "type": "string",
+            "description": "YYYY-MM-DD, not in the future."
+          },
+          "subject_sqft": {
+            "type": "integer",
+            "minimum": 200,
+            "maximum": 20000,
+            "description": "Comps only: the subject property's size, for a suggested price range."
+          },
+          "max_results": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "description": "How many listings at most. Default 25."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "mls_result",
+      "authz": null,
+      "label": "Waiting for the MLS search",
+      "needs": [
+        "browser"
+      ],
+      "description": "Wait for an MLS search that search_mls said is still running, and get its results.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "run_id": {
+            "type": "integer",
+            "description": "The run_id search_mls returned."
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "connect_google",
       "authz": null,
       "label": "Getting the Google connect button ready",

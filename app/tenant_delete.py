@@ -80,6 +80,7 @@ def impact() -> Dict[str, Any]:
             "Tasks and digest records stored here",
             "Channels, messages, and files stored for this team",
             "This app's copies of Google tokens, saved site logins, and iMessage text",
+            "Browser profiles (sign-ins saved in the browser), connected sites, and MLS search results",
             "The activity feed and follow-up schedules stored here",
         ],
         "not_removed": list(EXTERNAL_LIMITS) + [
@@ -125,6 +126,13 @@ def erase(person_key: str, nonce: str, phrase: str) -> Dict[str, Any]:
         raise TenantDeleteError(
             "Deletion stopped before it was saved. This team's data is still here." + extra, 500)
     still.extend(platform_left)
+    from . import browser  # noqa: PLC0415
+    profiles = browser.erase_all()
+    if profiles == "erased":
+        removed.append("browser_profiles")
+    elif profiles == "failed":
+        still.append("The browser profiles (sign-ins saved in the browser) could not be removed. "
+                     "Sign-in is off; the operator's teardown removes them.")
     still.append("A closure marker stays so sign-in remains off. It has no leads or messages.")
     log.warning("tenant_delete: local records removed for tenant %s by %s", info["slug"], person_key)
     return {

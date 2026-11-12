@@ -8,6 +8,7 @@ Skills clone only from the slice-0 bare origin — never cp from a working tree.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import pwd
@@ -64,9 +65,17 @@ UNIT_DIR = Path("/etc/systemd/system")
 # (the browser user is deliberately not in the tenant group, so it cannot read there).
 BROWSER_RUNTIME = Path("/opt/jarvis/browser/chrome-headless-shell-1234")
 BROWSER_BIN = BROWSER_RUNTIME / "chrome-headless-shell"
+# browser_mode: headed runs the full Chromium build (same revision) as a
+# window on a virtual display, so a person can take it over live.
+BROWSER_HEADED_RUNTIME = Path("/opt/jarvis/browser/chrome-1234")
+BROWSER_HEADED_BIN = BROWSER_HEADED_RUNTIME / "chrome"
+XVFB_BIN = Path("/usr/bin/Xvfb")
+X11VNC_BIN = Path("/usr/bin/x11vnc")
+BROWSER_POLICY_FILE = Path("/etc/opt/chrome_for_testing/policies/managed/jarvis.json")
+BROWSER_MODES = ("headless", "headed")
 BROWSER_CODE_ROOT = Path("/opt/jarvis/browser-code")
 BROWSER_STATE_ROOT = Path("/var/lib/jarvis-browser")
-BROWSER_CODE_FILES = ("browser_worker.py", "browser_egress.py")
+BROWSER_CODE_FILES = ("browser_worker.py", "browser_egress.py", "browser_launch.py")
 BROWSER_TEST_VARS = ("JARVIS_BROWSER_TEST", "JARVIS_EGRESS_TEST_ALLOW", "JARVIS_BROWSER_LISTEN",
                      "JARVIS_EGRESS_LISTEN")
 
@@ -256,6 +265,95 @@ def browser_enabled(manifest: dict) -> bool:
     if v != "enabled":
         die("browser must be enabled | off (absent = off)")
     return True
+
+
+def browser_mode(manifest: dict) -> str:
+    """`browser_mode: headless | headed`, absent = headless: a tenant's browser
+    does not change until someone sets it."""
+    v = manifest.get("browser_mode")
+    if v in (None, ""):
+        return "headless"
+    if v not in BROWSER_MODES:
+        die(f"browser_mode must be {' | '.join(BROWSER_MODES)} (absent = headless)")
+    return str(v)
+
+
+def browser_unit_vars(manifest: dict) -> Dict[str, str]:
+    mode = browser_mode(manifest)
+    if mode == "headless":
+        return {"BROWSER_BIN": str(BROWSER_BIN), "BROWSER_MODE_LINES": "Environment=JARVIS_BROWSER_MODE=headless"}
+    return {"BROWSER_BIN": str(BROWSER_HEADED_BIN),
+            "BROWSER_MODE_LINES": "\n".join([
+                "Environment=JARVIS_BROWSER_MODE=headed",
+                f"Environment=JARVIS_XVFB_BIN={XVFB_BIN}",
+                f"Environment=JARVIS_X11VNC_BIN={X11VNC_BIN}",
+                f"Environment=JARVIS_BROWSER_POLICY={BROWSER_POLICY_FILE}"])}
+
+
+def mls(manifest: dict) -> dict:
+    """`mls: {site, start_url, caps…}`, rendered as app.mls. MLS search is
+    unavailable until start_url (the Matrix search page) is set, and then it
+    follows each person's browser feature; there is no other switch. Needs a
+    headed browser. Limits: app/mls_limits.py."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
+    import mls_limits  # noqa: PLC0415
+    out, bad = mls_limits.check(manifest.get("mls"))
+    if bad:
+        die("; ".join(bad))
+    if out["start_url"] and not (browser_enabled(manifest) and browser_mode(manifest) == "headed"):
+        die("mls.start_url needs browser: enabled and browser_mode: headed")
+    return out
+
+
+def browser_proxy(manifest: dict) -> Optional[Dict[str, Any]]:
+    """`browser_proxy: {host, port, auth}`, absent = off: the egress connects
+    directly. With it, every browser connection leaves through that upstream
+    and fails if it is unreachable (app/browser_egress.py). `auth: true`
+    loads the upstream's "user:password" from ETC_JARVIS/<slug>-browser-proxy-auth
+    as a systemd credential; it is never put in the manifest or the unit."""
+    v = manifest.get("browser_proxy")
+    if v in (None, "off"):
+        return None
+    if not isinstance(v, dict):
+        die("browser_proxy must be {host, port, auth} (absent = off)")
+    unknown = sorted(set(v) - {"host", "port", "auth"})
+    if unknown:
+        die(f"browser_proxy: unknown key(s) {', '.join(unknown)}")
+    if not browser_enabled(manifest):
+        die("browser_proxy needs browser: enabled")
+    host, port, auth = v.get("host"), v.get("port"), v.get("auth", False)
+    if not isinstance(host, str) or not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?", host):
+        die("browser_proxy.host must be a host name or IPv4 address (no scheme, no credentials)")
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+    if literal is not None and not literal.is_global:
+        die("browser_proxy.host must be a public address")
+    if isinstance(port, bool) or not isinstance(port, int) or not 0 < port < 65536:
+        die("browser_proxy.port must be a whole number from 1 to 65535")
+    if not isinstance(auth, bool):
+        die("browser_proxy.auth must be true or false")
+    return {"host": host, "port": port, "auth": auth}
+
+
+def egress_proxy_lines(manifest: dict) -> str:
+    bp = browser_proxy(manifest)
+    if bp is None:
+        return ""
+    lines = [f"Environment=JARVIS_EGRESS_UPSTREAM={bp['host']}:{bp['port']}"]
+    if bp["auth"]:
+        lines.append(f"LoadCredential=upstream_auth:{ETC_JARVIS / (manifest['slug'] + '-browser-proxy-auth')}")
+    return "\n".join(lines)
+
+
+def browser_headed_problems() -> List[str]:
+    """What a headed tenant needs on this server before it can start."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
+    import browser_launch  # noqa: PLC0415
+    out = [f"{p} is missing" for p in (BROWSER_HEADED_BIN, XVFB_BIN, X11VNC_BIN) if not os.access(p, os.X_OK)]
+    pol = browser_launch.policy_problem(str(BROWSER_POLICY_FILE))
+    return out + ([pol] if pol else [])
 
 
 def preflight_owner_addresses(manifest: dict) -> List[str]:
@@ -954,6 +1052,8 @@ def build_client_config(manifest: dict, paths: dict, shipped: List[str], loadout
             "text_followup": text_followup(manifest),
             "lead_followup": lead_followup(manifest),
             "lead_cadence": lead_cadence(manifest),
+            "browser": {"mode": browser_mode(manifest)},
+            "mls": mls(manifest),
         },
         "schedule": schedule,
         "credentials": {},
@@ -1018,9 +1118,13 @@ def common_map(manifest: dict, posture: dict, fernet: str, force: str,
                "DATA_DIRS": " ".join(str(d) for d in skill_data_dirs(Path(opt), shipped))}
     if iso and browser_enabled(manifest):
         iso.update({"WEB_USER": n["web_user"], "BROWSER_CODE": str(BROWSER_CODE_ROOT / slug),
-                    "BROWSER_BIN": str(BROWSER_BIN),
+                    **browser_unit_vars(manifest),
+                    "EGRESS_PROXY_LINES": egress_proxy_lines(manifest),
                     "BROWSER_MAX_OPEN": str(int((manifest.get("browser_limits") or {}).get("max_open", 2))),
-                    "BROWSER_MEMORY_MAX": str((manifest.get("browser_limits") or {}).get("memory_max", "1G")),
+                    # Headed: two browsers with their displays measured ~600 MB
+                    # (PSS, verify_browser_headed.py); 2G leaves room for heavy pages.
+                    "BROWSER_MEMORY_MAX": str((manifest.get("browser_limits") or {}).get(
+                        "memory_max", "2G" if browser_mode(manifest) == "headed" else "1G")),
                     "BROWSER_LINES": f"Environment=JARVIS_BROWSER=on\n"
                                      f"Environment=JARVIS_BROWSER_SOCKET=/run/jarvis-browser/{slug}.sock"})
     elif iso:
@@ -1486,6 +1590,13 @@ def validate_manifest(manifest: dict) -> tuple:
             die("browser: enabled needs isolation: two_user")
         if not os.access(BROWSER_BIN, os.X_OK):
             die(f"browser: enabled but {BROWSER_BIN} is missing; run scripts/install_browser_runtime.py")
+        if browser_mode(manifest) == "headed":
+            bad = browser_headed_problems()
+            if bad:
+                die("browser_mode: headed but " + "; ".join(bad) + " (docs/plans/browser-har-comps.md section 12)")
+    bp = browser_proxy(manifest)
+    if bp and bp["auth"] and not (ETC_JARVIS / f"{slug}-browser-proxy-auth").is_file():
+        die(f"browser_proxy.auth is true but {ETC_JARVIS / (slug + '-browser-proxy-auth')} does not exist")
     signin_lines(manifest)
     log(f"venv=platform: {PLATFORM_VENV} (a copy; pip installs there do not reach live)")
 

@@ -12,6 +12,8 @@ export interface SettingsSectionProps {
     title: ReactNode
     detail?: ReactNode
     action?: { label: string; onClick?: () => void; disabled?: boolean }
+    /** Shown before `action`, same look. */
+    more?: { label: string; onClick?: () => void; disabled?: boolean }[]
   }[]
   children?: ReactNode
   error?: string
@@ -64,6 +66,11 @@ export function SettingsSection(p: SettingsSectionProps) {
                 <p className={cx('m-0 text-jm-body-sm text-jm-fg', truncate)}>{r.title}</p>
                 {r.detail && <p className={cx('m-0 mt-0.5 text-jm-caption text-jm-fg-secondary', truncate)}>{r.detail}</p>}
               </div>
+              {r.more?.map((m) => (
+                <Button key={m.label} variant="ghost" size="sm" disabled={m.disabled} onClick={m.onClick}>
+                  {m.label}
+                </Button>
+              ))}
               {r.action && (
                 <Button variant="ghost" size="sm" disabled={r.action.disabled} onClick={r.action.onClick}>
                   {r.action.label}

@@ -39,6 +39,7 @@ import type {
   TasksResponse,
   LoginResponse,
   MacStatus,
+  MlsRun,
   SessionResponse,
   Attachment,
   Category,
@@ -49,6 +50,7 @@ import type {
   ThreadMember,
   ThreadsResponse,
   WebsiteLogin,
+  ConnectedSite,
 } from './types'
 import { DIRECT_THREAD } from './types'
 
@@ -262,6 +264,31 @@ export function saveWebsiteLogin(site: string, username: string, password: strin
 
 export function deleteWebsiteLogin(site: string): Promise<{ ok: boolean }> {
   return requestOk(`/api/browser/logins/${encodeURIComponent(site)}`, { method: 'DELETE' })
+}
+
+/** null when the run is not this person's (or no longer exists). */
+export async function getMlsRun(id: number): Promise<MlsRun | null> {
+  const { ok, status, body } = await request<MlsRun>(`/api/mls/runs/${id}`)
+  if (status === 404) return null
+  if (!ok || body === null) throw new ApiError(detailOf(body) ?? 'Request failed.', status, detailOf(body))
+  return body
+}
+
+export function getConnectedSites(): Promise<{ sites: ConnectedSite[] }> {
+  return requestOk('/api/browser/sites')
+}
+
+/** "I'm signed in": the site of the page the browser is on now. */
+export function confirmBrowserSite(): Promise<{ ok: boolean; site: ConnectedSite }> {
+  return requestOk('/api/browser/sites/confirm', { method: 'POST' })
+}
+
+export function signOutOfSite(site: string): Promise<{ ok: boolean; cookies_removed: number }> {
+  return requestOk(`/api/browser/sites/${encodeURIComponent(site)}`, { method: 'DELETE' })
+}
+
+export function stopReadingSite(site: string): Promise<{ ok: boolean; revoked: number }> {
+  return requestOk(`/api/browser/sites/${encodeURIComponent(site)}/reading`, { method: 'DELETE' })
 }
 
 export function getMacStatus(): Promise<MacStatus> {
@@ -491,10 +518,12 @@ export function getInbox(): Promise<InboxResponse> {
 export async function decideApproval(
   id: string,
   decision: 'approve' | 'reject',
+  /** A signed callback from the approval, to choose a scope other than the default (e.g. "always"). */
+  callback?: string,
 ): Promise<Approval> {
   const { ok, status, body } = await request<{ ok: boolean; approval: Approval }>(
     `/api/approvals/${encodeURIComponent(id)}`,
-    { method: 'POST', body: JSON.stringify({ decision }) },
+    { method: 'POST', body: JSON.stringify(callback ? { decision, callback } : { decision }) },
   )
   if (ok && body?.approval) return body.approval
   if (status === 409) {
@@ -817,6 +846,7 @@ export interface ChatHandlers {
   onNotice?: (e: Extract<ChatStreamEvent, { type: 'notice' }>) => void
   onVerified?: (e: Extract<ChatStreamEvent, { type: 'verified' }>) => void
   onAction?: (e: Extract<ChatStreamEvent, { type: 'action' }>) => void
+  onMls?: (e: Extract<ChatStreamEvent, { type: 'mls' }>) => void
   onPosted?: (e: Extract<ChatStreamEvent, { type: 'posted' }>) => void
   onSaved?: (e: Extract<ChatStreamEvent, { type: 'saved' }>) => void
 }
@@ -903,6 +933,9 @@ export async function streamChat(
         break
       case 'action':
         handlers.onAction?.(evt)
+        break
+      case 'mls':
+        handlers.onMls?.(evt)
         break
       case 'posted':
         handlers.onPosted?.(evt)

@@ -1,4 +1,4 @@
-import { useState, type MouseEvent } from 'react'
+import { useState, type MouseEvent, type ReactNode } from 'react'
 import { Button } from '../Button/Button'
 import { Icon } from '../shared/Icon'
 import { Dots, ErrorLine, Field, LiveDot, Tag, cx, focus, truncate } from '../shared/primitives'
@@ -14,10 +14,13 @@ export type ComputerInput =
 
 export interface ComputerAsk {
   id?: string
-  /** 'task' reads "Allow for 30 min"; anything else "Allow once". */
-  kind?: 'task' | 'once'
+  /** 'task' and 'read' read "Allow for 30 min"; anything else "Allow once". 'read' also offers "Always allow reading". */
+  kind?: 'task' | 'once' | 'read'
   summary: string
+  /** Shown under the summary in the big card (what the allowance covers). */
+  detail?: string
   onAllow?: () => void
+  onAlways?: () => void
   onNotNow?: () => void
 }
 
@@ -25,6 +28,8 @@ export interface ComputerCardProps {
   state: 'starting' | 'working' | 'needs-you' | 'yours'
   /** Image URL of the latest still (e.g. data:image/jpeg;base64,…). */
   screenshot?: string
+  /** The live page while the person has the browser (big only); replaces the still and its typing controls. */
+  live?: ReactNode
   title?: string
   url?: string
   asks?: ComputerAsk[]
@@ -38,6 +43,8 @@ export interface ComputerCardProps {
   onTakeOver?: () => void
   /** "I’m done": hand the browser back to Jarvis. */
   onDone?: () => void
+  /** "I’m signed in": hand back and remember this site as connected. */
+  onSignedIn?: () => void
   onClose?: () => void
   onInput?: (input: ComputerInput) => void
   busy?: boolean
@@ -85,7 +92,10 @@ export function ComputerCard(p: ComputerCardProps) {
   )
 
   const screenBox = 'relative box-border block aspect-[16/10] w-full overflow-hidden rounded-jm-sm border border-jm-border bg-jm-bg p-0'
-  const screen = p.screenshot ? (
+  const live = expanded && state === 'yours' && p.live
+  const screen = live ? (
+    <div className={screenBox}>{p.live}</div>
+  ) : p.screenshot ? (
     <button
       type="button"
       onClick={onPicture}
@@ -156,10 +166,16 @@ export function ComputerCard(p: ComputerCardProps) {
           <p title={a.summary} className={cx('m-0 text-jm-body-sm text-jm-fg', clamp)}>
             {a.summary}
           </p>
+          {expanded && a.detail && <p className="m-0 -mt-jm-1 text-jm-caption text-jm-fg-secondary">{a.detail}</p>}
           <div className="flex flex-wrap gap-jm-2">
             <Button variant="primary" disabled={p.busy} onClick={a.onAllow}>
-              {a.kind === 'task' ? 'Allow for 30 min' : 'Allow once'}
+              {a.kind === 'task' || a.kind === 'read' ? 'Allow for 30 min' : 'Allow once'}
             </Button>
+            {a.kind === 'read' && a.onAlways && (
+              <Button variant="secondary" disabled={p.busy} onClick={a.onAlways}>
+                Always allow reading here
+              </Button>
+            )}
             <Button variant="secondary" disabled={p.busy} onClick={a.onNotNow}>
               Not now
             </Button>
@@ -172,6 +188,11 @@ export function ComputerCard(p: ComputerCardProps) {
           <Button variant="primary" disabled={p.busy} onClick={p.onDone}>
             I’m done
           </Button>
+          {p.onSignedIn && (
+            <Button variant="secondary" disabled={p.busy} onClick={p.onSignedIn}>
+              I’m signed in
+            </Button>
+          )}
           {close}
         </div>
       ) : !asks.length ? (
@@ -183,7 +204,13 @@ export function ComputerCard(p: ComputerCardProps) {
         </div>
       ) : null}
 
-      {state === 'yours' && expanded && (
+      {live && (
+        <p className="m-0 text-jm-caption text-jm-fg-secondary">
+          Use the page directly: click, type, sign in. What you type goes to the page, not the chat.
+        </p>
+      )}
+
+      {state === 'yours' && expanded && !live && (
         <div className="grid gap-jm-2 border-t border-jm-border pt-jm-3">
           <p className="m-0 text-jm-caption text-jm-fg-secondary">
             Tap a box in the picture, then type. What you type goes to the page, not the chat.

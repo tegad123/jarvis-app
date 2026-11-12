@@ -10,8 +10,17 @@ answer cannot change between the check and the connection. CONNECT for https,
 absolute-form requests for http (one request per connection). Ports 80, 443
 and 8443 only. Every connection is one JSON line in the journal: host, port,
 verdict. Standard library only.
+
+Optional upstream (JARVIS_EGRESS_UPSTREAM=host:port, from the manifest's
+browser_proxy): the destination is still resolved and checked here, then
+reached by a CONNECT to that checked address through the upstream. If the
+upstream cannot be reached or refuses, the request fails (verdict
+"upstream_failed"); there is never a direct connection instead. Upstream
+credentials, if any, are read from the systemd credential file
+$CREDENTIALS_DIRECTORY/upstream_auth ("user:password") and never logged.
 """
 import asyncio
+import base64
 import ipaddress
 import json
 import os
@@ -56,6 +65,32 @@ def _test_allow() -> List[Tuple[str, int]]:
 TEST_ALLOW = _test_allow()
 
 
+def _upstream() -> Optional[Tuple[str, int]]:
+    raw = os.environ.get("JARVIS_EGRESS_UPSTREAM", "").strip()
+    if not raw:
+        return None
+    host, _, port = raw.rpartition(":")
+    host = host.strip("[]")
+    if not host or not port.isdigit() or not 0 < int(port) < 65536:
+        log(verdict="refused", why="JARVIS_EGRESS_UPSTREAM must be host:port")
+        sys.exit(2)
+    return host, int(port)
+
+
+def _upstream_auth() -> Optional[str]:
+    d = os.environ.get("CREDENTIALS_DIRECTORY", "")
+    path = os.path.join(d, "upstream_auth") if d else ""
+    if not path or not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        cred = f.read().strip()
+    return base64.b64encode(cred.encode()).decode() if cred else None
+
+
+UPSTREAM = _upstream()
+UPSTREAM_AUTH = _upstream_auth() if UPSTREAM else None
+
+
 async def resolve(host: str, port: int) -> Tuple[Optional[str], str]:
     """(address to connect to, reason). None when nothing public answers."""
     if (host, port) in TEST_ALLOW:
@@ -88,6 +123,48 @@ async def _pipe(r: asyncio.StreamReader, w: asyncio.StreamWriter) -> None:
             w.close()
         except Exception:
             pass
+
+
+async def _resolve_upstream() -> Tuple[Optional[str], str]:
+    """The upstream's own address, checked like any destination: public only."""
+    host, port = UPSTREAM
+    if (host, port) in TEST_ALLOW:
+        return host, "test_allow"
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except (socket.gaierror, UnicodeError):
+        return None, "upstream name does not resolve"
+    addrs = [i[4][0] for i in infos]
+    if not addrs or any(not public(a) for a in addrs):
+        return None, "upstream is not a public address"
+    return addrs[0], "public"
+
+
+async def _via_upstream(addr: str, port: int):
+    """A tunnel to the checked address through the upstream, or (None, why)."""
+    up, why = await _resolve_upstream()
+    if up is None:
+        return None, why
+    try:
+        ur, uw = await asyncio.wait_for(asyncio.open_connection(up, UPSTREAM[1]), 15)
+    except (OSError, asyncio.TimeoutError):
+        return None, "could not reach the upstream proxy"
+    target = f"[{addr}]:{port}" if ":" in addr else f"{addr}:{port}"
+    head = f"CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n"
+    if UPSTREAM_AUTH:
+        head += f"Proxy-Authorization: Basic {UPSTREAM_AUTH}\r\n"
+    uw.write((head + "\r\n").encode("latin-1"))
+    try:
+        await uw.drain()
+        reply = await asyncio.wait_for(ur.readuntil(b"\r\n\r\n"), 15)
+    except (OSError, asyncio.IncompleteReadError, asyncio.LimitOverrunError, asyncio.TimeoutError):
+        uw.close()
+        return None, "the upstream proxy did not answer"
+    status = reply.split(b" ", 2)[1:2]
+    if status != [b"200"]:
+        uw.close()
+        return None, f"the upstream proxy refused ({(status or [b'?'])[0].decode('latin-1')[:3]})"
+    return (ur, uw), "upstream"
 
 
 def _refuse(w: asyncio.StreamWriter, code: int, why: str) -> None:
@@ -134,12 +211,22 @@ async def handle(cr: asyncio.StreamReader, cw: asyncio.StreamWriter) -> None:
             _refuse(cw, 403, why)
             log(verdict="blocked", host=host[:200], port=port, why=why)
             return
-        try:
-            ur, uw = await asyncio.wait_for(asyncio.open_connection(addr, port), 15)
-        except (OSError, asyncio.TimeoutError):
-            _refuse(cw, 502, "could not connect")
-            log(verdict="failed", host=host[:200], port=port)
-            return
+        if UPSTREAM:
+            pair, uwhy = await _via_upstream(addr, port)
+            if pair is None:
+                _refuse(cw, 502, uwhy)
+                log(verdict="upstream_failed", host=host[:200], port=port, why=uwhy,
+                    upstream=f"{UPSTREAM[0][:200]}:{UPSTREAM[1]}")
+                return
+            ur, uw = pair
+            why = f"{why}+upstream"
+        else:
+            try:
+                ur, uw = await asyncio.wait_for(asyncio.open_connection(addr, port), 15)
+            except (OSError, asyncio.TimeoutError):
+                _refuse(cw, 502, "could not connect")
+                log(verdict="failed", host=host[:200], port=port)
+                return
         log(verdict="allowed", host=host[:200], port=port, via=why)
         if method == "CONNECT":
             cw.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
@@ -159,6 +246,8 @@ async def handle(cr: asyncio.StreamReader, cw: asyncio.StreamWriter) -> None:
 async def main() -> None:
     if TEST_ALLOW:
         log(verdict="test_mode", allow=[f"{h}:{p}" for h, p in TEST_ALLOW])
+    if UPSTREAM:
+        log(verdict="upstream", upstream=f"{UPSTREAM[0][:200]}:{UPSTREAM[1]}", auth=bool(UPSTREAM_AUTH))
     fds = int(os.environ.get("LISTEN_FDS", "0") or 0)
     if fds >= 1 and os.environ.get("LISTEN_PID") == str(os.getpid()):
         server = await asyncio.start_unix_server(handle, sock=socket.socket(fileno=3), limit=HEAD_MAX * 2)

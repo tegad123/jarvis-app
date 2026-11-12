@@ -58,6 +58,9 @@ def _scopes_for(row: Dict[str, Any]) -> List[str]:
     if row["origin"] == "broker" and a.get("type") == "browser_task":
         # The card's one tap is "this site, for the next half hour".
         return [sentinel.SCOPE_UNTIL]
+    if row["origin"] == "broker" and a.get("type") == "browser_read":
+        # "for the next half hour" or "always, on this site" (a read allowance; never acting).
+        return [sentinel.SCOPE_UNTIL, sentinel.SCOPE_ALWAYS]
     if row["origin"] != "broker" or row.get("action_class") in (None, sentinel.LOCKED):
         return [sentinel.SCOPE_ONCE]
     if a.get("type") == "browser" or a.get("person"):
@@ -75,9 +78,12 @@ def _scopes_for(row: Dict[str, Any]) -> List[str]:
 
 def default_scope(request_id: str) -> str:
     """What a plain Approve tap grants: the request's only scope when it
-    offers one (a browser task), otherwise once."""
+    offers one (a browser task), the half hour for a read allowance ("always"
+    takes its own signed callback), otherwise once."""
     row = store.get_approval(request_id)
     scopes = _scopes_for(row) if row else [sentinel.SCOPE_ONCE]
+    if row and (row["action_json"] or {}).get("type") == "browser_read":
+        return sentinel.SCOPE_UNTIL
     return scopes[0] if len(scopes) == 1 else sentinel.SCOPE_ONCE
 
 

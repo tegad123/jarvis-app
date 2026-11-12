@@ -24,6 +24,7 @@ Environment=JARVIS_BROWSER_PROFILE=/var/lib/jarvis-browser/{{SLUG}}/people
 Environment=JARVIS_BROWSER_BIN={{BROWSER_BIN}}
 Environment=JARVIS_EGRESS_SOCKET=/run/jarvis-egress/{{SLUG}}.sock
 Environment=JARVIS_BROWSER_MAX_OPEN={{BROWSER_MAX_OPEN}}
+{{BROWSER_MODE_LINES}}
 PrivateNetwork=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 ProtectSystem=strict

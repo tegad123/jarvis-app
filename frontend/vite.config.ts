@@ -13,5 +13,8 @@ export default defineConfig({
     // Fonts must be emitted as files, never inlined as data: URLs, and no
     // asset may reference an external host at runtime.
     assetsInlineLimit: 0,
+    // @novnc/novnc 1.7.0 uses a top-level await (core/util/browser.js).
+    target: 'es2022',
   },
+  optimizeDeps: { esbuildOptions: { target: 'es2022' } },
 })

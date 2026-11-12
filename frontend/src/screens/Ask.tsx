@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import BrowserWindow from '../components/BrowserWindow'
+import MlsCard from '../components/MlsCard'
 import { BackButton } from '../components/Page'
 import {
   ApiError,
@@ -72,6 +73,7 @@ function AssistantMessage({
   streaming,
   stopped,
   actions,
+  mlsRuns,
   from,
 }: {
   m: ChatMessage
@@ -80,8 +82,10 @@ function AssistantMessage({
   streaming: boolean
   stopped: boolean
   actions: ChatAction[]
+  mlsRuns: number[]
   from?: string
 }) {
+  const runs = [...new Set([...(m.actions ?? []).filter((a) => a.action === 'mls' && typeof a.run_id === 'number').map((a) => a.run_id as number), ...mlsRuns])]
   const { speech, onSpeak } = useSpeaker(m.content, isLatest, completedAt, bumpCounter)
   return (
     <>
@@ -95,6 +99,9 @@ function AssistantMessage({
         onSpeak={onSpeak}
       />
       <SavedActions actions={m.actions} live={actions} />
+      {runs.map((id) => (
+        <MlsCard key={id} runId={id} />
+      ))}
     </>
   )
 }
@@ -130,6 +137,7 @@ export default function Ask({ thread, role, personKey, people, jarvisReplies, on
   // task that was never written.
   const [verified, setVerified] = useState<{ ok: boolean; message: string } | null>(null)
   const [chatActions, setChatActions] = useState<ChatAction[]>([])
+  const [mlsRuns, setMlsRuns] = useState<number[]>([])
   const [members, setMembers] = useState<ThreadMember[] | null>(null)
   const [membersOpen, setMembersOpen] = useState(false)
   const [membersBusy, setMembersBusy] = useState(false)
@@ -306,6 +314,7 @@ export default function Ask({ thread, role, personKey, people, jarvisReplies, on
       pinnedRef.current = true
       setVerified(null)
       setChatActions([])
+      setMlsRuns([])
 
       // This turn's question and reply, by handle. In a channel Jarvis may not
       // be asked at all; the server says so in its first line ("posted").
@@ -362,6 +371,10 @@ export default function Ask({ thread, role, personKey, people, jarvisReplies, on
             onAction: (e) => {
               const a = e.action
               if (isChatAction(a)) setChatActions((cur) => (cur.includes(a) ? cur : [...cur, a]))
+            },
+            onMls: (e) => {
+              const id = e.run_id
+              if (Number.isInteger(id) && id > 0) setMlsRuns((cur) => (cur.includes(id) ? cur : [...cur, id]))
             },
             onDone: () => {
               settle('done')
@@ -562,6 +575,7 @@ export default function Ask({ thread, role, personKey, people, jarvisReplies, on
                         streaming={streaming && live}
                         stopped={stoppedKey !== null && m.localId === stoppedKey}
                         actions={i === lastAssistant ? chatActions : []}
+                        mlsRuns={i === lastAssistant ? mlsRuns : []}
                       />
                     )}
                   </div>
@@ -590,6 +604,7 @@ export default function Ask({ thread, role, personKey, people, jarvisReplies, on
 
           {/* A live action with no reply to sit under still gets its button. */}
           {lastAssistant < 0 && <SavedActions live={chatActions} />}
+          {lastAssistant < 0 && mlsRuns.map((id) => <MlsCard key={id} runId={id} />)}
         </div>
       </div>
 

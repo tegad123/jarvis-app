@@ -38,12 +38,14 @@ from datetime import timedelta
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from . import auth
 from . import broker
+from . import browser_policy
+from . import config
 from . import platform_db
 from . import platform_store as store
 from . import sentinel
@@ -53,12 +55,16 @@ broker_router = APIRouter(prefix="/api/broker")
 router = APIRouter(prefix="/api/browser")
 
 CONNECTOR = "browser"
+READ_CONNECTOR = "browser.read"
 SKILL = "jarvis"
 TASK_MINUTES = 30
 TAKEOVER_IDLE_S = 900
 READ_OPS = ("open", "read", "scroll", "back")
 ACT_OPS = ("click", "type", "press", "login")
 OPS = READ_OPS + ACT_OPS + ("request_access", "ask_person", "status")
+# "tables" is for app code (app/mls.py) through gate(); it is not in OPS, so
+# the agent's browser tool can't ask for it.
+TABLE_KEYS = ("tables", "cards", "data", "lists", "signals")
 KEYS = ("Enter", "Tab", "Escape", "Backspace", "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "PageDown",
         "PageUp", "Home", "End", "Space")
 REF = re.compile(r"^e\d{1,5}$")
@@ -191,6 +197,11 @@ def _db():
         person_key TEXT NOT NULL, site TEXT NOT NULL, username TEXT NOT NULL, secret_cipher BLOB NOT NULL,
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_used_at TEXT,
         PRIMARY KEY (person_key, site))""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS browser_sites (
+        person_key TEXT NOT NULL, site TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('connected','needs_signin')),
+        connected_at TEXT NOT NULL, last_used_at TEXT,
+        PRIMARY KEY (person_key, site))""")
     return conn
 
 
@@ -242,6 +253,144 @@ def _login_for(person: str, site: str) -> Optional[Tuple[str, str]]:
     return row["username"], secret
 
 
+# ── connected sites ───────────────────────────────────────────────────────────
+# That a person signed in to a site in their own browser, and when. Never a
+# username, password or cookie: those stay in the profile (or browser_logins).
+
+SITE_NAME = re.compile(r"^[a-z0-9-]{1,63}(\.[a-z0-9-]{1,63}){1,8}$")
+
+
+def mark_site(person: str, site: str, state: str) -> None:
+    now = _now()
+    conn = _db()
+    conn.execute("INSERT INTO browser_sites (person_key, site, state, connected_at) VALUES (?,?,?,?) "
+                 "ON CONFLICT(person_key, site) DO UPDATE SET state=excluded.state, "
+                 "connected_at=CASE WHEN excluded.state='connected' THEN excluded.connected_at ELSE connected_at END",
+                 (person, site, state, now))
+    conn.commit()
+
+
+def touch_site(person: str, site: str) -> None:
+    conn = _db()
+    conn.execute("UPDATE browser_sites SET last_used_at=? WHERE person_key=? AND site=?", (_now(), person, site))
+    conn.commit()
+
+
+def site_row(person: str, site: str) -> Optional[Dict[str, Any]]:
+    r = _db().execute("SELECT site, state, connected_at, last_used_at FROM browser_sites WHERE person_key=? AND site=?",
+                      (person, site)).fetchone()
+    return dict(r) if r else None
+
+
+def list_sites(person: str):
+    rows = [dict(r) for r in _db().execute("SELECT site, state, connected_at, last_used_at FROM browser_sites "
+                                           "WHERE person_key=? ORDER BY site", (person,)).fetchall()]
+    logins = {r["site"] for r in list_logins(person)}
+    allow = read_allowances(person)
+    sites = {r["site"] for r in rows}
+    rows += [{"site": s, "state": None, "connected_at": None, "last_used_at": None} for s in sorted(allow)
+             if s not in sites]
+    return [{**r, "read_allowance": r["site"] in allow, "saved_login": r["site"] in logins} for r in rows]
+
+
+def read_allowances(person: str) -> Dict[str, sentinel.Grant]:
+    """Sites where this person lets Jarvis keep reading (links, tabs, search
+    boxes) without asking. A separate connector from acting, so an allowance
+    can never satisfy _active_grant()."""
+    now = sentinel.utcnow()
+    try:
+        grants = store.active_grants(person, READ_CONNECTOR, SKILL)
+    except platform_db.Unavailable:
+        broker._bump("broker_sentinel_db_unavailable")
+        return {}
+    out: Dict[str, sentinel.Grant] = {}
+    for g in grants:
+        if g.scope == sentinel.SCOPE_ALWAYS or (g.expires_at and g.expires_at > now):
+            out.setdefault(g.destination.lstrip("@"), g)
+    return out
+
+
+def revoke_reading(person: str, site: str, by: str, reason: str) -> int:
+    n = 0
+    for g in store.active_grants(person, READ_CONNECTOR, SKILL):
+        if g.destination == f"@{site}" and store.revoke_grant(g.id, by=by, reason=reason):
+            n += 1
+    if n:
+        broker._bump("browser_read_revoked")
+    return n
+
+
+def forget_site(person: str, site: str, by: str) -> Dict[str, Any]:
+    """Sign out: the site's cookies and storage leave the person's profile, its
+    row goes, and any standing read allowance for it is revoked."""
+    r = call("forget_site", person, timeout=60, site=site)
+    if not r.get("ok"):
+        broker._bump("browser_site_forget_failed")
+        raise WorkerDown(r.get("error") or "the browser could not clear that site")
+    conn = _db()
+    conn.execute("DELETE FROM browser_sites WHERE person_key=? AND site=?", (person, site))
+    conn.commit()
+    revoked = revoke_reading(person, site, by, "signed out of the site")
+    broker._bump("browser_site_signed_out")
+    _record("forget_site", "executed", sentinel.READ, site, {"source": f"person:{person}"}, person)
+    return {"site": site, "cookies_removed": r.get("cookies_removed", 0), "allowances_revoked": revoked}
+
+
+def erase_person(person: str, by: str) -> Dict[str, Any]:
+    """A person was removed: their browser profile (and every sign-in saved in
+    it), saved logins, connected sites, MLS runs and browser allowances go.
+    Each part is attempted; what failed is named and counted."""
+    from . import mls  # noqa: PLC0415
+    out: Dict[str, Any] = {"profile": "browser_off", "failed": []}
+    if enabled():
+        try:
+            r = call("erase_profile", person, timeout=60)
+            out["profile"] = "erased" if r.get("erased") else "none" if r.get("ok") else "failed"
+        except WorkerDown:
+            out["profile"] = "failed"
+        if out["profile"] == "failed":
+            out["failed"].append("profile")
+    conn = _db()
+    with conn:
+        out["logins"] = conn.execute("DELETE FROM browser_logins WHERE person_key=?", (person,)).rowcount
+        out["sites"] = conn.execute("DELETE FROM browser_sites WHERE person_key=?", (person,)).rowcount
+    out["mls_runs"] = mls.erase_person(person)
+    revoked = 0
+    try:
+        # No platform database configured: no allowance can exist to revoke.
+        for connector in (CONNECTOR, READ_CONNECTOR) if platform_db.dsn() else ():
+            for g in store.active_grants(person, connector, SKILL):
+                revoked += bool(store.revoke_grant(g.id, by=by, reason="person removed"))
+    except platform_db.Unavailable:
+        broker._bump("broker_sentinel_db_unavailable")
+        out["failed"].append("allowances")
+    out["allowances_revoked"] = revoked
+    with _takeover_lock:
+        _needs_you.pop(person, None)
+        _takeover.pop(person, None)
+    broker._bump("browser_person_erase_failed" if out["failed"] else "browser_person_erased")
+    if out["failed"]:
+        log.error("browser: removing %s left %s", person, ", ".join(out["failed"]))
+    return out
+
+
+def erase_all() -> str:
+    """The tenant was deleted: every profile goes. "erased", "browser_off" or
+    "failed" (counted and logged; the caller reports it)."""
+    if not enabled():
+        return "browser_off"
+    try:
+        r = call("erase_all", "", timeout=120)
+    except WorkerDown:
+        r = {"ok": False}
+    if not r.get("ok"):
+        broker._bump("browser_profiles_erase_failed")
+        log.error("browser: the profiles could not all be removed (%s left)", r.get("left", "?"))
+        return "failed"
+    broker._bump("browser_profiles_erased")
+    return "erased"
+
+
 # ── the ledger ────────────────────────────────────────────────────────────────
 
 def _record(op: str, outcome: str, cls: str, site: str, ctx: Dict[str, str], person: str,
@@ -265,6 +414,28 @@ def _active_grant(site: str, person: str) -> Optional[sentinel.Grant]:
                              destinations=(f"@{site}",), skill=SKILL, user=person)
     return next((g for g in store.active_grants(person, CONNECTOR, SKILL) if sentinel.grant_covers(g, action, now)),
                 None)
+
+
+def _read_grant(site: str, person: str) -> Optional[sentinel.Grant]:
+    """A standing (or 30-minute) read allowance for this site. Its own
+    connector: it never satisfies _active_grant(), so it never lets Jarvis
+    act."""
+    now = sentinel.utcnow()
+    action = sentinel.Action(connector=READ_CONNECTOR, method="read", cls=sentinel.EXTERNAL_SEND,
+                             destinations=(f"@{site}",), skill=SKILL, user=person)
+    return next((g for g in store.active_grants(person, READ_CONNECTOR, SKILL)
+                 if sentinel.grant_covers(g, action, now)), None)
+
+
+def _pending_read(site: str, person: str) -> Optional[str]:
+    """One open ask per person and site: the agent clicking three links does
+    not file three cards."""
+    for r in store.list_approvals():
+        a = r.get("action_json") or {}
+        if r["status"] == "pending" and r.get("user_id") == person and a.get("type") == "browser_read" \
+                and a.get("site") == site:
+            return r["id"]
+    return None
 
 
 def _say_page(r: Dict[str, Any]) -> Dict[str, Any]:
@@ -329,6 +500,10 @@ def gate(op: str, args: Dict[str, Any], ctx: Dict[str, str], person: str) -> Tup
             if not current.get("running"):
                 return 409, {"error": "nothing_open", "detail": "No page is open yet."}
             r = call(op, person, direction="up" if args.get("direction") == "up" else "down")
+        elif op == "tables":
+            if not current.get("running"):
+                return 409, {"error": "nothing_open", "detail": "No page is open yet."}
+            r = call("tables", person, snapshot=bool(args.get("snapshot")))
         elif op == "request_access":
             return _request_access(args, current, here, ctx, person)
         elif op == "ask_person":
@@ -353,7 +528,10 @@ def gate(op: str, args: Dict[str, Any], ctx: Dict[str, str], person: str) -> Tup
         broker._bump(f"browser_{op}")
         if r.get("site_refused"):
             broker._bump("browser_site_refused")
-    return (200 if r.get("ok") else 502), _say_page(r)
+    out = _say_page(r)
+    if op == "tables":
+        out.update({k: r[k] for k in TABLE_KEYS if k in r})
+    return (200 if r.get("ok") else 502), out
 
 
 def _request_access(args, current, here, ctx, person):
@@ -408,6 +586,24 @@ def _act(op, args, current, here, ctx, person, approval: Optional[Dict[str, Any]
             broker._bump("browser_risky_held")
             return 403, {"error": "approval_required", "approval_id": aid, "risky": why}
         grant = _active_grant(here, person)
+        reading = None
+        if grant is None and op in ("click", "type"):
+            facts = {**desc, "link_site": site_key(desc["href"]) if desc.get("href") else "",
+                     "form_site": site_key(desc["form_action"]) if desc.get("form_action") else ""}
+            reading = browser_policy.read_only_gesture(op, facts, text, bool(args.get("submit")), here)
+        if grant is None and reading:
+            grant = _read_grant(here, person)
+            if grant is None:
+                aid = _pending_read(here, person) or _file(
+                    f"Let Jarvis keep reading {here}", {"type": "browser_read", "site": here,
+                                                        "url": str(current.get("url") or "")[:500],
+                                                        "example": f"{op} '{exact['name'][:80]}'"},
+                    sentinel.EXTERNAL_SEND, f"following links and using search boxes on {here} needs their go-ahead",
+                    here, ctx, person)
+                broker._bump("browser_read_asked")
+                return 403, {"error": "approval_required", "approval_id": aid, "site": here, "reading": reading}
+            broker._bump("browser_read_gesture")
+            touch_site(person, here)
         if grant is None:
             _record(op, "needs_task_approval", sentinel.EXTERNAL_SEND, here, ctx, person, verdict="ask")
             broker._bump("browser_needs_task_approval")
@@ -453,6 +649,17 @@ def execute_approved(item: Dict[str, Any], scope: str, decided_by: str) -> Dict[
         store.create_grant(grant, approval_id=item["id"], action_class=sentinel.EXTERNAL_SEND, created_by=decided_by)
         broker._bump("browser_task_granted")
         return {"state": "granted", "grant_id": grant.id, "site": a["site"], "until": grant.expires_at.isoformat()}
+    if a.get("type") == "browser_read":
+        action = sentinel.Action(connector=READ_CONNECTOR, method="read", cls=sentinel.EXTERNAL_SEND,
+                                 destinations=(f"@{a['site']}",), skill=SKILL, user=person)
+        always = scope == sentinel.SCOPE_ALWAYS
+        grant = sentinel.grant_from_approval(item["id"], action, sentinel.SCOPE_ALWAYS if always else
+                                             sentinel.SCOPE_UNTIL, sentinel.utcnow(),
+                                             duration=None if always else timedelta(minutes=TASK_MINUTES))
+        store.create_grant(grant, approval_id=item["id"], action_class=sentinel.EXTERNAL_SEND, created_by=decided_by)
+        broker._bump("browser_read_granted_always" if always else "browser_read_granted_until")
+        return {"state": "granted", "grant_id": grant.id, "site": a["site"],
+                "until": grant.expires_at.isoformat() if grant.expires_at else None}
     if not enabled():
         return {"state": "refused", "reason": "the browser is switched off"}
     try:
@@ -480,6 +687,12 @@ def approval_display(action: Dict[str, Any]) -> Optional[Dict[str, str]]:
                 "access": f"Lets Jarvis click and type on {action.get('site')} for {TASK_MINUTES} minutes. It still "
                           "asks before payments, purchases, deleting anything or anything it can't undo.",
                 "page": action.get("url", "")}
+    if t == "browser_read":
+        return {"site": action.get("site", ""), "page": action.get("url", ""),
+                "access": f"Lets Jarvis follow links, switch tabs, page through results and use search and filter "
+                          f"boxes on {action.get('site')}. Nothing else: it still asks before typing anything "
+                          f"else, signing in, contacting anyone or saving anything.",
+                "example": action.get("example", "")}
     if t == "browser":
         out = {"site": action.get("site", ""), "page": action.get("url", "")}
         op = action.get("op")
@@ -586,7 +799,7 @@ def browser_status(sess: dict = Depends(auth.current_session)):
     except platform_db.Unavailable:
         grants = []
     return {"enabled": True, "running": bool(st.get("running")), "url": st.get("url"), "title": st.get("title"),
-            "taken_over": taken_over(who), "access": grants,
+            "taken_over": taken_over(who), "access": grants, "live_view": st.get("mode") == "headed",
             "needs_you": needs_you(who) if st.get("running") else None}
 
 
@@ -613,10 +826,163 @@ def browser_takeover(body: TakeoverBody, sess: dict = Depends(auth.current_sessi
             _needs_you.pop(who, None)
         else:
             _takeover.pop(who, None)
+    if not body.on:
+        # The live view ends with the takeover: its relay sees this within a
+        # second, and the worker stops the person's x11vnc now.
+        try:
+            call("view_stop", who, timeout=10)
+        except WorkerDown:
+            pass
     broker._bump("browser_takeover_on" if body.on else "browser_takeover_off")
     _record("takeover_on" if body.on else "takeover_off", "executed", sentinel.READ, "",
             {"source": f"person:{who}"}, who)
     return {"taken_over": body.on}
+
+
+# ── the live view: noVNC in the person's own tab ──────────────────────────────
+# One WebSocket per person, open only while they have taken over a headed
+# browser. Whose browser it shows comes from the session, never a parameter.
+# What is logged: open, close, bytes, why it closed. Never frames or keys.
+
+VIEW_RECHECK_S = 30
+_viewers: Dict[str, float] = {}
+
+
+def _view_session(ws: WebSocket) -> dict:
+    return auth.current_session(ws.cookies.get(config.COOKIE_NAME), ws.headers.get("authorization"))
+
+
+def view_refusal(ws: WebSocket) -> Tuple[str, str]:
+    """('', person) when this socket may show its person's browser, else
+    (why, person-or-''). The checks run in this order; each refusal has its
+    own counter."""
+    if not enabled():
+        return "browser_off", ""
+    try:
+        sess = _view_session(ws)
+    except HTTPException:
+        return "no_session", ""
+    who = auth.person_of(sess)
+    if not who or auth.is_operator(sess):
+        return "not_a_person", ""
+    want = config.public_origin()
+    # WebSockets are not bound by same-origin rules: without this, any site
+    # the person visits could open their view with their cookie.
+    if not want or ws.headers.get("origin", "").rstrip("/") != want:
+        return "origin", str(who)
+    from . import accounts  # noqa: PLC0415
+    if not accounts.feature_on(str(who), "browser"):
+        return "feature_off", str(who)
+    try:
+        st = call("status", str(who), timeout=10)
+    except WorkerDown:
+        return "browser_unavailable", str(who)
+    if st.get("mode") != "headed":
+        return "not_headed", str(who)
+    if not taken_over(str(who)):
+        return "not_taken_over", str(who)
+    with _takeover_lock:
+        if str(who) in _viewers:
+            return "already_viewing", str(who)
+    return "", str(who)
+
+
+def _view_still_ok(ws: WebSocket, who: str) -> str:
+    try:
+        sess = _view_session(ws)
+    except HTTPException:
+        return "signed_out"
+    from . import accounts  # noqa: PLC0415
+    if auth.person_of(sess) != who or not accounts.feature_on(who, "browser"):
+        return "feature_off"
+    return ""
+
+
+@router.websocket("/view")
+async def browser_view(ws: WebSocket):
+    import asyncio  # noqa: PLC0415
+    from starlette.concurrency import run_in_threadpool  # noqa: PLC0415
+    why, who = await run_in_threadpool(view_refusal, ws)
+    if why:
+        broker._bump(f"browser_view_refused_{why}")
+        log.info("browser view refused: %s (person %s)", why, who or "-")
+        await ws.close(code=4401 if why == "no_session" else 4403)
+        return
+    with _takeover_lock:
+        if who in _viewers:
+            broker._bump("browser_view_refused_already_viewing")
+            await ws.close(code=4403)
+            return
+        _viewers[who] = time.monotonic()
+    path = os.environ.get("JARVIS_BROWSER_SOCKET", "").strip()
+    sent, reason = [0, 0], "closed"
+    writer = None
+    try:
+        reader, writer = await asyncio.open_unix_connection(path)
+        writer.write(json.dumps({"op": "view", "person": who}).encode() + b"\n")
+        await writer.drain()
+        reply = json.loads(await asyncio.wait_for(reader.readline(), 20) or b"{}")
+        if not reply.get("ok"):
+            broker._bump("browser_view_failed")
+            log.warning("browser view for %s did not start: %s", who, str(reply.get("error"))[:120])
+            await ws.close(code=1011)
+            return
+        offered = ws.scope.get("subprotocols") or []
+        await ws.accept(subprotocol="binary" if "binary" in offered else None)
+        broker._bump("browser_view_opened")
+        log.info("browser view opened for %s", who)
+
+        async def up():
+            while True:
+                msg = await ws.receive()
+                if msg.get("type") == "websocket.disconnect":
+                    return "viewer_left"
+                data = msg.get("bytes") or (msg.get("text") or "").encode()
+                if data:
+                    sent[0] += len(data)
+                    _touch_takeover(who)
+                    writer.write(data)
+                    await writer.drain()
+
+        async def down():
+            while True:
+                data = await reader.read(65536)
+                if not data:
+                    return "browser_closed"
+                sent[1] += len(data)
+                await ws.send_bytes(data)
+
+        async def watch():
+            last = time.monotonic()
+            while True:
+                await asyncio.sleep(1)
+                if not taken_over(who):
+                    return "handed_back"
+                if time.monotonic() - last >= VIEW_RECHECK_S:
+                    last = time.monotonic()
+                    bad = await run_in_threadpool(_view_still_ok, ws, who)
+                    if bad:
+                        return bad
+
+        tasks = [asyncio.ensure_future(f()) for f in (up, down, watch)]
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for t in pending:
+            t.cancel()
+        reason = next((t.result() for t in done if not t.cancelled() and t.exception() is None), "error")
+    except (OSError, asyncio.TimeoutError, ValueError) as exc:
+        reason = f"relay_{type(exc).__name__}"
+        broker._bump("browser_view_failed")
+    finally:
+        with _takeover_lock:
+            _viewers.pop(who, None)
+        if writer is not None:
+            writer.close()
+        try:
+            await ws.close()
+        except Exception:
+            pass
+        broker._bump("browser_view_closed")
+        log.info("browser view closed for %s: %s (in %d bytes, out %d bytes)", who, reason, sent[0], sent[1])
 
 
 @router.post("/input")
@@ -673,6 +1039,59 @@ def logins_save(body: LoginBody, sess: dict = Depends(auth.current_session)):
         raise HTTPException(status_code=422, detail="Give the site's address, like zillow.com.")
     save_login(who, site, body.username.strip(), body.password)
     return {"ok": True, "site": site}
+
+
+@router.get("/sites")
+def sites_list(sess: dict = Depends(auth.current_session)):
+    return {"sites": list_sites(_person(sess))}
+
+
+@router.post("/sites/confirm")
+def sites_confirm(sess: dict = Depends(auth.current_session)):
+    """'I'm signed in', on hand back: the site of the page their browser is on.
+    The person cannot name some other site here."""
+    who = _person(sess)
+    try:
+        st = call("status", who, timeout=10)
+    except WorkerDown:
+        raise HTTPException(status_code=503, detail="The browser isn't running right now.")
+    url = str(st.get("url") or "")
+    site = site_key(url) if st.get("running") and urlsplit(url).scheme in ("http", "https") else ""
+    if not site:
+        raise HTTPException(status_code=409, detail="Open the site you signed in to first.")
+    mark_site(who, site, "connected")
+    broker._bump("browser_site_connected")
+    _record("site_connected", "executed", sentinel.READ, site, {"source": f"person:{who}"}, who)
+    return {"ok": True, "site": site_row(who, site)}
+
+
+@router.delete("/sites/{site}")
+def sites_sign_out(site: str, sess: dict = Depends(auth.current_session)):
+    who = _person(sess)
+    site = site.strip().lower()
+    if not SITE_NAME.match(site) or (site_row(who, site) is None and site not in read_allowances(who)):
+        raise HTTPException(status_code=404, detail="That site isn't in your connected sites.")
+    try:
+        return {"ok": True, **forget_site(who, site, who)}
+    except WorkerDown:
+        raise HTTPException(status_code=503, detail="The browser couldn't sign out of that site right now; "
+                                                    "nothing was removed. Try again.")
+
+
+@router.delete("/sites/{site}/reading")
+def sites_stop_reading(site: str, sess: dict = Depends(auth.current_session)):
+    """Stop always allowing: only the read allowance goes; the sign-in stays."""
+    who = _person(sess)
+    site = site.strip().lower()
+    if not SITE_NAME.match(site):
+        raise HTTPException(status_code=404, detail="That site isn't in your connected sites.")
+    try:
+        n = revoke_reading(who, site, who, "stopped from Settings")
+    except platform_db.Unavailable:
+        raise HTTPException(status_code=503, detail="The platform database is unavailable.")
+    if not n:
+        raise HTTPException(status_code=404, detail="Jarvis has no standing permission to read that site.")
+    return {"ok": True, "revoked": n}
 
 
 @router.delete("/logins/{site}")

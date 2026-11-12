@@ -57,7 +57,8 @@ Jarvis is a Muse-style personal agent built for real estate. Every agent on a te
 
 ### Not in v1
 
-- HAR (no MLS data feed, no HAR.com browser actions). Revisit after v1.
+- An MLS data feed (no licensed HAR/RESO feed). MLS search runs only through
+  each agent's own signed-in Matrix session in their own browser (8.6).
 - Compass platform integration.
 - Public self-serve signup and Google's restricted-scope verification. v1 runs on org-internal Google Workspace OAuth apps.
 - Payments or purchases by Jarvis.
@@ -286,8 +287,14 @@ Two layers, built in this order:
 - If ShowingSmart shows a CAPTCHA or 2FA prompt: pause, hand control to the user through live takeover, and never try to solve or bypass it.
 - Every browser action is an `external_send`-class action by default (it changes something other people see).
 
-### 8.6 HAR
-Out of v1. Placeholder for later: a licensed MLS data feed (needs a data license agreement, normally sponsored by a broker). No HAR.com or MLS logins by the bot until HAR's rules on automated or shared access are confirmed.
+### 8.6 HAR MLS search (Matrix, through the agent's own browser)
+Plan and decisions: `docs/plans/browser-har-comps.md`.
+- **What it does.** The `search_mls` tool turns a plain request ("active listings in the Heights under $600k", "sold comps for 1300 Sample Ave, 1,850 sq ft") into Matrix search filters (status, area, zip, address and radius, price, beds, baths, sq ft, year built, property type, dates), runs the search on HAR MLS Matrix, re-checks every row against the filters, and returns a table and a short summary (median price, $/sq ft, days on market; a suggested range for sold comps, never called an appraisal). Read-only: it never saves a search, starts an alert or contacts anyone.
+- **Whose session.** Only the requesting agent's own Matrix login, in their own browser profile, signed in by them through Take over. No shared login, no stored Matrix password, no licensed feed. It stops at a sign-in page, a human check or a 2FA prompt and asks the person to take over; it never solves or bypasses one.
+- **Who sees it.** Results go only to the person who asked, in their own direct line, as an app-drawn card read from the stored run (`GET /api/mls/runs/{id}` is 404 for everyone else, owner and operator included). The rows also go to the model so follow-up questions work. At most 100 rows (the tenant's `mls.max_results`, default 25). Results are cleared after `mls.keep_days`.
+- **Availability.** No separate switch: a member has MLS search whenever their browser does (headed browser, their `browser` feature on) and the tenant's `mls.start_url` is set. Removing `start_url` turns it off for everyone.
+- **Caps.** Per search at most 10 page loads with a 4–9 second pause before each; per person per local day 5 searches and 40 page loads; one search at a time per tenant; a 24-hour cooldown after the site refuses (403/429 or "unusual activity").
+- **Removal.** Removing a person deletes their browser profile (with every site sign-in), saved logins, connected sites, MLS runs and browser allowances. Deleting the tenant removes every profile.
 
 ### 8.7 iMessage (Mac companion)
 iCloud has no API for Messages, so you can't connect it from the cloud. The working method (and what Muse appears to use, through a paired Mac app) is a small app on the agent's own Mac that reads the local Messages database.
@@ -416,7 +423,7 @@ Each transcript is a source record (Section 8.4).
 #### MLS and property data
 | App | What Jarvis does | Method | Tier |
 |---|---|---|---|
-| HAR MLS | listings, status changes, comps | Partner (MLS data license) | Later (out of v1) |
+| HAR MLS (Matrix) | listing searches and sold comps, from plain requests | Browser (the agent's own Matrix session, 8.6) | Built, unavailable until `mls.start_url` is set |
 | RESO Web API platforms (Bridge, Trestle, Spark) | same, for other MLSs | Partner (through the MLS) | Later |
 | RPR (Realtors Property Resource) | property reports for listing appointments | check access | Later |
 | ReportAll | parcel and lot data (already used in heights-map) | API | Later |
