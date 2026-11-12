@@ -97,7 +97,7 @@
       "needs": [
         "google"
       ],
-      "description": "Put one event on the Google Calendar of the person you are talking to. Invites nobody. It waits in the Approvals tab and is added only when they tap Approve; in practice mode it is shown, never added.",
+      "description": "Put one event on the Google Calendar of the person you are talking to, and invite the people they named. Pass those email addresses in attendees; they receive the calendar invite. Leave attendees out when they did not ask you to invite anyone. It waits in the Approvals tab and is added only when they tap Approve; in practice mode it is shown, never added.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -114,6 +114,13 @@
           },
           "notes": {
             "type": "string"
+          },
+          "attendees": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Email addresses to invite. Only people the person you are talking to asked you to invite. Omit when nobody should be invited."
           }
         },
         "required": [

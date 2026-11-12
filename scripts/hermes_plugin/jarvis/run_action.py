@@ -22,6 +22,11 @@ sys.path.insert(0, os.path.join(SKILLS, "_shared"))
 
 import app_broker  # noqa: E402
 import authz  # noqa: E402
+import identity  # noqa: E402
+
+# Google notifies every guest when sendUpdates is "all". More than this is
+# refused outright rather than silently dropped from the middle of the list.
+MAX_GUESTS = 20
 
 APPROVAL_SAY = ("Not done yet: it is waiting in the Approvals tab, and it runs only when they tap Approve there. "
                 "Say exactly that, show what it will do, and do not suggest any other way to get it done.")
@@ -170,19 +175,77 @@ def calendar_upcoming(a):
                          for e in res.get("items") or []])
 
 
+def calendar_guests(raw):
+    """(emails to invite, tokens that were not).
+
+    Every well-formed address the caller named is invited. Whether that
+    address is inside the team is Sentinel's decision when the event is
+    filed, not a second filter here. A token with no email address is
+    reported and left off the event. Past MAX_GUESTS, further addresses are
+    reported and left off rather than silently cut.
+    """
+    if raw is None or raw == "" or raw == []:
+        return [], []
+    items = [raw] if isinstance(raw, str) else raw
+    if not isinstance(items, list):
+        return [], ["attendees was not a list of email addresses"]
+    invited, skipped, seen = [], [], set()
+    for item in items:
+        found = identity.extract_emails(str(item))
+        if not found:
+            text = str(item).strip()
+            if text:
+                skipped.append(text[:80])
+            continue
+        for email in found:
+            if email in seen:
+                continue
+            seen.add(email)
+            if len(invited) >= MAX_GUESTS:
+                skipped.append(email)
+                continue
+            invited.append(email)
+    return invited, skipped
+
+
+def calendar_insert_params(title, start, end, notes="", attendees=None):
+    """The events.insert params. sendUpdates is set only when someone is invited."""
+    invited, skipped = calendar_guests(attendees)
+    body = {"summary": str(title)[:200], "description": str(notes or "")[:2000],
+            "start": {"dateTime": start}, "end": {"dateTime": end}}
+    params = {"calendarId": "primary", "body": body}
+    if invited:
+        body["attendees"] = [{"email": email} for email in invited]
+        params["sendUpdates"] = "all"
+    return params, invited, skipped
+
+
+def _guest_clause(invited, skipped, invited_word="Invited"):
+    parts = []
+    if invited:
+        parts.append(f"{invited_word} {', '.join(invited)}.")
+    if skipped:
+        parts.append("Not invited: " + ", ".join(skipped) + ".")
+    return (" " + " ".join(parts)) if parts else ""
+
+
 def add_calendar_event(a):
     if not actor("add_calendar_event", a["title"]):
         return
     if not google_connected():
         return needs_google()
-    body = {"summary": str(a["title"])[:200], "description": str(a.get("notes") or "")[:2000],
-            "start": {"dateTime": a["start"]}, "end": {"dateTime": a["end"]}}
+    params, invited, skipped = calendar_insert_params(
+        a["title"], a["start"], a["end"], a.get("notes") or "", a.get("attendees"))
     try:
-        google("calendar", "v3", "events.insert", {"calendarId": "primary", "body": body})
+        google("calendar", "v3", "events.insert", params)
     except app_broker.BrokerError as exc:
+        if (exc.body or {}).get("error") == "shadowed":
+            return out(ok=False, held=True, mode="practice", invited=invited, not_invited=skipped,
+                       say=PRACTICE_SAY + _guest_clause(invited, skipped, "Would invite"))
         return held(exc)
     bump("agent_tool_add_calendar_event_unheld")
-    out(ok=True, say="Added to the calendar.")
+    out(ok=True, say="Added to the calendar." + _guest_clause(invited, skipped),
+        invited=invited, not_invited=skipped)
 
 
 def search_email(a):

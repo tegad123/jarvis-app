@@ -221,6 +221,7 @@ def _tzinfo():
         name = tc.timezone_name()
         return ZoneInfo(name)
     except Exception:
+        _bump("tasks_tz_fallback_utc")
         return timezone.utc
 
 
@@ -230,6 +231,7 @@ def tz_name() -> str:
         import tenant_config as tc
         return tc.timezone_name()
     except Exception:
+        _bump("tasks_tz_fallback_utc")
         return "UTC"
 
 
@@ -536,6 +538,11 @@ def set_status(task_id: str, status: str, by: str) -> Dict[str, Any]:
                   "task.completed", task_id, current.get("assignee"),
                   current.get("assignee") or (current["created_by"]
                                               if current["created_by"] != "jarvis" else None))
+            try:
+                from . import task_calendar
+                task_calendar.drop(task_id)
+            except Exception:
+                _bump("task_calendar_drop_failed")
     else:
         # Leaving `done` clears completed_at: a reopened task is open again,
         # not a finished one with a stale timestamp. No feed event for a
@@ -694,8 +701,8 @@ def created_since(ts: str, source: Optional[str] = None) -> List[Dict[str, Any]]
 def query(status: Union[None, str, Sequence[str]] = None,
           priority: Optional[str] = None, assignee: Optional[str] = None,
           stale: Optional[bool] = None, archived: bool = False) -> List[Dict[str, Any]]:
-    """The team list. Filters are SQL; the ORDER is Python, because "overdue"
-    is a fact about the tenant's calendar day and SQLite cannot know it."""
+    """The team list. Filters are SQL. Newest open work is first and finished
+    work sinks, so a task added today sits above one from last month."""
     sql = ["SELECT * FROM tasks WHERE status " + ("= 'archived'" if archived else "!= 'archived'")]
     args: List[Any] = []
     if status:
@@ -708,16 +715,13 @@ def query(status: Union[None, str, Sequence[str]] = None,
         sql.append("AND assignee = ?"); args.append(assignee)
     if stale is not None:
         sql.append("AND stale = ?"); args.append(1 if stale else 0)
-    sql.append("ORDER BY created_at ASC")
+    sql.append("ORDER BY created_at DESC")
     today = _today()
     rows = [_row(r, today) for r in _ensure().execute(" ".join(sql), args).fetchall()]
-    rows.sort(key=lambda t: (
-        t["status"] == "done",                 # finished work sinks
-        not t["is_overdue"],                   # overdue first
-        PRIORITY_RANK.get(t["priority"], 1),   # then priority
-        t.get("deadline") or "9999-12-31",     # then soonest deadline
-        t["created_at"],                       # then age
-    ))
+    # Newest work at the top. Finished work stays underneath, still newest first
+    # among itself. Priority and deadline stay on the row; they do not reorder it.
+    rows.sort(key=lambda t: t["created_at"], reverse=True)
+    rows.sort(key=lambda t: t["status"] == "done")
     return rows
 
 

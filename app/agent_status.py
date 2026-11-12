@@ -133,7 +133,7 @@ _CAN = {
     "add_task": "add things to the to-do list",
     "complete_task": "mark to-do items done",
     "calendar_upcoming": "check what's coming up on the calendar",
-    "add_calendar_event": "put things on the calendar",
+    "add_calendar_event": "put things on the calendar and invite the people they name",
     "search_email": "look through email",
     "draft_email": "write emails for them to look over before anything is sent",
     "browser_open": "open and read any public website in their own browser",
@@ -144,7 +144,7 @@ _CAN = {
     "list_my_followups": "list the leads they're due to follow up with",
 }
 _CAN_LIVE = {
-    "add_calendar_event": "put things on their calendar, each one only after they tap Approve in the Approvals tab",
+    "add_calendar_event": "put things on their calendar and invite the people they name, each one only after they tap Approve in the Approvals tab",
     "draft_email": "send emails from their Gmail, each one only after they tap Approve in the Approvals tab",
     "browser_click": "click, type and sign in on a website once they allow the task for that site in the "
                      "browser window in the chat (30 minutes at a time); payments, purchases and deleting anything always get "

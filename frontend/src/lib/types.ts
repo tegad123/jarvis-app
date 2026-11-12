@@ -118,6 +118,26 @@ export type Role = 'owner' | 'admin' | 'member' | 'operator'
  *  keys — never token/refresh/cipher. */
 export type GoogleConnectionStatusName = 'connected' | 'needs_reauth' | 'disconnected'
 
+/** One message in Jarvis's own inbox. A log line, not the full letter. */
+export interface InboxMessage {
+  id: string
+  from: string
+  subject: string
+  date: string
+  unread: boolean
+  snippet: string
+  /** What Jarvis did with it, once the watcher has handled it. */
+  handling?: string
+}
+
+export interface InboxResponse {
+  status: 'connected' | 'disconnected' | 'needs_reauth' | 'unavailable'
+  mailbox: string | null
+  unread: number
+  messages: InboxMessage[]
+  notice: string | null
+}
+
 export interface GoogleConnectionStatus {
   status: GoogleConnectionStatusName
   google_email: string | null

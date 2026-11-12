@@ -22,6 +22,7 @@ import pathlib
 import sqlite3
 import subprocess
 import sys
+import time
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--base", default=os.environ.get("TASKS_BASE", "http://127.0.0.1:8711"))
@@ -173,24 +174,34 @@ ck("the operator still sees the structure it is there to support",
    all(t["title"] and t["status"] for t in L["operator"]["tasks"]))
 ck("the payload names the tenant's timezone",
    L["dana"].get("timezone") == "America/Chicago", str(L["dana"].get("timezone")))
+_tzc = {k: v["value"] for k, v in call("/api/counters", jar=J["dana"])[1]["counters"].items()}
+_tz_fb = _tzc.get("tasks_tz_fallback_utc", 0) - C0.get("tasks_tz_fallback_utc", 0)
+if L["dana"].get("timezone") == "UTC":
+    ck("a UTC fallback is counted, not silent", _tz_fb > 0, f"delta={_tz_fb}")
+else:
+    ck("no UTC fallback counted when the tenant zone resolves", _tz_fb == 0, f"delta={_tz_fb}")
 
 # ── 2b. order ────────────────────────────────────────────────────────────────
 print("\n── 2b. THE ORDER THE LIST COMES BACK IN ───────────────────────")
-# The order is the product decision: what is late comes first, then what is
-# important. Asserting it here rather than trusting the store, because the
-# ordering lives in Python (a tenant-local "overdue" cannot be an ORDER BY)
-# and nothing else in this suite would notice if it inverted.
+# The order is the product decision (owner, 2026-11-03): newest first, older
+# tasks further down. Priority and lateness are labels on the row, not sort
+# keys, so an old overdue high task must not climb above a newer one.
 from datetime import date, timedelta  # noqa: E402
 yesterday = (date.today() - timedelta(days=2)).isoformat()
-O_LATE = mk("Zzz late but unimportant", J["dana"], priority="low", deadline=yesterday)
-O_HIGH = mk("Zzz urgent and on time", J["dana"], priority="high")
-O_LOW = mk("Zzz neither", J["dana"], priority="low")
+O_OLD = mk("Zzz oldest, late and urgent", J["dana"], priority="high", deadline=yesterday)
+time.sleep(0.01)
+O_MID = mk("Zzz middle", J["dana"], priority="low")
+time.sleep(0.01)
+O_NEW = mk("Zzz newest, unimportant", J["dana"], priority="low")
 order = [t["task_id"] for t in call("/api/tasks", jar=J["dana"])[1]["tasks"]]
-pos = {tid: order.index(tid) for tid in (O_LATE, O_HIGH, O_LOW) if tid in order}
-ck("an overdue task outranks an urgent one that is not late",
-   pos.get(O_LATE, 99) < pos.get(O_HIGH, 99), str(pos))
-ck("a high-priority task outranks a low one",
-   pos.get(O_HIGH, 99) < pos.get(O_LOW, 99), str(pos))
+pos = {tid: order.index(tid) for tid in (O_OLD, O_MID, O_NEW) if tid in order}
+ck("the newest task comes first, even below an older urgent one in priority",
+   pos.get(O_NEW, 99) < pos.get(O_MID, 99) < pos.get(O_OLD, 99), str(pos))
+old_row = next((t for t in call("/api/tasks", jar=J["dana"])[1]["tasks"] if t["task_id"] == O_OLD), {})
+ck("the older task still carries its priority and overdue label",
+   old_row.get("priority") == "high" and bool(old_row.get("due_label")),
+   str({k: old_row.get(k) for k in ("priority", "due_label")}))
+O_LATE, O_HIGH, O_LOW = O_OLD, O_MID, O_NEW
 for tid in (O_LATE, O_HIGH, O_LOW):
     call(f"/api/tasks/{tid}/archive", "POST", None, J["dana"])
 

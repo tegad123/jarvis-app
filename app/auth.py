@@ -17,7 +17,7 @@ import uuid
 from collections import defaultdict, deque
 from typing import Deque, Dict, Optional
 
-from fastapi import Cookie, HTTPException, Request, Response, status
+from fastapi import Cookie, Header, HTTPException, Request, Response, status
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from . import config
@@ -241,12 +241,48 @@ def clear_cookie(response: Response) -> None:
     response.delete_cookie(config.COOKIE_NAME, path="/")
 
 
+def pin_signin(request: Request, person_key: str, pin: str) -> dict:
+    """The PIN check shared by the web login and the phone app. Returns the
+    account; raises 429 for a lock and 401 for anything else, with one message
+    for "no such person", "wrong PIN" and "disabled" so the answer never says
+    which person keys are real. The caller has already checked the per-IP
+    throttle and secret_signin_allowed."""
+    if person_locked(person_key):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many wrong PINs. Sign-in is locked for {lock_duration_text()}.",
+        )
+    acct = verify_pin(person_key, pin or "")
+    if not acct:
+        record_failure(request)
+        if record_pin_failure(person_key):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Too many wrong PINs. Sign-in is locked for {lock_duration_text()}.",
+            )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="That PIN is not right.")
+    clear_failures(request)
+    clear_pin_failures(person_key)
+    return acct
+
+
 # ---------------------------------------------------------------- dependency
 
 def current_session(
     jarvis_session: Optional[str] = Cookie(default=None, alias=config.COOKIE_NAME),
+    authorization: Optional[str] = Header(default=None),
 ) -> dict:
-    """FastAPI dependency. Raises 401 unless a valid, unexpired cookie is present."""
+    """FastAPI dependency. Raises 401 unless a valid, unexpired cookie or a
+    phone app token is present. Both end in the same _live() check, so a role
+    change or a removal applies to the web and the phone on the next request.
+
+    Only a bearer that carries the app-token prefix is read here. The gateway's
+    API_SERVER_KEY bearer and anything else fall through to the cookie."""
+    from . import devices  # noqa: PLC0415
+    token = devices.bearer_token(authorization)
+    if token:
+        return _live(devices.session_from_access(token))
     if not jarvis_session:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

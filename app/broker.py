@@ -374,6 +374,37 @@ def _feed_held(what: str, cls: str, outcome: str, decision: sentinel.Decision, s
         log.error("broker: would-have feed write failed (%s)", type(exc).__name__)
 
 
+def _is_owner_digest(api, method, params, ctx, addrs) -> bool:
+    """The scheduled task digest, and only that: one message, to the owner,
+    from the task-manager job. His address is outside the internal-domain
+    list, so without this the 5AM and 3PM mail would wait in Approvals."""
+    if (api, method) != ("gmail", "users.messages.send"):
+        return False
+    skill = ctx.get("skill") or ""
+    source = str(ctx.get("source") or "")
+    if skill != "task-manager" or not source.startswith("digest:"):
+        if skill == "task-manager" or source.startswith("digest:"):
+            log.info("broker: digest not recognized (skill=%s source=%s)", skill or "none", source or "none")
+        return False
+    _shared()
+    import identity  # noqa: PLC0415
+    owner = (identity.owner_address() or "").strip().lower()
+    got = [a.strip().lower() for a in addrs]
+    if not owner or got != [owner]:
+        log.info("broker: digest not recognized (recipients=%s owner=%s)", len(got), "set" if owner else "missing")
+        return False
+    from email.header import decode_header  # noqa: PLC0415
+    raw_subject = str(_parse_raw(params).get("Subject") or "")
+    parts = []
+    for text, enc in decode_header(raw_subject):
+        parts.append(text.decode(enc or "utf-8", "replace") if isinstance(text, bytes) else text)
+    subject = "".join(parts)
+    if not (subject.startswith("[JARVIS] ") and "Open Tasks" in subject):
+        log.info("broker: digest not recognized (subject does not match)")
+        return False
+    return True
+
+
 def gate_google(api, version, method, params, ctx, approval: Optional[Dict[str, Any]] = None,
                 person: Optional[str] = None) -> Tuple[int, Dict[str, Any]]:
     """Decide one Google write and run it if allowed. `approval` is a decided
@@ -403,6 +434,10 @@ def gate_google(api, version, method, params, ctx, approval: Optional[Dict[str, 
         mode = sentinel.APPROVE
     decision = sentinel.decide(action, mode=mode, grants=grants,
                                now=now, rates=rates, boundary_refusal=refusal)
+    if _is_owner_digest(api, method, params, ctx, addrs) and decision.verdict == sentinel.ASK:
+        decision = sentinel.Decision(sentinel.ALLOW, "scheduled task digest to the owner",
+                                     decision.cls, mode)
+        _bump("owner_digest_allowed")
     fields = store.fields_from_summary(sentinel.summarize(action, decision))
     fields["sentinel_mode"] = sentinel_mode()
     if approval:
@@ -461,6 +496,185 @@ def gate_google(api, version, method, params, ctx, approval: Optional[Dict[str, 
 
 
 SELF_SKILL = "text-followup"
+INBOX_SKILL = "inbox"
+TEAM_SKILL = "team"
+TEAM_INVITE_SUBJECT = "You're invited to Jarvis"
+
+
+def send_inbox_receipt(to_addr: str, subject: str, text: str, *, thread_id: str = "",
+                       in_reply_to: str = "", gmail_id: str = "") -> Tuple[int, Dict[str, Any]]:
+    """A fixed acknowledgement from Jarvis's own mailbox to the person who wrote.
+
+    The owner asked for this (2026-11-02): every real email that arrives in the
+    assistant inbox gets a receipt. The text is written here, not by the model,
+    and there is exactly one recipient — the sender. Calendar invites and any
+    other send still go through gate_google and wait when the policy says so.
+    """
+    from email.message import EmailMessage  # noqa: PLC0415
+    from email.utils import parseaddr  # noqa: PLC0415
+    from . import google_connection  # noqa: PLC0415
+    addr = parseaddr(to_addr or "")[1].strip().lower()
+    if not addr or "@" not in addr:
+        return 400, {"error": "no_recipient", "detail": "The email had no sender to answer."}
+    if not switches.on("sentinel"):
+        _bump("broker_sentinel_switch_off")
+        return 503, {"error": "sentinel_off", "detail": "Sentinel is switched off; nothing was sent."}
+    st = google_connection.status_public()
+    mailbox = str(st.get("google_email") or "").strip()
+    if st.get("status") != google_connection.STATUS_CONNECTED or not mailbox:
+        return 409, {"error": "not_connected", "detail": "Jarvis's mailbox is not connected."}
+    msg = EmailMessage()
+    msg["To"], msg["From"], msg["Subject"] = addr, mailbox, subject[:300]
+    if in_reply_to:
+        msg["In-Reply-To"] = in_reply_to[:500]
+        msg["References"] = in_reply_to[:500]
+    msg.set_content(text)
+    body = {"raw": base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")}
+    if thread_id:
+        body["threadId"] = thread_id
+    params = {"userId": "me", "body": body}
+    addrs, refusal = _recipients(params)
+    if sorted({a.lower() for a in addrs}) != [addr]:
+        _bump("inbox_receipt_refused")
+        log.error("broker: an inbox receipt had an unexpected recipient; refused")
+        return 403, {"error": "not_sender", "detail": "A receipt may only go to the person who sent the email."}
+    cls, dests = sentinel.classify_google("gmail", "users.messages.send", params, _org_domains(), addrs)
+    try:
+        user_mode, ceiling = store.policy_modes(OWNER, INBOX_SKILL, cls)
+    except platform_db.Unavailable as exc:
+        _bump("broker_sentinel_db_unavailable")
+        log.error("broker: platform database unavailable, inbox receipt refused (%s)", exc)
+        return 503, {"error": "sentinel_unavailable", "detail": "The platform database is unavailable; nothing ran."}
+    mode = sentinel.effective_mode(cls, user_mode, ceiling)
+    action = sentinel.Action(connector="gmail", method="users.messages.send", cls=cls, destinations=dests,
+                             skill=INBOX_SKILL, user=OWNER, tainted=False, source_kind="gmail",
+                             source_id=gmail_id or "inbox")
+    if mode == sentinel.BLOCK:
+        decision = sentinel.Decision(sentinel.DENY, "this kind of send is blocked by policy", cls, mode)
+    else:
+        decision = sentinel.Decision(sentinel.ALLOW, "automatic receipt for mail that arrived in Jarvis's inbox", cls, mode)
+    fields = store.fields_from_summary(sentinel.summarize(action, decision))
+    fields["sentinel_mode"] = sentinel_mode()
+    mark = {"inbox_receipt": True, "gmail_id": gmail_id}
+
+    def refused(status, error, outcome, counter, detail):
+        aid = store.record_action("decision", outcome, fields, mark)
+        _bump(counter)
+        log.warning("broker: inbox receipt %s (%s)", outcome, detail)
+        return status, {"error": error, "detail": detail, "action_id": aid}
+
+    if sentinel_mode() == SHADOW:
+        return refused(409, "shadowed", "shadowed", "inbox_receipt_shadowed", "Practice mode: logged, not sent.")
+    if not _writes_allowed():
+        return refused(403, "writes_disabled", "writes_disabled", "broker_google_write_refused",
+                       "Writes are disabled for this tenant.")
+    if refusal:
+        return refused(403, "recipient_refused", "recipient_refused", "broker_google_recipient_refused",
+                       "The sender is outside the outbound boundary.")
+    if decision.verdict == sentinel.DENY:
+        return refused(403, "sentinel_denied", "denied", "broker_sentinel_denied", decision.reason)
+    store.record_action("decision", "allowed", fields, mark)
+    out = _execute("gmail", "v1", "users.messages.send", params, WRITE)
+    ok = isinstance(out, dict)
+    aid = store.record_action("decision", "executed" if ok else "failed",
+                              {**fields, **({} if ok else {"status_code": getattr(out, "status_code", None)})}, mark)
+    _bump("inbox_receipt_sent" if ok else "inbox_receipt_failed")
+    if ok:
+        log.info("broker: inbox receipt sent for %s", gmail_id or "a message")
+        return 200, {**out, "action_id": aid}
+    import json as _json  # noqa: PLC0415
+    return out.status_code, _json.loads(out.body)
+
+
+def send_team_invite(to_addr: str, name: str, role: str, origin: str, invited_by: str,
+                     person_key: str) -> Tuple[int, Dict[str, Any]]:
+    """A fixed invitation from Jarvis's mailbox to the address just added.
+
+    The owner asked for this (2026-11-03). The message is written here, goes
+    to that one address, and names the sign-in page. Any other send still
+    waits on the policy in gate_google.
+    """
+    from email.message import EmailMessage  # noqa: PLC0415
+    from email.utils import parseaddr  # noqa: PLC0415
+    from . import google_connection  # noqa: PLC0415
+    addr = parseaddr(to_addr or "")[1].strip().lower()
+    if not addr or "@" not in addr:
+        return 400, {"error": "no_recipient", "detail": "The invitation had no email address."}
+    if role not in ("admin", "member"):
+        return 400, {"error": "bad_role", "detail": "An invitation is for a member or an admin."}
+    origin = (origin or "").strip().rstrip("/")
+    if not origin.startswith("https://"):
+        return 400, {"error": "no_origin", "detail": "The sign-in address isn't configured."}
+    if not switches.on("sentinel"):
+        _bump("broker_sentinel_switch_off")
+        return 503, {"error": "sentinel_off", "detail": "Sentinel is switched off; nothing was sent."}
+    st = google_connection.status_public()
+    mailbox = str(st.get("google_email") or "").strip()
+    if st.get("status") != google_connection.STATUS_CONNECTED or not mailbox:
+        return 409, {"error": "not_connected", "detail": "Jarvis's mailbox is not connected."}
+    who = " ".join((invited_by or "Your team").split())[:80]
+    place = "an admin" if role == "admin" else "a member"
+    text = (
+        f"{name},\n\n"
+        f"{who} invited you to Jarvis as {place}.\n\n"
+        f"Sign in with Google using {addr}:\n{origin}\n\n"
+        "— Jarvis\n"
+    )
+    msg = EmailMessage()
+    msg["To"], msg["From"], msg["Subject"] = addr, mailbox, TEAM_INVITE_SUBJECT
+    msg.set_content(text)
+    params = {"userId": "me", "body": {"raw": base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")}}
+    addrs, refusal = _recipients(params)
+    if sorted({a.lower() for a in addrs}) != [addr]:
+        _bump("team_invite_refused")
+        log.error("broker: a team invitation had an unexpected recipient; refused")
+        return 403, {"error": "not_invitee", "detail": "An invitation goes only to the person just added."}
+    cls, dests = sentinel.classify_google("gmail", "users.messages.send", params, _org_domains(), addrs)
+    try:
+        user_mode, ceiling = store.policy_modes(OWNER, TEAM_SKILL, cls)
+    except platform_db.Unavailable as exc:
+        _bump("broker_sentinel_db_unavailable")
+        log.error("broker: platform database unavailable, team invitation refused (%s)", exc)
+        return 503, {"error": "sentinel_unavailable", "detail": "The platform database is unavailable; nothing ran."}
+    mode = sentinel.effective_mode(cls, user_mode, ceiling)
+    action = sentinel.Action(connector="gmail", method="users.messages.send", cls=cls, destinations=dests,
+                             skill=TEAM_SKILL, user=OWNER, tainted=False, source_kind="invite",
+                             source_id=person_key or "team")
+    if mode == sentinel.BLOCK:
+        decision = sentinel.Decision(sentinel.DENY, "this kind of send is blocked by policy", cls, mode)
+    else:
+        decision = sentinel.Decision(sentinel.ALLOW, "invitation for someone just added to the team", cls, mode)
+    fields = store.fields_from_summary(sentinel.summarize(action, decision))
+    fields["sentinel_mode"] = sentinel_mode()
+    mark = {"team_invite": True, "person_key": person_key}
+
+    def refused(status, error, outcome, counter, detail):
+        aid = store.record_action("decision", outcome, fields, mark)
+        _bump(counter)
+        log.warning("broker: team invitation %s (%s)", outcome, detail)
+        return status, {"error": error, "detail": detail, "action_id": aid}
+
+    if sentinel_mode() == SHADOW:
+        return refused(409, "shadowed", "shadowed", "team_invite_shadowed", "Practice mode: logged, not sent.")
+    if not _writes_allowed():
+        return refused(403, "writes_disabled", "writes_disabled", "broker_google_write_refused",
+                       "Writes are disabled for this tenant.")
+    if refusal:
+        return refused(403, "recipient_refused", "recipient_refused", "broker_google_recipient_refused",
+                       "That address is outside the outbound boundary.")
+    if decision.verdict == sentinel.DENY:
+        return refused(403, "sentinel_denied", "denied", "broker_sentinel_denied", decision.reason)
+    store.record_action("decision", "allowed", fields, mark)
+    out = _execute("gmail", "v1", "users.messages.send", params, WRITE)
+    ok = isinstance(out, dict)
+    aid = store.record_action("decision", "executed" if ok else "failed",
+                              {**fields, **({} if ok else {"status_code": getattr(out, "status_code", None)})}, mark)
+    _bump("team_invite_sent" if ok else "team_invite_failed")
+    if ok:
+        log.info("broker: team invitation sent for %s", person_key or "a new person")
+        return 200, {**out, "action_id": aid}
+    import json as _json  # noqa: PLC0415
+    return out.status_code, _json.loads(out.body)
 
 
 def send_to_self(person: str, subject: str, text: str, kind: str,
@@ -579,6 +793,9 @@ def execute_approved(item: Dict[str, Any], scope: str, decided_by: str) -> Dict[
                                   person=a.get("person") or None)
     state = "executed" if status == 200 else (content.get("error") or "failed")
     out = {"state": state, "status": status, "grant_id": grant_id, "action_id": content.get("action_id")}
+    result = content.get("result") if isinstance(content, dict) else None
+    if isinstance(result, dict) and result.get("id"):
+        out["event_id"] = result["id"]
     if status != 200:
         out["reason"] = content.get("detail")
     return out

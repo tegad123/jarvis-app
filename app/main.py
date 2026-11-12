@@ -43,6 +43,7 @@ from app import accounts as accounts_mod  # noqa: E402
 from app import agent_status  # noqa: E402
 from app import google_connection as google_conn_mod  # noqa: E402
 from app import google_oauth  # noqa: E402
+from app import inbox as inbox_mod  # noqa: E402
 from app import auth, chat as chat_mod, config, health, whoami  # noqa: E402
 from app import channels as channels_mod  # noqa: E402
 from app import feed as feed_mod  # noqa: E402
@@ -108,6 +109,8 @@ from app import lead_tools as lead_tools_mod  # noqa: E402
 app.include_router(lead_tools_mod.broker_router)
 from app import model_proxy as model_proxy_mod  # noqa: E402
 app.include_router(model_proxy_mod.router)
+from app import devices as devices_mod  # noqa: E402
+app.include_router(devices_mod.router)
 from app import team as team_mod  # noqa: E402
 app.include_router(team_mod.router)
 app.include_router(team_mod.categories_router)
@@ -141,6 +144,18 @@ def _announce_app_logging() -> None:
 def _start_text_followup() -> None:
     from app import text_followup  # noqa: PLC0415
     text_followup.start()
+
+
+@app.on_event("startup")
+def _start_inbox_watch() -> None:
+    from app import inbox_watch  # noqa: PLC0415
+    inbox_watch.start()
+
+
+@app.on_event("startup")
+def _start_imessage_watch() -> None:
+    from app import imessage_watch  # noqa: PLC0415
+    imessage_watch.start()
 
 
 @app.on_event("startup")
@@ -284,26 +299,7 @@ def login(body: LoginRequest, request: Request, response: Response):
                             detail="Sign in with Google on this address.")
     # ── per-person sign-in ────────────────────────────────────────────────
     if body.person_key:
-        if auth.person_locked(body.person_key):
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"Too many wrong PINs. Sign-in is locked for {auth.lock_duration_text()}.",
-            )
-        acct = auth.verify_pin(body.person_key, body.pin or "")
-        if not acct:
-            auth.record_failure(request)
-            if auth.record_pin_failure(body.person_key):
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=f"Too many wrong PINs. Sign-in is locked for {auth.lock_duration_text()}.",
-                )
-            # One message for "no such person", "wrong PIN" and "disabled": a
-            # login form that distinguishes them tells an attacker which person
-            # keys are real.
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
-                                detail="That PIN is not right.")
-        auth.clear_failures(request)
-        auth.clear_pin_failures(body.person_key)
+        acct = auth.pin_signin(request, body.person_key, body.pin or "")
         # Their private line, created on first sight rather than at account
         # creation — a person added to the registry outside the app still gets
         # one the moment they sign in.
@@ -1117,6 +1113,22 @@ class TaskAssign(BaseModel):
 
 class TaskStatus(BaseModel):
     status: str = Field(..., pattern=r"^(open|in_progress|done)$")
+
+
+@app.get("/api/inbox")
+def get_inbox(sess: dict = Depends(auth.current_session)):
+    """Jarvis's own mailbox, newest first. Owner and admin only.
+
+    A member's mail is not this list, and a break-glass operator does not
+    read subjects. Reading does not mark anything read and does not send.
+    """
+    auth.require_person(sess)
+    if auth.role_of(sess) not in ("owner", "admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the owner or an admin can see Jarvis's inbox.",
+        )
+    return inbox_mod.snapshot()
 
 
 @app.get("/api/tasks")

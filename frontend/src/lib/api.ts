@@ -27,6 +27,7 @@ import type {
   FeedResponse,
   FeedSummary,
   GoogleConnectionStatus,
+  InboxResponse,
   HealthResponse,
   JarvisReplies,
   LeadDetailResponse,
@@ -481,6 +482,11 @@ export function getApprovals(): Promise<ApprovalsResponse> {
   return requestOk<ApprovalsResponse>('/api/approvals')
 }
 
+/** Jarvis's own inbox. Owner and admin only; the server refuses everyone else. */
+export function getInbox(): Promise<InboxResponse> {
+  return requestOk<InboxResponse>('/api/inbox')
+}
+
 /** Records a decision. 409 means someone already resolved it. */
 export async function decideApproval(
   id: string,
@@ -579,12 +585,12 @@ export function getTeam(): Promise<TeamResponse> {
   return requestOk<TeamResponse>('/api/team')
 }
 
-export async function invitePerson(input: { name: string; email: string; role: 'admin' | 'member' }): Promise<TeamPerson> {
-  const { ok, status, body } = await request<{ ok: boolean; person: TeamPerson }>('/api/team/invite', {
+export async function invitePerson(input: { name: string; email: string; role: 'admin' | 'member' }): Promise<{ person: TeamPerson; emailed: boolean; email_error: string | null }> {
+  const { ok, status, body } = await request<{ ok: boolean; person: TeamPerson; emailed?: boolean; email_error?: string | null }>('/api/team/invite', {
     method: 'POST',
     body: JSON.stringify(input),
   })
-  if (ok && body?.person) return body.person
+  if (ok && body?.person) return { person: body.person, emailed: body.emailed === true, email_error: body.email_error ?? null }
   throw new ApiError(detailOf(body) ?? 'Could not invite them.', status)
 }
 
