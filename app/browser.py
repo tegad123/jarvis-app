@@ -38,12 +38,13 @@ from datetime import timedelta
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from . import auth
 from . import broker
+from . import config
 from . import platform_db
 from . import platform_store as store
 from . import sentinel
@@ -613,10 +614,163 @@ def browser_takeover(body: TakeoverBody, sess: dict = Depends(auth.current_sessi
             _needs_you.pop(who, None)
         else:
             _takeover.pop(who, None)
+    if not body.on:
+        # The live view ends with the takeover: its relay sees this within a
+        # second, and the worker stops the person's x11vnc now.
+        try:
+            call("view_stop", who, timeout=10)
+        except WorkerDown:
+            pass
     broker._bump("browser_takeover_on" if body.on else "browser_takeover_off")
     _record("takeover_on" if body.on else "takeover_off", "executed", sentinel.READ, "",
             {"source": f"person:{who}"}, who)
     return {"taken_over": body.on}
+
+
+# ── the live view: noVNC in the person's own tab ──────────────────────────────
+# One WebSocket per person, open only while they have taken over a headed
+# browser. Whose browser it shows comes from the session, never a parameter.
+# What is logged: open, close, bytes, why it closed. Never frames or keys.
+
+VIEW_RECHECK_S = 30
+_viewers: Dict[str, float] = {}
+
+
+def _view_session(ws: WebSocket) -> dict:
+    return auth.current_session(ws.cookies.get(config.COOKIE_NAME), ws.headers.get("authorization"))
+
+
+def view_refusal(ws: WebSocket) -> Tuple[str, str]:
+    """('', person) when this socket may show its person's browser, else
+    (why, person-or-''). The checks run in this order; each refusal has its
+    own counter."""
+    if not enabled():
+        return "browser_off", ""
+    try:
+        sess = _view_session(ws)
+    except HTTPException:
+        return "no_session", ""
+    who = auth.person_of(sess)
+    if not who or auth.is_operator(sess):
+        return "not_a_person", ""
+    want = config.public_origin()
+    # WebSockets are not bound by same-origin rules: without this, any site
+    # the person visits could open their view with their cookie.
+    if not want or ws.headers.get("origin", "").rstrip("/") != want:
+        return "origin", str(who)
+    from . import accounts  # noqa: PLC0415
+    if not accounts.feature_on(str(who), "browser"):
+        return "feature_off", str(who)
+    try:
+        st = call("status", str(who), timeout=10)
+    except WorkerDown:
+        return "browser_unavailable", str(who)
+    if st.get("mode") != "headed":
+        return "not_headed", str(who)
+    if not taken_over(str(who)):
+        return "not_taken_over", str(who)
+    with _takeover_lock:
+        if str(who) in _viewers:
+            return "already_viewing", str(who)
+    return "", str(who)
+
+
+def _view_still_ok(ws: WebSocket, who: str) -> str:
+    try:
+        sess = _view_session(ws)
+    except HTTPException:
+        return "signed_out"
+    from . import accounts  # noqa: PLC0415
+    if auth.person_of(sess) != who or not accounts.feature_on(who, "browser"):
+        return "feature_off"
+    return ""
+
+
+@router.websocket("/view")
+async def browser_view(ws: WebSocket):
+    import asyncio  # noqa: PLC0415
+    from starlette.concurrency import run_in_threadpool  # noqa: PLC0415
+    why, who = await run_in_threadpool(view_refusal, ws)
+    if why:
+        broker._bump(f"browser_view_refused_{why}")
+        log.info("browser view refused: %s (person %s)", why, who or "-")
+        await ws.close(code=4401 if why == "no_session" else 4403)
+        return
+    with _takeover_lock:
+        if who in _viewers:
+            broker._bump("browser_view_refused_already_viewing")
+            await ws.close(code=4403)
+            return
+        _viewers[who] = time.monotonic()
+    path = os.environ.get("JARVIS_BROWSER_SOCKET", "").strip()
+    sent, reason = [0, 0], "closed"
+    writer = None
+    try:
+        reader, writer = await asyncio.open_unix_connection(path)
+        writer.write(json.dumps({"op": "view", "person": who}).encode() + b"\n")
+        await writer.drain()
+        reply = json.loads(await asyncio.wait_for(reader.readline(), 20) or b"{}")
+        if not reply.get("ok"):
+            broker._bump("browser_view_failed")
+            log.warning("browser view for %s did not start: %s", who, str(reply.get("error"))[:120])
+            await ws.close(code=1011)
+            return
+        offered = ws.scope.get("subprotocols") or []
+        await ws.accept(subprotocol="binary" if "binary" in offered else None)
+        broker._bump("browser_view_opened")
+        log.info("browser view opened for %s", who)
+
+        async def up():
+            while True:
+                msg = await ws.receive()
+                if msg.get("type") == "websocket.disconnect":
+                    return "viewer_left"
+                data = msg.get("bytes") or (msg.get("text") or "").encode()
+                if data:
+                    sent[0] += len(data)
+                    _touch_takeover(who)
+                    writer.write(data)
+                    await writer.drain()
+
+        async def down():
+            while True:
+                data = await reader.read(65536)
+                if not data:
+                    return "browser_closed"
+                sent[1] += len(data)
+                await ws.send_bytes(data)
+
+        async def watch():
+            last = time.monotonic()
+            while True:
+                await asyncio.sleep(1)
+                if not taken_over(who):
+                    return "handed_back"
+                if time.monotonic() - last >= VIEW_RECHECK_S:
+                    last = time.monotonic()
+                    bad = await run_in_threadpool(_view_still_ok, ws, who)
+                    if bad:
+                        return bad
+
+        tasks = [asyncio.ensure_future(f()) for f in (up, down, watch)]
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for t in pending:
+            t.cancel()
+        reason = next((t.result() for t in done if not t.cancelled() and t.exception() is None), "error")
+    except (OSError, asyncio.TimeoutError, ValueError) as exc:
+        reason = f"relay_{type(exc).__name__}"
+        broker._bump("browser_view_failed")
+    finally:
+        with _takeover_lock:
+            _viewers.pop(who, None)
+        if writer is not None:
+            writer.close()
+        try:
+            await ws.close()
+        except Exception:
+            pass
+        broker._bump("browser_view_closed")
+        log.info("browser view closed for %s: %s (in %d bytes, out %d bytes)", who, reason, sent[0], sent[1])
 
 
 @router.post("/input")
