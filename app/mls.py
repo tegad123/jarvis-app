@@ -20,10 +20,12 @@ from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from . import accounts
+from . import actor_refs
+from . import auth
 from . import broker
 from . import browser
 from . import config
@@ -669,6 +671,8 @@ async def post_broker_mls(request: Request):
         rid = body.get("run_id")
         if isinstance(rid, bool) or not isinstance(rid, int):
             return _err(400, "bad_request", "run_id must be a whole number.")
+        if run_row(rid, person):
+            actor_refs.request_action(body["ref"], f"mls:{rid}")
         return await run_in_threadpool(_answer, rid, person, WAIT_S)
     s, _ = settings()
     params = {k: v for k, v in body.items() if k not in ("ref", "op")}
@@ -684,6 +688,7 @@ async def post_broker_mls(request: Request):
         run_id, limit = start_run(person, thread_id, q, s)
     except Refused as r:
         return _err(r.status, r.error, **r.extra)
+    actor_refs.request_action(body["ref"], f"mls:{run_id}")
     ctx = broker._context(request)
     gctx = {"run": f"mls-{run_id}", "session": ctx.get("session", ""), "task": ctx.get("task", ""),
             "skill": "jarvis", "source": f"chat_thread:{thread_id}" if broker.CONTEXT_VALUE.match(thread_id) else ""}
@@ -691,3 +696,22 @@ async def post_broker_mls(request: Request):
     threading.Thread(target=_background, args=(run_id, limit, person, q, s, gctx), daemon=True,
                      name=f"mls-run-{run_id}").start()
     return await run_in_threadpool(_answer, run_id, person, WAIT_S)
+
+
+# ── the results card ─────────────────────────────────────────────────────────
+
+@router.get("/runs/{run_id}")
+def get_run(run_id: int, sess: dict = Depends(auth.current_session)):
+    """One search's card, for the person who ran it. Anyone else, owner and
+    operator included, gets the same 404 as a run that does not exist."""
+    person = None if auth.is_operator(sess) else auth.person_of(sess)
+    run = run_row(run_id, person) if person else None
+    if run is None:
+        threads_mod.bump_counter("mls_card_not_found")
+        raise HTTPException(status_code=404, detail="No such search.")
+    s, _ = settings()
+    conn = _db()
+    with conn:
+        _clear_expired(conn, _now(), s["keep_days"])
+    run = run_row(run_id, person)
+    return {**reply(run), "started_at": run["started_at"], "finished_at": run["finished_at"]}

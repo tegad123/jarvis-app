@@ -39,6 +39,7 @@ import type {
   TasksResponse,
   LoginResponse,
   MacStatus,
+  MlsRun,
   SessionResponse,
   Attachment,
   Category,
@@ -263,6 +264,14 @@ export function saveWebsiteLogin(site: string, username: string, password: strin
 
 export function deleteWebsiteLogin(site: string): Promise<{ ok: boolean }> {
   return requestOk(`/api/browser/logins/${encodeURIComponent(site)}`, { method: 'DELETE' })
+}
+
+/** null when the run is not this person's (or no longer exists). */
+export async function getMlsRun(id: number): Promise<MlsRun | null> {
+  const { ok, status, body } = await request<MlsRun>(`/api/mls/runs/${id}`)
+  if (status === 404) return null
+  if (!ok || body === null) throw new ApiError(detailOf(body) ?? 'Request failed.', status, detailOf(body))
+  return body
 }
 
 export function getConnectedSites(): Promise<{ sites: ConnectedSite[] }> {
@@ -837,6 +846,7 @@ export interface ChatHandlers {
   onNotice?: (e: Extract<ChatStreamEvent, { type: 'notice' }>) => void
   onVerified?: (e: Extract<ChatStreamEvent, { type: 'verified' }>) => void
   onAction?: (e: Extract<ChatStreamEvent, { type: 'action' }>) => void
+  onMls?: (e: Extract<ChatStreamEvent, { type: 'mls' }>) => void
   onPosted?: (e: Extract<ChatStreamEvent, { type: 'posted' }>) => void
   onSaved?: (e: Extract<ChatStreamEvent, { type: 'saved' }>) => void
 }
@@ -923,6 +933,9 @@ export async function streamChat(
         break
       case 'action':
         handlers.onAction?.(evt)
+        break
+      case 'mls':
+        handlers.onMls?.(evt)
         break
       case 'posted':
         handlers.onPosted?.(evt)

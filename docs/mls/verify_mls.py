@@ -40,13 +40,24 @@ channel, no place, Take over and a busy tenant are refused with no run; the
 tool shows in the person's status only when the browser is theirs and the
 start page is set; the pauses are real.
 
---canary breaks four things on purpose; these checks must FAIL: the
+Step 15 (a fake reader behind the real broker route, main.app with signed-in
+sessions): a search asks for its card on its own turn and a refused one does
+not; GET /api/mls/runs/{id} gives the run to its person and the same 404 to
+the owner, an admin, another member, the operator and a missing run; the
+card saved under the reply survives a reload for that person only; a
+stopped run's card says why; past keep_days it says the results expired and
+the stored rows are gone.
+
+--canary breaks five things on purpose; these checks must FAIL: the
 person's browser feature is ignored (browser_feature_off), the re-check
 keeps every row (three re-check checks), an unknown page reads as empty
 (two classify checks), and every thread reads as the person's direct line
 (the shared-channel check, and the no-run checks after it, which then see
 the run it let through; mls_result for another person, read off their
 channel, is refused direct_only instead of 404).
+Step 15: a run is read for any person (the card's 404s for the owner,
+admin, another member and the operator, and the card checks that depend on
+the person).
 """
 import json
 import os
@@ -861,6 +872,177 @@ def step14(env) -> None:
     ck("pauses are real: three loads at 3 seconds take at least 9 seconds",
        t["st"] == 200 and t["page_loads"] == 3 and t["elapsed"] >= 9, t)
 
+CHILD15 = r"""
+import json, os, sys, types
+from datetime import timedelta
+sys.path.insert(0, os.environ["APP_ROOT"])
+tc = types.ModuleType("tenant_config")
+CFG = {"app": {"browser": {"mode": "headed"}}}
+def _get(key, default=None):
+    cur = CFG
+    for part in key.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return default
+        cur = cur[part]
+    return cur
+tc.get = _get
+tc.timezone_name = lambda: "America/Chicago"
+sys.modules["tenant_config"] = tc
+from fastapi.testclient import TestClient
+from app import (accounts, actor_refs, agent_status, auth, main, mls, mls_limits, mls_matrix, threads)
+S = dict(mls_limits.DEFAULTS, site="fixture.example", start_url="https://matrix.fixture.example/Matrix/Search",
+         max_results=100)
+mls.settings = lambda: (dict(S), True)
+NEXT = {"res": None}
+def fake_read(q, budget, ctx, gate=None):
+    budget.draw()
+    return NEXT["res"]
+mls_matrix.read = fake_read
+if os.environ.get("CANARY") == "1":
+    def _any_person(run_id, person):
+        row = mls._db().execute("SELECT * FROM mls_runs WHERE id = ?", (run_id,)).fetchone()
+        return dict(row) if row else None
+    mls.run_row = _any_person
+ROWS = [mls.Listing(address="1201 Fixture St", status="active", list_price=450000, beds=3, baths=2.0, sqft=1800,
+                    list_date="2026-10-01", mls_number="F-1"),
+        mls.Listing(address="44 Invented Ln", status="active", list_price=520000, beds=4, baths=3.0, sqft=2100,
+                    list_date="2026-10-03", mls_number="F-2")]
+SESS = {k: {"person_key": k, "role": r, "kind": "person"} for k, r in
+        (("dana", "owner"), ("priya", "admin"), ("omar", "member"), ("maya", "member"))}
+SESS["op"] = {"person_key": None, "role": "operator", "operator": "operator", "kind": "operator"}
+who = {"v": "omar"}
+main.app.dependency_overrides[auth.current_session] = lambda: SESS[who["v"]]
+c = TestClient(main.app, client=("127.0.0.1", 50124))
+H = {"Authorization": "Bearer " + os.environ["API_SERVER_KEY"]}
+def count(n):
+    return threads.bump_counter(n, 0)
+def as_(k):
+    who["v"] = k
+    return c
+with mls._db() as conn:
+    conn.execute("DELETE FROM mls_runs WHERE person_key IN ('omar', 'dana')")
+DM = threads.ensure_direct("omar")["thread_id"]
+CH = threads.create_thread("verify-mls15 " + os.urandom(3).hex())["thread_id"]
+out = {}
+def search(ref, **params):
+    r = c.post("/api/broker/mls", json={"ref": ref, "op": "search", **params}, headers=H)
+    return r.status_code, r.json()
+
+# 1. A search in the person's direct line asks for its card on that turn.
+REF = actor_refs.mint("omar", DM, "member")
+NEXT["res"] = mls.Result("done", listings=ROWS)
+st, b = search(REF, area="Heights", statuses=["active"])
+rid = b.get("run_id")
+out["search"] = {"st": st, "state": b.get("state"), "actions": actor_refs.actions(REF), "rid": rid}
+# 2. A refused search (shared channel) asks for nothing.
+REF_CH = actor_refs.mint("omar", CH, "member")
+st2, b2 = search(REF_CH, area="Heights")
+out["channel"] = {"st": st2, "error": b2.get("error"), "actions": actor_refs.actions(REF_CH)}
+# 3. mls_result on a later turn asks for the card again; another person's turn does not.
+REF2 = actor_refs.mint("omar", DM, "member")
+r = c.post("/api/broker/mls", json={"ref": REF2, "op": "result", "run_id": rid}, headers=H)
+out["result_again"] = {"st": r.status_code, "actions": actor_refs.actions(REF2)}
+REF_D = actor_refs.mint("dana", threads.ensure_direct("dana")["thread_id"], "owner")
+r = c.post("/api/broker/mls", json={"ref": REF_D, "op": "result", "run_id": rid}, headers=H)
+out["result_dana"] = {"st": r.status_code, "actions": actor_refs.actions(REF_D)}
+# 4. The chat turn draws it only for that person in that thread.
+out["card_ok"] = [agent_status.mls_card_ok(rid, "omar", DM), agent_status.mls_card_ok(rid, "omar", CH),
+                  agent_status.mls_card_ok(rid, "dana", DM), agent_status.mls_card_ok(rid, "", DM)]
+# 5. The card route: the person gets the run; owner, admin, another member and the operator get 404.
+r = as_("omar").get(f"/api/mls/runs/{rid}")
+body = r.json()
+out["card_omar"] = {"st": r.status_code, "state": body.get("state"), "count": body.get("count"),
+                    "addresses": [l["address"] for l in body.get("listings") or []],
+                    "keys": sorted((body.get("listings") or [{}])[0]), "note": (body.get("summary") or {}).get("note")}
+n0 = count("mls_card_not_found")
+out["card_others"] = {k: as_(k).get(f"/api/mls/runs/{rid}").status_code for k in ("dana", "priya", "maya", "op")}
+out["card_not_found_delta"] = count("mls_card_not_found") - n0
+out["card_none"] = as_("omar").get("/api/mls/runs/999999999").status_code
+# 6. Saved under the reply, it survives a reload for the person and nobody else.
+mid = threads.append_messages(DM, {"role": "assistant", "content": "Here are the listings.",
+                                   "actions": [f"mls:{rid}", "mls:abc", "mls:0", "open_url"]})[-1]
+h = as_("omar").get("/api/chat/history", params={"thread_id": DM}).json()
+msg = next((m for m in h.get("messages", []) if m.get("id") == mid), {})
+out["reload"] = msg.get("actions")
+out["reload_dana"] = agent_status.live_actions([f"mls:{rid}"], "owner", "dana")
+out["reload_op"] = agent_status.live_actions([f"mls:{rid}"], "operator", "")
+# 7. A stopped run's card says why, from the stored run.
+REF3 = actor_refs.mint("omar", DM, "member")
+NEXT["res"] = mls.Result("needs_person", stop_kind="login", detail="Sign in to Matrix in the browser window.")
+st3, b3 = search(REF3, area="Heights")
+r = as_("omar").get(f"/api/mls/runs/{b3.get('run_id')}")
+out["stopped"] = {"st": st3, "card": r.status_code, "state": r.json().get("state"), "kind": r.json().get("kind"),
+                  "actions": actor_refs.actions(REF3)}
+# 8. Past keep_days the card says the results expired; the stored rows are gone.
+with mls._db() as conn:
+    conn.execute("UPDATE mls_runs SET finished_at = ? WHERE id = ?",
+                 ((mls._now() - timedelta(days=S["keep_days"] + 1)).isoformat(), rid))
+e0 = count("mls_results_cleared")
+r = as_("omar").get(f"/api/mls/runs/{rid}")
+row = mls._db().execute("SELECT result_json, result_count, state FROM mls_runs WHERE id = ?", (rid,)).fetchone()
+out["expired"] = {"st": r.status_code, "expired": r.json().get("expired"), "detail": r.json().get("detail"),
+                  "listings": r.json().get("listings"), "cleared_delta": count("mls_results_cleared") - e0,
+                  "stored": row["result_json"], "state": row["state"]}
+h = as_("omar").get("/api/chat/history", params={"thread_id": DM}).json()
+msg = next((m for m in h.get("messages", []) if m.get("id") == mid), {})
+out["reload_expired"] = msg.get("actions")
+for ref in (REF, REF_CH, REF2, REF_D, REF3):
+    actor_refs.end(ref)
+print("RESULT " + json.dumps(out, default=str))
+"""
+
+
+def step15(env) -> None:
+    print("── step 15: the results card")
+    p = subprocess.run([sys.executable, "-c", CHILD15],
+                       env={**env, "JARVIS_SWITCH_BROKER": "on", "API_SERVER_KEY": secrets.token_urlsafe(24)},
+                       cwd=str(ROOT), capture_output=True, text=True, timeout=300)
+    line = [ln for ln in p.stdout.splitlines() if ln.startswith("RESULT ")]
+    if not line:
+        print(p.stderr[-4000:])
+        ck("step 15 child ran", False)
+        return
+    o = json.loads(line[-1][7:])
+    s = o["search"]
+    rid = s["rid"]
+    ck("a search in the direct line asks for its card on that turn (presence)",
+       s["st"] == 200 and s["state"] == "done" and s["actions"] == [f"mls:{rid}"], s)
+    ck("a search refused in a shared channel asks for no card", o["channel"] == {
+        "st": 403, "error": "direct_only", "actions": []}, o["channel"])
+    ck("mls_result on a later turn asks for the same card", o["result_again"] == {
+        "st": 200, "actions": [f"mls:{rid}"]}, o["result_again"])
+    ck("mls_result from another person's turn: 404 and no card", o["result_dana"] == {"st": 404, "actions": []},
+       o["result_dana"])
+    ck("the turn draws the card only for that person in that thread", o["card_ok"] == [True, False, False, False],
+       o["card_ok"])
+    co = o["card_omar"]
+    ck("the card route gives the person their run, from the stored rows",
+       co["st"] == 200 and co["state"] == "done" and co["count"] == 2
+       and co["addresses"] == ["1201 Fixture St", "44 Invented Ln"] and "list prices" in (co["note"] or ""), co)
+    ck("no listing field beyond the plan's shape (no agent contact, no link)",
+       co["keys"] == sorted(["address", "status", "list_price", "sold_price", "list_date", "pending_date", "sold_date",
+                             "beds", "baths", "sqft", "year_built", "property_type", "area", "zip_code",
+                             "days_on_market", "mls_number", "distance_miles", "price_per_sqft"]), co["keys"])
+    ck("owner, admin, another member and the operator each get 404 for it, counted",
+       o["card_others"] == {"dana": 404, "priya": 404, "maya": 404, "op": 404} and o["card_not_found_delta"] == 4,
+       (o["card_others"], o["card_not_found_delta"]))
+    ck("a run that does not exist is the same 404", o["card_none"] == 404, o["card_none"])
+    ck("the card survives a reload; forged and unknown actions are not drawn",
+       o["reload"] == [{"action": "mls", "run_id": rid, "label": "MLS search results"}], o["reload"])
+    ck("saved under the reply, it is not drawn for the owner or the operator",
+       o["reload_dana"] == [] and o["reload_op"] == [], (o["reload_dana"], o["reload_op"]))
+    so = o["stopped"]
+    ck("a stopped run's card carries its state and kind; the turn still asks for it",
+       so["st"] == 409 and so["card"] == 200 and so["state"] == "needs_person" and so["kind"] == "login"
+       and len(so["actions"]) == 1, so)
+    ex = o["expired"]
+    ck("past keep_days the card says these results have expired, not an empty table",
+       ex["st"] == 200 and ex["expired"] is True and "expired" in (ex["detail"] or "") and ex["listings"] is None, ex)
+    ck("expiry clears the stored rows (ledger: result_json NULL, counter +1, the run stays done)",
+       ex["stored"] is None and ex["cleared_delta"] == 1 and ex["state"] == "done", ex)
+    ck("an expired card is still drawn after a reload (it says expired, it does not vanish)",
+       o["reload_expired"] == [{"action": "mls", "run_id": rid, "label": "MLS search results"}], o["reload_expired"])
+
 
 def provisioner_checks():
     sys.path.insert(0, str(ROOT / "scripts"))
@@ -950,6 +1132,7 @@ def main() -> int:
     step12(env)
     step13(env)
     step14(env)
+    step15(env)
     n, t = sum(ok), len(ok)
     print(f"\n{n}/{t} passed" + ("  (canary run: a FAIL above is the point)" if CANARY else ""))
     return 0 if n == t else 1

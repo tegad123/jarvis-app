@@ -15,7 +15,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from . import broker, config, google_connection
 
@@ -30,6 +30,8 @@ MLS_TOOLS = frozenset({"search_mls", "mls_result"})
 PERSONAL_TOOLS = BROWSER_TOOLS | {"imessage_search"} | LEAD_TOOLS
 CONNECT_ROLES = ("owner", "admin", "member")
 CHAT_ACTIONS = ("connect_google",)
+# An MLS search's results card, saved under the reply as "mls:<run id>".
+MLS_ACTION = re.compile(r"mls:([1-9][0-9]{0,11})")
 WORKING = "Working on it"
 
 
@@ -71,6 +73,19 @@ LIVE_NEEDS_GOOGLE = ("draft_email",)
 def browser_on() -> bool:
     from . import browser  # noqa: PLC0415
     return browser.enabled()
+
+
+def mls_run_of(action: str) -> Optional[int]:
+    m = MLS_ACTION.fullmatch(action) if isinstance(action, str) else None
+    return int(m.group(1)) if m else None
+
+
+def mls_card_ok(run_id: int, person_key: str, thread_id: Optional[str] = None) -> bool:
+    """The card is drawn only for the person whose search it was (and, while
+    the turn runs, only in the thread it ran from)."""
+    from . import mls  # noqa: PLC0415
+    run = mls.run_row(run_id, person_key) if person_key else None
+    return bool(run) and (thread_id is None or run["thread_id"] == thread_id)
 
 
 def mls_tenant_ready() -> bool:
@@ -265,20 +280,31 @@ def shape_prompt(text: str) -> tuple:
     return "\n\n".join(out), kept, dropped
 
 
-ACTION_LABELS = {"connect_google": "Connect your Google account"}
+ACTION_LABELS = {"connect_google": "Connect your Google account", "mls": "MLS search results"}
 
 
 def action_ok(action: str, role: str, person_key: str) -> bool:
     """Whether the app's control would work now for this person; a dead button is not shown."""
     if action == "connect_google":
         return bool(person_key) and google_state(person_key) != "connected" and can_connect(role)
+    rid = mls_run_of(action)
+    if rid is not None:
+        return mls_card_ok(rid, person_key)
     return False
 
 
 def live_actions(actions: List[str], role: str, person_key: str) -> List[dict]:
-    """Saved controls still worth drawing for this reader, as {action, label}."""
-    return [{"action": a, "label": ACTION_LABELS[a]} for a in actions
-            if a in CHAT_ACTIONS and a in ACTION_LABELS and action_ok(a, role, person_key)]
+    """Saved controls still worth drawing for this reader, as {action, label}
+    (an MLS card also carries its run_id)."""
+    out = []
+    for a in actions:
+        rid = mls_run_of(a)
+        if rid is not None:
+            if action_ok(a, role, person_key):
+                out.append({"action": "mls", "run_id": rid, "label": ACTION_LABELS["mls"]})
+        elif a in CHAT_ACTIONS and a in ACTION_LABELS and action_ok(a, role, person_key):
+            out.append({"action": a, "label": ACTION_LABELS[a]})
+    return out
 
 
 def strip_disallowed(tools: List[dict]) -> tuple:
