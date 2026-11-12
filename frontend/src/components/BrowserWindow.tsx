@@ -11,6 +11,7 @@ import {
   setBrowserTakeover,
 } from '../lib/api'
 import { ComputerCard, type ComputerInput } from '../jm'
+import LiveView from './LiveView'
 import type { Approval, BrowserInput, BrowserScreen, BrowserStatus } from '../lib/types'
 
 /**
@@ -21,7 +22,9 @@ import type { Approval, BrowserInput, BrowserScreen, BrowserStatus } from '../li
  * on a site shows up here too, so you approve it without leaving the chat.
  *
  * Each person's own browser (app/browser.py); the server refuses an operator.
- * The picture is a still refreshed every few seconds, not a stream.
+ * The picture is a still refreshed every few seconds. While the person has
+ * taken over a headed browser, the big card shows the page live instead
+ * (LiveView); if that ends without a hand back, the still comes back.
  */
 
 interface Props {
@@ -45,6 +48,7 @@ export default function BrowserWindow({ busy, hidden, onHiddenChange, onAvailabl
   const [big, setBig] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [working, setWorking] = useState(false)
+  const [liveEnded, setLiveEnded] = useState(false)
   const lastUrl = useRef<string | null>(null)
   const onHiddenRef = useRef(onHiddenChange)
   onHiddenRef.current = onHiddenChange
@@ -82,6 +86,11 @@ export default function BrowserWindow({ busy, hidden, onHiddenChange, onAvailabl
   useEffect(() => {
     onAvailableChange(available)
   }, [available, onAvailableChange])
+
+  useEffect(() => {
+    if (!takeover) setLiveEnded(false)
+  }, [takeover])
+  const live = takeover && big && running && !!status?.live_view && !liveEnded
 
   useEffect(() => {
     void refresh()
@@ -129,6 +138,7 @@ export default function BrowserWindow({ busy, hidden, onHiddenChange, onAvailabl
       state={takeover ? 'yours' : asks.length || needsYou ? 'needs-you' : running && screen?.jpeg ? 'working' : 'starting'}
       reason={needsYou}
       screenshot={running && screen?.jpeg ? `data:image/jpeg;base64,${screen.jpeg}` : undefined}
+      live={live ? <LiveView title={screen?.title ?? undefined} onEnded={() => setLiveEnded(true)} /> : undefined}
       title={screen?.title ?? undefined}
       notice={running ? screen?.site_refused ?? undefined : undefined}
       url={screen?.url ?? undefined}

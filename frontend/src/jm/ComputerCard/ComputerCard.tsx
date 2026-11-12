@@ -1,4 +1,4 @@
-import { useState, type MouseEvent } from 'react'
+import { useState, type MouseEvent, type ReactNode } from 'react'
 import { Button } from '../Button/Button'
 import { Icon } from '../shared/Icon'
 import { Dots, ErrorLine, Field, LiveDot, Tag, cx, focus, truncate } from '../shared/primitives'
@@ -25,6 +25,8 @@ export interface ComputerCardProps {
   state: 'starting' | 'working' | 'needs-you' | 'yours'
   /** Image URL of the latest still (e.g. data:image/jpeg;base64,…). */
   screenshot?: string
+  /** The live page while the person has the browser (big only); replaces the still and its typing controls. */
+  live?: ReactNode
   title?: string
   url?: string
   asks?: ComputerAsk[]
@@ -85,7 +87,10 @@ export function ComputerCard(p: ComputerCardProps) {
   )
 
   const screenBox = 'relative box-border block aspect-[16/10] w-full overflow-hidden rounded-jm-sm border border-jm-border bg-jm-bg p-0'
-  const screen = p.screenshot ? (
+  const live = expanded && state === 'yours' && p.live
+  const screen = live ? (
+    <div className={screenBox}>{p.live}</div>
+  ) : p.screenshot ? (
     <button
       type="button"
       onClick={onPicture}
@@ -183,7 +188,13 @@ export function ComputerCard(p: ComputerCardProps) {
         </div>
       ) : null}
 
-      {state === 'yours' && expanded && (
+      {live && (
+        <p className="m-0 text-jm-caption text-jm-fg-secondary">
+          Use the page directly: click, type, sign in. What you type goes to the page, not the chat.
+        </p>
+      )}
+
+      {state === 'yours' && expanded && !live && (
         <div className="grid gap-jm-2 border-t border-jm-border pt-jm-3">
           <p className="m-0 text-jm-caption text-jm-fg-secondary">
             Tap a box in the picture, then type. What you type goes to the page, not the chat.

@@ -587,7 +587,7 @@ def browser_status(sess: dict = Depends(auth.current_session)):
     except platform_db.Unavailable:
         grants = []
     return {"enabled": True, "running": bool(st.get("running")), "url": st.get("url"), "title": st.get("title"),
-            "taken_over": taken_over(who), "access": grants,
+            "taken_over": taken_over(who), "access": grants, "live_view": st.get("mode") == "headed",
             "needs_you": needs_you(who) if st.get("running") else None}
 
 

@@ -44,6 +44,9 @@ POLICY = {
     "HomepageLocation": "about:blank",
     "NewTabPageLocation": "about:blank",
     "RestoreOnStartup": 1,
+    # --no-sandbox stays (the unit is the sandbox); the person watching the
+    # live view should not see Chromium's warning bar about it.
+    "CommandLineFlagSecurityWarningsEnabled": False,
     # The full build calls Google on its own (updates, sign-in, suggestions);
     # the headless shell never did. None of that is the person's browsing.
     "ComponentUpdatesEnabled": False,

@@ -92,6 +92,9 @@ class Site(http.server.BaseHTTPRequestHandler):
         elif path.startswith("/session/"):
             who = path.split("/")[2]
             self.page("session", f"<p>session for {who}</p>", [("Set-Cookie", f"sess={who}; Path=/")])
+        elif path == "/type":
+            self.page("typed:", "<input id=q autofocus aria-label=q style='position:fixed;inset:0;width:100vw;"
+                                "height:100vh;font-size:40px' oninput=\"document.title='typed:'+this.value\">")
         elif path == "/picker":
             self.page("picker", "<input type=file id=f aria-label='Upload a file'>")
         else:
