@@ -40,6 +40,8 @@ export interface ComputerCardProps {
   onTakeOver?: () => void
   /** "I’m done": hand the browser back to Jarvis. */
   onDone?: () => void
+  /** "I’m signed in": hand back and remember this site as connected. */
+  onSignedIn?: () => void
   onClose?: () => void
   onInput?: (input: ComputerInput) => void
   busy?: boolean
@@ -177,6 +179,11 @@ export function ComputerCard(p: ComputerCardProps) {
           <Button variant="primary" disabled={p.busy} onClick={p.onDone}>
             I’m done
           </Button>
+          {p.onSignedIn && (
+            <Button variant="secondary" disabled={p.busy} onClick={p.onSignedIn}>
+              I’m signed in
+            </Button>
+          )}
           {close}
         </div>
       ) : !asks.length ? (

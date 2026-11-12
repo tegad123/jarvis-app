@@ -4,6 +4,7 @@ import {
   Unauthorized,
   browserInput,
   closeBrowser,
+  confirmBrowserSite,
   decideApproval,
   getApprovals,
   getBrowserScreen,
@@ -157,6 +158,15 @@ export default function BrowserWindow({ busy, hidden, onHiddenChange, onAvailabl
         void act(() => setBrowserTakeover(true), 'Could not take over the browser.')
       }}
       onDone={() => void act(() => setBrowserTakeover(false), 'Could not hand the browser back.')}
+      onSignedIn={
+        running && screen?.url
+          ? () =>
+              void act(async () => {
+                await confirmBrowserSite()
+                await setBrowserTakeover(false)
+              }, 'Could not save that you signed in.')
+          : undefined
+      }
       onClose={running ? () => void act(() => closeBrowser(), 'Could not close the browser.') : undefined}
       onInput={onInput}
       busy={working}

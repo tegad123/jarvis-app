@@ -49,6 +49,7 @@ import type {
   ThreadMember,
   ThreadsResponse,
   WebsiteLogin,
+  ConnectedSite,
 } from './types'
 import { DIRECT_THREAD } from './types'
 
@@ -262,6 +263,23 @@ export function saveWebsiteLogin(site: string, username: string, password: strin
 
 export function deleteWebsiteLogin(site: string): Promise<{ ok: boolean }> {
   return requestOk(`/api/browser/logins/${encodeURIComponent(site)}`, { method: 'DELETE' })
+}
+
+export function getConnectedSites(): Promise<{ sites: ConnectedSite[] }> {
+  return requestOk('/api/browser/sites')
+}
+
+/** "I'm signed in": the site of the page the browser is on now. */
+export function confirmBrowserSite(): Promise<{ ok: boolean; site: ConnectedSite }> {
+  return requestOk('/api/browser/sites/confirm', { method: 'POST' })
+}
+
+export function signOutOfSite(site: string): Promise<{ ok: boolean; cookies_removed: number }> {
+  return requestOk(`/api/browser/sites/${encodeURIComponent(site)}`, { method: 'DELETE' })
+}
+
+export function stopReadingSite(site: string): Promise<{ ok: boolean; revoked: number }> {
+  return requestOk(`/api/browser/sites/${encodeURIComponent(site)}/reading`, { method: 'DELETE' })
 }
 
 export function getMacStatus(): Promise<MacStatus> {

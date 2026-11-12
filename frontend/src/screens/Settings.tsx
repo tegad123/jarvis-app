@@ -19,6 +19,9 @@ import {
   patchPerson,
   saveWebsiteLogin,
   setChannelSettings,
+  getConnectedSites,
+  signOutOfSite,
+  stopReadingSite,
 } from '../lib/api'
 import { Button, ErrorState, Field, PairingCode, SettingsSection, type SettingsSectionProps } from '../jm'
 import { Select, cx, focus } from '../jm/shared/primitives'
@@ -36,6 +39,7 @@ import type {
   TeamPerson,
   TeamResponse,
   WebsiteLogin,
+  ConnectedSite,
 } from '../lib/types'
 
 /**
@@ -191,6 +195,7 @@ export default function Settings({ role, personKey, features = {}, onUnauthorize
         }
       />
 
+      {role !== 'operator' && features.browser !== false && <ConnectedSites onUnauthorized={onUnauthorized} />}
       {role !== 'operator' && features.browser !== false && <WebsiteLogins onUnauthorized={onUnauthorized} />}
       {role !== 'operator' && features.imessage !== false && <MacMessages onUnauthorized={onUnauthorized} />}
       {canManageTeam(role) && <Team role={role} personKey={personKey ?? null} onUnauthorized={onUnauthorized} />}
@@ -635,6 +640,74 @@ function ReplyReminderNote({ reminder, onUnauthorized }: { reminder: ReplyRemind
         </div>
       )}
     </div>
+  )
+}
+
+/** Sites this person signed in to in their own browser, and where Jarvis may
+ *  keep reading without asking. No usernames, passwords or cookies: the API
+ *  has none to give. Sign out clears the site from the browser itself. */
+function ConnectedSites({ onUnauthorized }: { onUnauthorized: () => void }) {
+  const [enabled, setEnabled] = useState(false)
+  const [sites, setSites] = useState<ConnectedSite[]>([])
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    try {
+      const st = await getBrowserStatus()
+      setEnabled(st.enabled)
+      if (st.enabled) setSites((await getConnectedSites()).sites)
+    } catch (err) {
+      if (err instanceof Unauthorized) return onUnauthorized()
+      setError(err instanceof ApiError ? err.message : 'Could not read your connected sites.')
+    }
+  }, [onUnauthorized])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  if (!enabled) return null
+
+  async function run(fn: () => Promise<unknown>, message: string) {
+    setBusy(true)
+    setError(null)
+    try {
+      await fn()
+      await load()
+    } catch (err) {
+      if (err instanceof Unauthorized) return onUnauthorized()
+      setError(err instanceof ApiError && err.detail ? err.detail : message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <SettingsSection
+      title="Connected sites"
+      description="Sites you signed in to in Jarvis’s browser. Sign out clears that site from your browser here."
+      rows={sites.map((s) => ({
+        id: s.site,
+        title: s.site,
+        detail: [
+          s.state === 'needs_signin' ? 'Needs sign-in' : s.state === 'connected' ? 'Signed in' : null,
+          s.connected_at ? `connected ${relativeTime(s.connected_at)}` : null,
+          s.last_used_at ? `last used ${relativeTime(s.last_used_at)}` : null,
+          s.read_allowance ? 'Jarvis may keep reading' : null,
+          s.saved_login ? 'saved login' : null,
+        ]
+          .filter(Boolean)
+          .join(' · '),
+        more: s.read_allowance
+          ? [{ label: 'Stop always allowing', disabled: busy, onClick: () => void run(() => stopReadingSite(s.site), 'Could not change that.') }]
+          : undefined,
+        action: { label: 'Sign out', disabled: busy, onClick: () => void run(() => signOutOfSite(s.site), 'Could not sign out of that site.') },
+      }))}
+      error={error ?? undefined}
+    >
+      {!sites.length && <p className="m-0 text-jm-body-sm text-jm-fg-secondary">None yet. After you sign in to a site in the browser, tap “I’m signed in”.</p>}
+    </SettingsSection>
   )
 }
 

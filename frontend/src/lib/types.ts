@@ -417,6 +417,17 @@ export interface ReplyReminder {
   last: { slot: string; result: string; at: string } | null
 }
 
+/** A site the person signed in to in their own browser. Never a username, password or cookie. */
+export interface ConnectedSite {
+  site: string
+  /** null: only a standing read allowance, never confirmed as signed in. */
+  state: 'connected' | 'needs_signin' | null
+  connected_at: string | null
+  last_used_at: string | null
+  read_allowance: boolean
+  saved_login: boolean
+}
+
 export interface WebsiteLogin {
   site: string
   username: string

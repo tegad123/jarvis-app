@@ -50,6 +50,7 @@ TEST = os.environ.get("JARVIS_BROWSER_TEST") == "1"
 NO_GUARD = TEST and os.environ.get("JARVIS_BROWSER_TEST_NO_GUARD") == "1"
 NO_POLICY = NO_GUARD or (TEST and os.environ.get("JARVIS_BROWSER_TEST_NO_POLICY") == "1")
 WEB_SCHEMES = ("http", "https")
+SITE_RE = re.compile(r"[a-z0-9-]{1,63}(\.[a-z0-9-]{1,63}){1,8}")
 PERSON = browser_launch.PERSON
 MODE = os.environ.get("JARVIS_BROWSER_MODE", "headless").strip().lower() or "headless"
 WIDTH, HEIGHT = browser_launch.size(MODE)
@@ -619,6 +620,8 @@ class Browser:
             return await self.page()
         if op == "fill_login":
             return await self.fill_login(req)
+        if op == "forget_site":
+            return await self.forget_site(str(req.get("site") or ""))
         if op == "screen":
             shot = await self.s("Page.captureScreenshot", {"format": "jpeg", "quality": 60})
             return {"ok": True, **(await self.where()), "jpeg": shot["data"], "width": WIDTH, "height": HEIGHT}
@@ -636,6 +639,43 @@ class Browser:
             await self.settle(req["key"] == "Enter")
             return {"ok": True, **(await self.where())}
         raise CDPError(f"unknown op {op!r}")
+
+    async def forget_site(self, site: str) -> Dict[str, Any]:
+        """Signs this person out of one site: its cookies (the site and its
+        subdomains) and its origins' storage go from the profile. Other sites'
+        cookies stay. Logs the site and counts, never a cookie."""
+        site = site.lower().strip(".")
+        if not SITE_RE.fullmatch(site):
+            raise CDPError("not a site name")
+
+        def mine(host: str) -> bool:
+            host = host.lstrip(".").lower()
+            return host == site or host.endswith("." + site)
+
+        here = urlsplit((await self.where())["url"])
+        if mine(here.hostname or ""):
+            await self.s("Page.navigate", {"url": "about:blank"})
+            await self.settle(True)
+        cookies = (await self.cdp.send("Storage.getCookies", {})).get("cookies") or []
+        hit = [c for c in cookies if mine(c.get("domain") or "")]
+        for c in hit:
+            params = {"name": c["name"], "domain": c["domain"], "path": c.get("path") or "/"}
+            if c.get("partitionKey"):
+                params["partitionKey"] = c["partitionKey"]
+            await self.s("Network.deleteCookies", params)
+        hosts = {c["domain"].lstrip(".") for c in hit} | {site, f"www.{site}"}
+        origins = {f"{scheme}://{h}" for h in hosts for scheme in ("https", "http")}
+        if here.hostname and mine(here.hostname):
+            origins.add(f"{here.scheme}://{here.netloc}")
+        for origin in sorted(origins):
+            try:
+                await self.cdp.send("Storage.clearDataForOrigin", {"origin": origin, "storageTypes": "all"})
+            except CDPError:
+                pass
+        left = [c for c in (await self.cdp.send("Storage.getCookies", {})).get("cookies") or []
+                if mine(c.get("domain") or "")]
+        log(op="forget_site", person=self.person, site=site, cookies=len(hit), left=len(left), origins=len(origins))
+        return {"ok": not left, "site": site, "cookies_removed": len(hit) - len(left), "cookies_left": len(left)}
 
     async def _visible(self, selector: str) -> Optional[int]:
         """The first rendered match, as a backend node id: every getDocument

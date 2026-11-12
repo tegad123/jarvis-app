@@ -54,6 +54,7 @@ broker_router = APIRouter(prefix="/api/broker")
 router = APIRouter(prefix="/api/browser")
 
 CONNECTOR = "browser"
+READ_CONNECTOR = "browser.read"
 SKILL = "jarvis"
 TASK_MINUTES = 30
 TAKEOVER_IDLE_S = 900
@@ -192,6 +193,11 @@ def _db():
         person_key TEXT NOT NULL, site TEXT NOT NULL, username TEXT NOT NULL, secret_cipher BLOB NOT NULL,
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_used_at TEXT,
         PRIMARY KEY (person_key, site))""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS browser_sites (
+        person_key TEXT NOT NULL, site TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('connected','needs_signin')),
+        connected_at TEXT NOT NULL, last_used_at TEXT,
+        PRIMARY KEY (person_key, site))""")
     return conn
 
 
@@ -241,6 +247,89 @@ def _login_for(person: str, site: str) -> Optional[Tuple[str, str]]:
     conn.execute("UPDATE browser_logins SET last_used_at=? WHERE person_key=? AND site=?", (_now(), person, site))
     conn.commit()
     return row["username"], secret
+
+
+# ── connected sites ───────────────────────────────────────────────────────────
+# That a person signed in to a site in their own browser, and when. Never a
+# username, password or cookie: those stay in the profile (or browser_logins).
+
+SITE_NAME = re.compile(r"^[a-z0-9-]{1,63}(\.[a-z0-9-]{1,63}){1,8}$")
+
+
+def mark_site(person: str, site: str, state: str) -> None:
+    now = _now()
+    conn = _db()
+    conn.execute("INSERT INTO browser_sites (person_key, site, state, connected_at) VALUES (?,?,?,?) "
+                 "ON CONFLICT(person_key, site) DO UPDATE SET state=excluded.state, "
+                 "connected_at=CASE WHEN excluded.state='connected' THEN excluded.connected_at ELSE connected_at END",
+                 (person, site, state, now))
+    conn.commit()
+
+
+def touch_site(person: str, site: str) -> None:
+    conn = _db()
+    conn.execute("UPDATE browser_sites SET last_used_at=? WHERE person_key=? AND site=?", (_now(), person, site))
+    conn.commit()
+
+
+def site_row(person: str, site: str) -> Optional[Dict[str, Any]]:
+    r = _db().execute("SELECT site, state, connected_at, last_used_at FROM browser_sites WHERE person_key=? AND site=?",
+                      (person, site)).fetchone()
+    return dict(r) if r else None
+
+
+def list_sites(person: str):
+    rows = [dict(r) for r in _db().execute("SELECT site, state, connected_at, last_used_at FROM browser_sites "
+                                           "WHERE person_key=? ORDER BY site", (person,)).fetchall()]
+    logins = {r["site"] for r in list_logins(person)}
+    allow = read_allowances(person)
+    sites = {r["site"] for r in rows}
+    rows += [{"site": s, "state": None, "connected_at": None, "last_used_at": None} for s in sorted(allow)
+             if s not in sites]
+    return [{**r, "read_allowance": r["site"] in allow, "saved_login": r["site"] in logins} for r in rows]
+
+
+def read_allowances(person: str) -> Dict[str, sentinel.Grant]:
+    """Sites where this person lets Jarvis keep reading (links, tabs, search
+    boxes) without asking. A separate connector from acting, so an allowance
+    can never satisfy _active_grant()."""
+    now = sentinel.utcnow()
+    try:
+        grants = store.active_grants(person, READ_CONNECTOR, SKILL)
+    except platform_db.Unavailable:
+        broker._bump("broker_sentinel_db_unavailable")
+        return {}
+    out: Dict[str, sentinel.Grant] = {}
+    for g in grants:
+        if g.scope == sentinel.SCOPE_ALWAYS or (g.expires_at and g.expires_at > now):
+            out.setdefault(g.destination.lstrip("@"), g)
+    return out
+
+
+def revoke_reading(person: str, site: str, by: str, reason: str) -> int:
+    n = 0
+    for g in store.active_grants(person, READ_CONNECTOR, SKILL):
+        if g.destination == f"@{site}" and store.revoke_grant(g.id, by=by, reason=reason):
+            n += 1
+    if n:
+        broker._bump("browser_read_revoked")
+    return n
+
+
+def forget_site(person: str, site: str, by: str) -> Dict[str, Any]:
+    """Sign out: the site's cookies and storage leave the person's profile, its
+    row goes, and any standing read allowance for it is revoked."""
+    r = call("forget_site", person, timeout=60, site=site)
+    if not r.get("ok"):
+        broker._bump("browser_site_forget_failed")
+        raise WorkerDown(r.get("error") or "the browser could not clear that site")
+    conn = _db()
+    conn.execute("DELETE FROM browser_sites WHERE person_key=? AND site=?", (person, site))
+    conn.commit()
+    revoked = revoke_reading(person, site, by, "signed out of the site")
+    broker._bump("browser_site_signed_out")
+    _record("forget_site", "executed", sentinel.READ, site, {"source": f"person:{person}"}, person)
+    return {"site": site, "cookies_removed": r.get("cookies_removed", 0), "allowances_revoked": revoked}
 
 
 # ── the ledger ────────────────────────────────────────────────────────────────
@@ -827,6 +916,59 @@ def logins_save(body: LoginBody, sess: dict = Depends(auth.current_session)):
         raise HTTPException(status_code=422, detail="Give the site's address, like zillow.com.")
     save_login(who, site, body.username.strip(), body.password)
     return {"ok": True, "site": site}
+
+
+@router.get("/sites")
+def sites_list(sess: dict = Depends(auth.current_session)):
+    return {"sites": list_sites(_person(sess))}
+
+
+@router.post("/sites/confirm")
+def sites_confirm(sess: dict = Depends(auth.current_session)):
+    """'I'm signed in', on hand back: the site of the page their browser is on.
+    The person cannot name some other site here."""
+    who = _person(sess)
+    try:
+        st = call("status", who, timeout=10)
+    except WorkerDown:
+        raise HTTPException(status_code=503, detail="The browser isn't running right now.")
+    url = str(st.get("url") or "")
+    site = site_key(url) if st.get("running") and urlsplit(url).scheme in ("http", "https") else ""
+    if not site:
+        raise HTTPException(status_code=409, detail="Open the site you signed in to first.")
+    mark_site(who, site, "connected")
+    broker._bump("browser_site_connected")
+    _record("site_connected", "executed", sentinel.READ, site, {"source": f"person:{who}"}, who)
+    return {"ok": True, "site": site_row(who, site)}
+
+
+@router.delete("/sites/{site}")
+def sites_sign_out(site: str, sess: dict = Depends(auth.current_session)):
+    who = _person(sess)
+    site = site.strip().lower()
+    if not SITE_NAME.match(site) or (site_row(who, site) is None and site not in read_allowances(who)):
+        raise HTTPException(status_code=404, detail="That site isn't in your connected sites.")
+    try:
+        return {"ok": True, **forget_site(who, site, who)}
+    except WorkerDown:
+        raise HTTPException(status_code=503, detail="The browser couldn't sign out of that site right now; "
+                                                    "nothing was removed. Try again.")
+
+
+@router.delete("/sites/{site}/reading")
+def sites_stop_reading(site: str, sess: dict = Depends(auth.current_session)):
+    """Stop always allowing: only the read allowance goes; the sign-in stays."""
+    who = _person(sess)
+    site = site.strip().lower()
+    if not SITE_NAME.match(site):
+        raise HTTPException(status_code=404, detail="That site isn't in your connected sites.")
+    try:
+        n = revoke_reading(who, site, who, "stopped from Settings")
+    except platform_db.Unavailable:
+        raise HTTPException(status_code=503, detail="The platform database is unavailable.")
+    if not n:
+        raise HTTPException(status_code=404, detail="Jarvis has no standing permission to read that site.")
+    return {"ok": True, "revoked": n}
 
 
 @router.delete("/logins/{site}")
