@@ -348,6 +348,8 @@ export interface Approval {
   /** What this signed-in person may do with a pending request; the server enforces it. */
   can_approve?: boolean
   can_reject?: boolean
+  /** Signed answers, one per scope the request offers (e.g. until, always). */
+  callbacks?: { reject: string | null; approve: Record<string, string> }
   decided_by?: string
   decided_at?: string
 }

@@ -509,10 +509,12 @@ export function getInbox(): Promise<InboxResponse> {
 export async function decideApproval(
   id: string,
   decision: 'approve' | 'reject',
+  /** A signed callback from the approval, to choose a scope other than the default (e.g. "always"). */
+  callback?: string,
 ): Promise<Approval> {
   const { ok, status, body } = await request<{ ok: boolean; approval: Approval }>(
     `/api/approvals/${encodeURIComponent(id)}`,
-    { method: 'POST', body: JSON.stringify({ decision }) },
+    { method: 'POST', body: JSON.stringify(callback ? { decision, callback } : { decision }) },
   )
   if (ok && body?.approval) return body.approval
   if (status === 409) {

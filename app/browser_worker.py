@@ -432,6 +432,27 @@ class Browser:
         a = node.get("attributes") or []
         return {"_tag": str(node.get("nodeName") or "").lower(), **{a[i]: a[i + 1] for i in range(0, len(a), 2)}}
 
+    async def _facts(self, backend: int) -> Dict[str, Any]:
+        """Where a link goes and what form a field is in, for the read
+        allowance (app/browser_policy.py). A fixed script, never one supplied
+        by the app or the model."""
+        try:
+            obj = (await self.s("DOM.resolveNode", {"backendNodeId": backend}))["object"]["objectId"]
+            r = await self.s("Runtime.callFunctionOn", {"objectId": obj, "returnByValue": True, "functionDeclaration":
+                             "function(){ var a = this.closest ? this.closest('a[href]') : null;"
+                             " var f = this.form || (this.closest ? this.closest('form') : null);"
+                             " return {href: a ? String(a.href) : '', download: !!(a && a.hasAttribute('download')),"
+                             " form_method: f ? String(f.method || 'get').toLowerCase() : '',"
+                             " form_action: f ? String(f.action || '') : '',"
+                             " contenteditable: !!this.isContentEditable}; }"})
+            v = (r.get("result") or {}).get("value") or {}
+        except (CDPError, KeyError):
+            return {}
+        href, action = str(v.get("href") or "")[:500], str(v.get("form_action") or "")[:500]
+        return {"href": href, "link_site": site_of(href) if href else "", "download": bool(v.get("download")),
+                "form_method": str(v.get("form_method") or "")[:10], "form_site": site_of(action) if action else "",
+                "contenteditable": bool(v.get("contenteditable"))}
+
     async def _center(self, backend: int):
         try:
             await self.s("DOM.scrollIntoViewIfNeeded", {"backendNodeId": backend})
@@ -578,10 +599,11 @@ class Browser:
                                                                   "fetchRelatives": False})).get("nodes") or [{}]
             name = str(((ax[0].get("name") or {}).get("value")) or "")[:200]
             role = str(((ax[0].get("role") or {}).get("value")) or "")
+            facts = await self._facts(backend)
             return {"ok": True, **(await self.where()), "role": role, "name": name, "tag": attrs["_tag"],
                     "input_type": attrs.get("type", "").lower(),
                     "field": " ".join(attrs.get(k, "") for k in ("name", "id", "autocomplete", "placeholder",
-                                                                   "aria-label"))[:300]}
+                                                                   "aria-label"))[:300], **facts}
         if op == "click":
             await self.check_site(req.get("expect_site"))
             x, y = await self._center(self._node(str(req.get("ref"))))

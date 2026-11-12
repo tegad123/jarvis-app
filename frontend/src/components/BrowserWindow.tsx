@@ -145,9 +145,13 @@ export default function BrowserWindow({ busy, hidden, onHiddenChange, onAvailabl
       url={screen?.url ?? undefined}
       asks={asks.map((a) => ({
         id: a.id,
-        kind: a.payload?.type === 'browser_task' ? 'task' : 'once',
+        kind: a.payload?.type === 'browser_task' ? 'task' : a.payload?.type === 'browser_read' ? 'read' : 'once',
         summary: a.summary,
+        detail: a.payload?.type === 'browser_read' ? a.display?.access : undefined,
         onAllow: () => void act(() => decideApproval(a.id, 'approve'), 'Could not approve that.'),
+        onAlways: a.callbacks?.approve?.always
+          ? () => void act(() => decideApproval(a.id, 'approve', a.callbacks?.approve?.always), 'Could not approve that.')
+          : undefined,
         onNotNow: () => void act(() => decideApproval(a.id, 'reject'), 'Could not decline that.'),
       }))}
       expanded={big}

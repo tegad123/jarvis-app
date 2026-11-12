@@ -44,6 +44,7 @@ from pydantic import BaseModel, Field
 
 from . import auth
 from . import broker
+from . import browser_policy
 from . import config
 from . import platform_db
 from . import platform_store as store
@@ -357,6 +358,28 @@ def _active_grant(site: str, person: str) -> Optional[sentinel.Grant]:
                 None)
 
 
+def _read_grant(site: str, person: str) -> Optional[sentinel.Grant]:
+    """A standing (or 30-minute) read allowance for this site. Its own
+    connector: it never satisfies _active_grant(), so it never lets Jarvis
+    act."""
+    now = sentinel.utcnow()
+    action = sentinel.Action(connector=READ_CONNECTOR, method="read", cls=sentinel.EXTERNAL_SEND,
+                             destinations=(f"@{site}",), skill=SKILL, user=person)
+    return next((g for g in store.active_grants(person, READ_CONNECTOR, SKILL)
+                 if sentinel.grant_covers(g, action, now)), None)
+
+
+def _pending_read(site: str, person: str) -> Optional[str]:
+    """One open ask per person and site: the agent clicking three links does
+    not file three cards."""
+    for r in store.list_approvals():
+        a = r.get("action_json") or {}
+        if r["status"] == "pending" and r.get("user_id") == person and a.get("type") == "browser_read" \
+                and a.get("site") == site:
+            return r["id"]
+    return None
+
+
 def _say_page(r: Dict[str, Any]) -> Dict[str, Any]:
     keep = ("ok", "url", "title", "site", "snapshot", "dialogs", "blocked", "load_error", "login", "redacted",
             "http_status", "site_refused")
@@ -498,6 +521,24 @@ def _act(op, args, current, here, ctx, person, approval: Optional[Dict[str, Any]
             broker._bump("browser_risky_held")
             return 403, {"error": "approval_required", "approval_id": aid, "risky": why}
         grant = _active_grant(here, person)
+        reading = None
+        if grant is None and op in ("click", "type"):
+            facts = {**desc, "link_site": site_key(desc["href"]) if desc.get("href") else "",
+                     "form_site": site_key(desc["form_action"]) if desc.get("form_action") else ""}
+            reading = browser_policy.read_only_gesture(op, facts, text, bool(args.get("submit")), here)
+        if grant is None and reading:
+            grant = _read_grant(here, person)
+            if grant is None:
+                aid = _pending_read(here, person) or _file(
+                    f"Let Jarvis keep reading {here}", {"type": "browser_read", "site": here,
+                                                        "url": str(current.get("url") or "")[:500],
+                                                        "example": f"{op} '{exact['name'][:80]}'"},
+                    sentinel.EXTERNAL_SEND, f"following links and using search boxes on {here} needs their go-ahead",
+                    here, ctx, person)
+                broker._bump("browser_read_asked")
+                return 403, {"error": "approval_required", "approval_id": aid, "site": here, "reading": reading}
+            broker._bump("browser_read_gesture")
+            touch_site(person, here)
         if grant is None:
             _record(op, "needs_task_approval", sentinel.EXTERNAL_SEND, here, ctx, person, verdict="ask")
             broker._bump("browser_needs_task_approval")
@@ -543,6 +584,17 @@ def execute_approved(item: Dict[str, Any], scope: str, decided_by: str) -> Dict[
         store.create_grant(grant, approval_id=item["id"], action_class=sentinel.EXTERNAL_SEND, created_by=decided_by)
         broker._bump("browser_task_granted")
         return {"state": "granted", "grant_id": grant.id, "site": a["site"], "until": grant.expires_at.isoformat()}
+    if a.get("type") == "browser_read":
+        action = sentinel.Action(connector=READ_CONNECTOR, method="read", cls=sentinel.EXTERNAL_SEND,
+                                 destinations=(f"@{a['site']}",), skill=SKILL, user=person)
+        always = scope == sentinel.SCOPE_ALWAYS
+        grant = sentinel.grant_from_approval(item["id"], action, sentinel.SCOPE_ALWAYS if always else
+                                             sentinel.SCOPE_UNTIL, sentinel.utcnow(),
+                                             duration=None if always else timedelta(minutes=TASK_MINUTES))
+        store.create_grant(grant, approval_id=item["id"], action_class=sentinel.EXTERNAL_SEND, created_by=decided_by)
+        broker._bump("browser_read_granted_always" if always else "browser_read_granted_until")
+        return {"state": "granted", "grant_id": grant.id, "site": a["site"],
+                "until": grant.expires_at.isoformat() if grant.expires_at else None}
     if not enabled():
         return {"state": "refused", "reason": "the browser is switched off"}
     try:
@@ -570,6 +622,12 @@ def approval_display(action: Dict[str, Any]) -> Optional[Dict[str, str]]:
                 "access": f"Lets Jarvis click and type on {action.get('site')} for {TASK_MINUTES} minutes. It still "
                           "asks before payments, purchases, deleting anything or anything it can't undo.",
                 "page": action.get("url", "")}
+    if t == "browser_read":
+        return {"site": action.get("site", ""), "page": action.get("url", ""),
+                "access": f"Lets Jarvis follow links, switch tabs, page through results and use search and filter "
+                          f"boxes on {action.get('site')}. Nothing else: it still asks before typing anything "
+                          f"else, signing in, contacting anyone or saving anything.",
+                "example": action.get("example", "")}
     if t == "browser":
         out = {"site": action.get("site", ""), "page": action.get("url", "")}
         op = action.get("op")

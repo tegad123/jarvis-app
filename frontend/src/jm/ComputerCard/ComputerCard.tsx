@@ -14,10 +14,13 @@ export type ComputerInput =
 
 export interface ComputerAsk {
   id?: string
-  /** 'task' reads "Allow for 30 min"; anything else "Allow once". */
-  kind?: 'task' | 'once'
+  /** 'task' and 'read' read "Allow for 30 min"; anything else "Allow once". 'read' also offers "Always allow reading". */
+  kind?: 'task' | 'once' | 'read'
   summary: string
+  /** Shown under the summary in the big card (what the allowance covers). */
+  detail?: string
   onAllow?: () => void
+  onAlways?: () => void
   onNotNow?: () => void
 }
 
@@ -163,10 +166,16 @@ export function ComputerCard(p: ComputerCardProps) {
           <p title={a.summary} className={cx('m-0 text-jm-body-sm text-jm-fg', clamp)}>
             {a.summary}
           </p>
+          {expanded && a.detail && <p className="m-0 -mt-jm-1 text-jm-caption text-jm-fg-secondary">{a.detail}</p>}
           <div className="flex flex-wrap gap-jm-2">
             <Button variant="primary" disabled={p.busy} onClick={a.onAllow}>
-              {a.kind === 'task' ? 'Allow for 30 min' : 'Allow once'}
+              {a.kind === 'task' || a.kind === 'read' ? 'Allow for 30 min' : 'Allow once'}
             </Button>
+            {a.kind === 'read' && a.onAlways && (
+              <Button variant="secondary" disabled={p.busy} onClick={a.onAlways}>
+                Always allow reading here
+              </Button>
+            )}
             <Button variant="secondary" disabled={p.busy} onClick={a.onNotNow}>
               Not now
             </Button>
