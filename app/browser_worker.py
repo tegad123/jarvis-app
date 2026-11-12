@@ -636,6 +636,12 @@ class Browser:
         if op == "close":
             await self.close()
             return {"ok": True, "running": False}
+        if op == "erase_profile":
+            await self.close()
+            existed = os.path.isdir(self.profile)
+            shutil.rmtree(self.profile, ignore_errors=True)
+            gone = not os.path.exists(self.profile)
+            return {"ok": gone, "running": False, "existed": existed, "erased": existed and gone}
         if op == "view_stop":
             await self.stop_vnc()
             return {"ok": True}
@@ -959,6 +965,19 @@ async def main() -> None:
             b.viewers -= 1
             log(op="view_close", person=person[:64], bytes_in=sent[0], bytes_out=sent[1])
 
+    async def erase_all() -> Dict[str, Any]:
+        """Every person's browser closed and every profile removed: the
+        tenant was deleted. Sign-ins saved in a profile go with it."""
+        for b in list(browsers.values()):
+            async with b.lock:
+                await b.close()
+        browsers.clear()
+        names = sorted(n for n in os.listdir(PROFILE) if PERSON.fullmatch(n)) if os.path.isdir(PROFILE) else []
+        for n in names:
+            shutil.rmtree(os.path.join(PROFILE, n), ignore_errors=True)
+        left = [n for n in names if os.path.exists(os.path.join(PROFILE, n))]
+        return {"ok": not left, "erased": len(names) - len(left), "left": len(left)}
+
     async def handle(r: asyncio.StreamReader, w: asyncio.StreamWriter) -> None:
         try:
             line = await asyncio.wait_for(r.readline(), 10)
@@ -967,11 +986,17 @@ async def main() -> None:
             if req.get("op") == "view" and PERSON.fullmatch(person):
                 await view(person, r, w)
                 return
+            if req.get("op") == "erase_all":
+                out = await erase_all()
+                log(op="erase_all", ok=out["ok"], erased=out["erased"])
+                w.write(json.dumps(out).encode() + b"\n")
+                await w.drain()
+                return
             if not PERSON.fullmatch(person):
                 out = {"ok": False, "error": "every request names the person whose browser it is"}
             else:
                 try:
-                    b = await browser_for(person, req.get("op") not in ("status", "close", "view_stop"))
+                    b = await browser_for(person, req.get("op") not in ("status", "close", "view_stop", "erase_profile"))
                     async with b.lock:
                         b.last_used = time.monotonic()
                         try:

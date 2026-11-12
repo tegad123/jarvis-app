@@ -336,6 +336,61 @@ def forget_site(person: str, site: str, by: str) -> Dict[str, Any]:
     return {"site": site, "cookies_removed": r.get("cookies_removed", 0), "allowances_revoked": revoked}
 
 
+def erase_person(person: str, by: str) -> Dict[str, Any]:
+    """A person was removed: their browser profile (and every sign-in saved in
+    it), saved logins, connected sites, MLS runs and browser allowances go.
+    Each part is attempted; what failed is named and counted."""
+    from . import mls  # noqa: PLC0415
+    out: Dict[str, Any] = {"profile": "browser_off", "failed": []}
+    if enabled():
+        try:
+            r = call("erase_profile", person, timeout=60)
+            out["profile"] = "erased" if r.get("erased") else "none" if r.get("ok") else "failed"
+        except WorkerDown:
+            out["profile"] = "failed"
+        if out["profile"] == "failed":
+            out["failed"].append("profile")
+    conn = _db()
+    with conn:
+        out["logins"] = conn.execute("DELETE FROM browser_logins WHERE person_key=?", (person,)).rowcount
+        out["sites"] = conn.execute("DELETE FROM browser_sites WHERE person_key=?", (person,)).rowcount
+    out["mls_runs"] = mls.erase_person(person)
+    revoked = 0
+    try:
+        # No platform database configured: no allowance can exist to revoke.
+        for connector in (CONNECTOR, READ_CONNECTOR) if platform_db.dsn() else ():
+            for g in store.active_grants(person, connector, SKILL):
+                revoked += bool(store.revoke_grant(g.id, by=by, reason="person removed"))
+    except platform_db.Unavailable:
+        broker._bump("broker_sentinel_db_unavailable")
+        out["failed"].append("allowances")
+    out["allowances_revoked"] = revoked
+    with _takeover_lock:
+        _needs_you.pop(person, None)
+        _takeover.pop(person, None)
+    broker._bump("browser_person_erase_failed" if out["failed"] else "browser_person_erased")
+    if out["failed"]:
+        log.error("browser: removing %s left %s", person, ", ".join(out["failed"]))
+    return out
+
+
+def erase_all() -> str:
+    """The tenant was deleted: every profile goes. "erased", "browser_off" or
+    "failed" (counted and logged; the caller reports it)."""
+    if not enabled():
+        return "browser_off"
+    try:
+        r = call("erase_all", "", timeout=120)
+    except WorkerDown:
+        r = {"ok": False}
+    if not r.get("ok"):
+        broker._bump("browser_profiles_erase_failed")
+        log.error("browser: the profiles could not all be removed (%s left)", r.get("left", "?"))
+        return "failed"
+    broker._bump("browser_profiles_erased")
+    return "erased"
+
+
 # ── the ledger ────────────────────────────────────────────────────────────────
 
 def _record(op: str, outcome: str, cls: str, site: str, ctx: Dict[str, str], person: str,

@@ -568,6 +568,16 @@ def execute(run_id: int, limit: int, person: str, q: Query, reader: Reader, s: D
     return finish_run(run_id, q, res)
 
 
+def erase_person(person: str) -> int:
+    """A removed person's runs, results and all."""
+    conn = _db()
+    with conn:
+        n = conn.execute("DELETE FROM mls_runs WHERE person_key = ?", (person,)).rowcount
+    if n:
+        threads_mod.bump_counter("mls_runs_erased", n)
+    return n
+
+
 def run_row(run_id: int, person: str) -> Optional[Dict[str, Any]]:
     """The run, only for the person who started it."""
     row = _db().execute("SELECT * FROM mls_runs WHERE id = ? AND person_key = ?", (run_id, person)).fetchone()

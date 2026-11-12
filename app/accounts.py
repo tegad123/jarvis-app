@@ -464,7 +464,9 @@ def request_deletion(person_key: str, requested_by: str) -> Dict[str, Any]:
     lead, task, or message. The only owner cannot be turned off. The PIN is
     cleared so the old secret cannot be used again; an owner has to issue a
     new one to restore access. That is deactivation plus a pending request,
-    not deletion.
+    not deletion. Their browser is cleared too (browser.erase_person): the
+    profile with its site sign-ins, saved logins, connected sites, MLS runs
+    and browser allowances, so a signed-in site session does not outlive them.
     """
     acct = get(person_key)
     if acct is None:
@@ -485,6 +487,13 @@ def request_deletion(person_key: str, requested_by: str) -> Dict[str, Any]:
         google_connection.clear_person(person_key)
     except Exception:
         log.warning("accounts: could not clear %s's personal Google row", person_key)
+    try:
+        from . import browser  # noqa: PLC0415
+        browser.erase_person(person_key, requested_by)
+    except Exception as exc:
+        from . import threads as threads_mod  # noqa: PLC0415
+        threads_mod.bump_counter("browser_person_erase_failed")
+        log.error("accounts: could not clear %s's browser (%s)", person_key, type(exc).__name__)
     request_id = "adr_" + secrets.token_hex(8)
     now = _now()
     conn.execute(

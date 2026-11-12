@@ -48,7 +48,13 @@ card saved under the reply survives a reload for that person only; a
 stopped run's card says why; past keep_days it says the results expired and
 the stored rows are gone.
 
---canary breaks five things on purpose; these checks must FAIL: the
+Step 17 (a real headless worker): removing a person closes their browser,
+deletes their profile directory, connected sites, MLS runs and browser
+allowances, and none of anyone else's; deleting the tenant removes every
+profile; with the worker down both say they failed and are counted; with
+the browser off both say browser_off.
+
+--canary breaks six things on purpose; these checks must FAIL: the
 person's browser feature is ignored (browser_feature_off), the re-check
 keeps every row (three re-check checks), an unknown page reads as empty
 (two classify checks), and every thread reads as the person's direct line
@@ -58,6 +64,8 @@ channel, is refused direct_only instead of 404).
 Step 15: a run is read for any person (the card's 404s for the owner,
 admin, another member and the operator, and the card checks that depend on
 the person).
+Step 17: removing a person only closes their browser (the profile-deleted
+check).
 """
 import json
 import os
@@ -1043,6 +1051,124 @@ def step15(env) -> None:
     ck("an expired card is still drawn after a reload (it says expired, it does not vanish)",
        o["reload_expired"] == [{"action": "mls", "run_id": rid, "label": "MLS search results"}], o["reload_expired"])
 
+CHILD17 = r"""
+import json, os, sys, pathlib
+sys.path.insert(0, os.environ["APP_ROOT"])
+from app import accounts, browser, mls, platform_store as store, sentinel, threads
+SITE = os.environ["SITE"]
+K = SITE.split("//")[1].split(":")[0]
+PROFILES = pathlib.Path(os.environ["PROFILES"])
+if os.environ.get("CANARY") == "1":
+    _call = browser.call
+    browser.call = lambda op, person, timeout=100, **kw: _call("close" if op == "erase_profile" else op, person,
+                                                              timeout, **kw)
+def count(n):
+    return threads.bump_counter(n, 0)
+def allowance(who, site):
+    aid = store.create_approval(origin="seed", user_id=who, kind="action", skill="jarvis", summary="verify read",
+                                action={"type": "browser_read", "site": site}, status="approved",
+                                decided_at=sentinel.utcnow(), decided_by=who)
+    act = sentinel.Action(connector=browser.READ_CONNECTOR, method="read", cls=sentinel.EXTERNAL_SEND,
+                          destinations=(f"@{site}",), skill="jarvis", user=who)
+    g = sentinel.grant_from_approval(aid, act, sentinel.SCOPE_ALWAYS, sentinel.utcnow())
+    store.create_grant(g, approval_id=aid, action_class=sentinel.EXTERNAL_SEND, created_by=who)
+    return g.id
+def live(who):
+    return [g.id for g in store.active_grants(who, browser.READ_CONNECTOR, "jarvis")]
+out = {}
+for who in ("omar", "dana"):
+    browser.call("open", who, timeout=60, url=SITE + "/Matrix/Search")
+    c = browser._db()
+    c.execute("INSERT OR REPLACE INTO browser_sites (person_key, site, state, connected_at) VALUES (?,?,?,?)",
+              (who, K, "connected", "t"))
+    c.commit()
+    with mls._db() as conn:
+        conn.execute("INSERT INTO mls_runs (person_key, thread_id, query_json, state, started_at) "
+                     "VALUES (?, 'dm', '{}', 'done', '2000-01-01T00:00:00+00:00')", (who,))
+g_omar, g_dana = allowance("omar", K), allowance("dana", K)
+out["before"] = {"profiles": sorted(p.name for p in PROFILES.iterdir()), "omar_grant": g_omar in live("omar"),
+                 "dana_grant": g_dana in live("dana"), "running": browser.call("status", "omar").get("running")}
+def held(who):
+    return {"sites": browser._db().execute("SELECT COUNT(*) FROM browser_sites WHERE person_key=?", (who,)).fetchone()[0],
+            "runs": mls._db().execute("SELECT COUNT(*) FROM mls_runs WHERE person_key=?", (who,)).fetchone()[0],
+            "grants": sum(len(store.active_grants(who, c, "jarvis")) for c in (browser.CONNECTOR, browser.READ_CONNECTOR))}
+out["omar_held"], out["dana_held"] = held("omar"), held("dana")
+e0, f0 = count("browser_person_erased"), count("browser_person_erase_failed")
+r = browser.erase_person("omar", "dana")
+out["omar_after"], out["dana_after"] = held("omar"), held("dana")
+runs = {k: n for k, n in mls._db().execute("SELECT person_key, COUNT(*) FROM mls_runs WHERE person_key IN ('omar','dana') "
+                                           "GROUP BY person_key").fetchall()}
+sites = {k: n for k, n in browser._db().execute("SELECT person_key, COUNT(*) FROM browser_sites WHERE site=? "
+                                                "GROUP BY person_key", (K,)).fetchall()}
+out["person"] = {"result": r, "profiles": sorted(p.name for p in PROFILES.iterdir()),
+                 "omar_grant": g_omar in live("omar"), "dana_grant": g_dana in live("dana"),
+                 "runs": runs, "sites": sites, "erased_delta": count("browser_person_erased") - e0,
+                 "failed_delta": count("browser_person_erase_failed") - f0,
+                 "dana_running": browser.call("status", "dana").get("running")}
+store.revoke_grant(g_dana, by="dana", reason="verify done")
+a0 = count("browser_profiles_erased")
+out["all"] = {"result": browser.erase_all(), "profiles": sorted(p.name for p in PROFILES.iterdir()),
+              "delta": count("browser_profiles_erased") - a0}
+os.environ["JARVIS_BROWSER_SOCKET"] = "/nonexistent/worker.sock"
+f1, af = count("browser_person_erase_failed"), count("browser_profiles_erase_failed")
+r = browser.erase_person("maya", "dana")
+out["down"] = {"person": r, "person_failed_delta": count("browser_person_erase_failed") - f1,
+               "all": browser.erase_all(), "all_failed_delta": count("browser_profiles_erase_failed") - af}
+os.environ["JARVIS_BROWSER"] = "off"
+out["off"] = {"person": browser.erase_person("maya", "dana")["profile"], "all": browser.erase_all()}
+print("RESULT " + json.dumps(out, default=str))
+"""
+
+
+def step17(env) -> None:
+    print("── step 17: removing a person or the tenant clears the browser")
+    sys.path.insert(0, str(HERE))
+    import fixture_site  # noqa: PLC0415
+    ip = f"127.{secrets.randbelow(250) + 3}.0.71"
+    srv, site = fixture_site.serve(ip)
+    scr = pathlib.Path("/tmp/verify-mls-17")
+    eg, w = start_worker(scr, site.split("//")[1])
+    try:
+        p = subprocess.run([sys.executable, "-c", CHILD17],
+                           env={**env, "JARVIS_BROWSER_SOCKET": str(scr / "w.sock"), "SITE": site,
+                                "PROFILES": str(scr / "profiles")},
+                           cwd=str(ROOT), capture_output=True, text=True, timeout=300)
+    finally:
+        w.terminate(); eg.terminate(); w.wait(20); srv.shutdown()
+    line = [ln for ln in p.stdout.splitlines() if ln.startswith("RESULT ")]
+    if not line:
+        print(p.stderr[-4000:])
+        ck("step 17 child ran", False)
+        return
+    o = json.loads(line[-1][7:])
+    b = o["before"]
+    ck("seeded: omar and dana each have a profile on disk and a read allowance (presence)",
+       b["profiles"] == ["dana", "omar"] and b["omar_grant"] and b["dana_grant"] and b["running"], b)
+    pr = o["person"]
+    ck("removing omar closes his browser and deletes his profile directory; dana's stays and keeps running",
+       pr["result"]["profile"] == "erased" and pr["profiles"] == ["dana"] and pr["dana_running"], pr)
+    ck("removing omar revokes his allowance and not dana's", not pr["omar_grant"] and pr["dana_grant"], pr)
+    oh, dh = o["omar_held"], o["dana_held"]
+    ck("removing omar deletes all his connected sites, MLS runs and allowances (what he held, by count)",
+       oh["sites"] >= 1 and oh["runs"] >= 1 and oh["grants"] >= 1
+       and pr["result"]["sites"] == oh["sites"] and pr["result"]["mls_runs"] == oh["runs"]
+       and pr["result"]["allowances_revoked"] == oh["grants"]
+       and o["omar_after"] == {"sites": 0, "runs": 0, "grants": 0}, (oh, pr["result"], o["omar_after"]))
+    ck("   and none of dana's", o["dana_after"] == dh and dh["sites"] >= 1 and dh["runs"] >= 1 and dh["grants"] >= 1,
+       (dh, o["dana_after"]))
+    ck("removing a person is counted once, no failure", pr["erased_delta"] == 1 and pr["failed_delta"] == 0
+       and pr["result"]["failed"] == [], pr)
+    al = o["all"]
+    ck("deleting the tenant removes every profile, counted",
+       al["result"] == "erased" and al["profiles"] == [] and al["delta"] == 1, al)
+    dn = o["down"]
+    ck("worker down: removing a person says the profile failed, counted, and still clears the rows",
+       dn["person"]["profile"] == "failed" and dn["person"]["failed"] == ["profile"] and dn["person_failed_delta"] == 1, dn)
+    ck("worker down: deleting the tenant says failed, counted (the caller reports it)",
+       dn["all"] == "failed" and dn["all_failed_delta"] == 1, dn)
+    ck("browser off: nothing to erase, and it says so (browser_off, not erased)",
+       o["off"] == {"person": "browser_off", "all": "browser_off"}, o["off"])
+
 
 def provisioner_checks():
     sys.path.insert(0, str(ROOT / "scripts"))
@@ -1133,6 +1259,7 @@ def main() -> int:
     step13(env)
     step14(env)
     step15(env)
+    step17(env)
     n, t = sum(ok), len(ok)
     print(f"\n{n}/{t} passed" + ("  (canary run: a FAIL above is the point)" if CANARY else ""))
     return 0 if n == t else 1
