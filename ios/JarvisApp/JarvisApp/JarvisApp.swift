@@ -25,7 +25,7 @@ final class AppModel: ObservableObject {
         originText = saved
         let consent = UserDefaults.standard.bool(forKey: Self.consentKey)
         client = JarvisClient(transport: URLSessionTransport(), aiConsent: consent)
-        if let parsed = try? apply(saved, to: client) { originText = parsed }
+        if let parsed = try? Self.apply(saved, to: client) { originText = parsed }
     }
 
     var hasOrigin: Bool { client.origin != nil }

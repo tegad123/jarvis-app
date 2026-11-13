@@ -74,7 +74,7 @@ struct AskView: View {
             } catch JarvisError.http(_, let message) {
                 error = message
             } catch {
-                error = "The reply did not finish."
+                self.error = "The reply did not finish."
             }
             busy = false
         }
@@ -115,7 +115,7 @@ struct LeadsView: View {
         defer { loading = false }
         do { leads = try await model.client.leads(); error = nil }
         catch JarvisError.http(_, let message) { error = message }
-        catch { error = "Could not load leads." }
+        catch { self.error = "Could not load leads." }
     }
 }
 
@@ -194,7 +194,7 @@ struct LeadDetailView: View {
     private func load() async {
         do { detail = try await model.client.lead(id: leadID); error = nil }
         catch JarvisError.http(_, let message) { error = message }
-        catch { error = "Could not open this lead." }
+        catch { self.error = "Could not open this lead." }
     }
 
     private func save() async {
@@ -214,7 +214,7 @@ struct LeadDetailView: View {
         } catch JarvisError.http(_, let message) {
             error = message
         } catch {
-            error = "That did not save."
+            self.error = "That did not save."
         }
     }
 }
@@ -257,7 +257,7 @@ struct TasksView: View {
         defer { loading = false }
         do { tasks = try await model.client.tasks(); error = nil }
         catch JarvisError.http(_, let message) { error = message }
-        catch { error = "Could not load tasks." }
+        catch { self.error = "Could not load tasks." }
     }
 }
 
@@ -307,7 +307,7 @@ struct ApprovalsView: View {
         defer { loading = false }
         do { items = try await model.client.approvals(); error = nil }
         catch JarvisError.http(_, let message) { error = message }
-        catch { error = "Could not load approvals." }
+        catch { self.error = "Could not load approvals." }
     }
 
     private func decide(_ item: ApprovalItem, approve: Bool) async {
@@ -317,7 +317,7 @@ struct ApprovalsView: View {
         } catch JarvisError.http(_, let message) {
             error = message
         } catch {
-            error = "That decision did not save."
+            self.error = "That decision did not save."
         }
     }
 }

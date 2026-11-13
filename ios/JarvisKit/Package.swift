@@ -3,6 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "JarvisKit",
+    platforms: [.iOS(.v17), .macOS(.v14)],
     products: [
         .library(name: "JarvisKit", targets: ["JarvisKit"]),
     ],

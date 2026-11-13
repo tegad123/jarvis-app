@@ -117,7 +117,7 @@ struct LoginView: View {
         } catch JarvisError.http(_, let message) {
             error = message
         } catch {
-            error = "Could not sign in."
+            self.error = "Could not sign in."
         }
     }
 }
