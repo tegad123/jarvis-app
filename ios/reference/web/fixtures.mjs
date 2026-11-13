@@ -3,14 +3,26 @@
 // the reserved .example domain and phone numbers the 555-01xx fiction range.
 //
 // The shapes follow frontend/src/lib/types.ts, which is the contract the web
-// app reads. The SwiftUI previews (ios/JarvisApp/JarvisApp/Preview) carry the
-// same cast and the same rows, so a web screenshot and a preview line up.
+// app reads. export-swift-fixtures.mjs writes the same data into JarvisKit's
+// PreviewFixtures.swift, so a web screenshot and a SwiftUI preview show the
+// same rows.
 
-const ago = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString()
-const day = (offset) => {
-  const d = new Date(Date.now() + offset * 86_400_000)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+// Times are relative to now, so "12m" stays "12m". The Swift export swaps
+// the clock for placeholders that the app resolves when a preview runs.
+let clock = {
+  ago: (minutes) => new Date(Date.now() - minutes * 60_000).toISOString(),
+  day: (offset) => {
+    const d = new Date(Date.now() + offset * 86_400_000)
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  },
+  secondsAgo: (seconds) => Math.round(Date.now() / 1000) - seconds,
 }
+export function useClock(next) {
+  clock = { ...clock, ...next }
+}
+const ago = (minutes) => clock.ago(minutes)
+const day = (offset) => clock.day(offset)
+const secondsAgo = (seconds) => clock.secondsAgo(seconds)
 
 export const PEOPLE = [
   { person_key: 'dana', name: 'Dana Whitfield', title: 'Broker (owner)' },
@@ -25,7 +37,7 @@ export function session(role) {
   return {
     ok: true,
     authenticated: true,
-    issued_at: Math.floor(Date.now() / 1000),
+    issued_at: 0,
     display_name: who.name,
     person_key: who.person_key,
     role,
@@ -132,30 +144,30 @@ export function threads(role) {
 export function history(threadId) {
   if (threadId === 'ch-alder') {
     const messages = [
-      { id: 201, role: 'user', author: 'priya', author_name: 'Priya', content: 'Seller signed the disclosure. Uploading it now.', ts: Date.now() / 1000 - 3 * 3600 },
-      { id: 202, role: 'user', author: 'dana', author_name: 'Dana', content: '@jarvis when is the inspection window?', ts: Date.now() / 1000 - 2.5 * 3600 },
+      { id: 201, role: 'user', author: 'priya', author_name: 'Priya', content: 'Seller signed the disclosure. Uploading it now.', ts: secondsAgo(3 * 3600) },
+      { id: 202, role: 'user', author: 'dana', author_name: 'Dana', content: '@jarvis when is the inspection window?', ts: secondsAgo(2.5 * 3600) },
       {
         id: 203,
         role: 'assistant',
         content: 'The contract gives ten days from acceptance, so the window closes on the 21st. Nothing is booked yet.',
-        ts: Date.now() / 1000 - 2.4 * 3600,
+        ts: secondsAgo(2.4 * 3600),
       },
-      { id: 204, role: 'user', author: 'omar', author_name: 'Omar', content: '@Dana the inspector can do Thursday at 10.', ts: Date.now() / 1000 - 34 * 60 },
+      { id: 204, role: 'user', author: 'omar', author_name: 'Omar', content: '@Dana the inspector can do Thursday at 10.', ts: secondsAgo(34 * 60) },
     ]
     return { thread_id: threadId, messages, count: messages.length, last_id: 204, jarvis_answering: [] }
   }
   if (threadId === 'direct-dana') {
     const messages = [
-      { id: 101, role: 'user', author: 'dana', author_name: 'Dana', content: 'Which emails need me today?', ts: Date.now() / 1000 - 14 * 60 },
+      { id: 101, role: 'user', author: 'dana', author_name: 'Dana', content: 'Which emails need me today?', ts: secondsAgo(14 * 60) },
       {
         id: 102,
         role: 'assistant',
         content:
           'Two need you today: the Alder Ave inspection reply and the Marsh counter-offer.\n\nThe rest are filed. I drafted a reply to the inspector and left it in Approvals.',
-        ts: Date.now() / 1000 - 13 * 60,
+        ts: secondsAgo(13 * 60),
       },
-      { id: 103, role: 'user', author: 'dana', author_name: 'Dana', content: 'Remind me to call the Okafors tomorrow at 9.', ts: Date.now() / 1000 - 12 * 60 },
-      { id: 104, role: 'assistant', content: 'Done. It is on your list for tomorrow at 9:00 AM.', ts: Date.now() / 1000 - 12 * 60 },
+      { id: 103, role: 'user', author: 'dana', author_name: 'Dana', content: 'Remind me to call the Okafors tomorrow at 9.', ts: secondsAgo(12 * 60) },
+      { id: 104, role: 'assistant', content: 'Done. It is on your list for tomorrow at 9:00 AM.', ts: secondsAgo(12 * 60) },
     ]
     return { thread_id: threadId, messages, count: messages.length, last_id: 104, jarvis_answering: [] }
   }

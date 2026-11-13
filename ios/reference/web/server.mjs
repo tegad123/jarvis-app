@@ -4,7 +4,7 @@
 //
 //   node ios/reference/web/server.mjs [port]
 //
-// It binds 127.0.0.1 only, reads nothing but static/ and fixtures.mjs, and
+// It binds 127.0.0.1 only, reads nothing but static/ and the fixtures, and
 // writes nothing. POST /__stub/set {"role":"owner|admin|member","signedIn":bool}
 // switches who the stub says is signed in ("emptyHistory": true empties every
 // conversation, for the empty states).
@@ -12,7 +12,7 @@ import { createServer } from 'node:http'
 import { readFile } from 'node:fs/promises'
 import { extname, join, normalize, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import * as fx from './fixtures.mjs'
+import * as routes from './routes.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const STATIC = resolve(HERE, '../../../static')
@@ -51,8 +51,7 @@ async function api(req, res, url) {
   const method = req.method ?? 'GET'
 
   // Open routes.
-  if (path === '/api/auth/methods') return json(res, 200, { pin: true, passphrase: true, google: true })
-  if (path === '/api/people') return json(res, 200, { people: fx.PEOPLE })
+  if (path === '/api/auth/methods' || path === '/api/people') return json(res, 200, routes.get(path, url.searchParams, state))
   if (path === '/api/login' && method === 'POST') {
     const b = await body(req)
     state.signedIn = true
@@ -66,39 +65,16 @@ async function api(req, res, url) {
 
   if (!state.signedIn) return json(res, 401, { detail: 'Not authenticated.' })
 
-  if (path === '/api/session') return json(res, 200, fx.session(state.role))
-  if (path === '/api/team/directory') return json(res, 200, { people: fx.PEOPLE })
-  if (path === '/api/threads') return json(res, 200, fx.threads(state.role))
-  if (path === '/api/chat/history') return json(res, 200, fx.history(state.emptyHistory ? '' : url.searchParams.get('thread_id') ?? ''))
-  if (/^\/api\/threads\/[^/]+\/members$/.test(path)) return json(res, 200, fx.members(decodeURIComponent(path.split('/')[3])))
+  if (method === 'GET') {
+    const answer = routes.get(path, url.searchParams, state)
+    if (answer) return json(res, 200, answer)
+  }
   if (/^\/api\/threads\/[^/]+\/read$/.test(path)) return json(res, 200, { ok: true, last_read_id: null })
-  if (path === '/api/feed') return json(res, 200, fx.feed())
-  if (path === '/api/feed/summary') return json(res, 200, fx.feedSummary())
-  if (path === '/api/approvals') return json(res, 200, fx.approvals())
-  if (path === '/api/inbox') return json(res, 200, fx.inbox())
-  if (path === '/api/tasks') return json(res, 200, fx.tasks())
-  if (path === '/api/leads') return json(res, 200, fx.leads(state.role))
-  if (/^\/api\/leads\/[^/]+$/.test(path)) return json(res, 200, fx.lead(decodeURIComponent(path.split('/')[3])))
-  if (path === '/api/google/connection') return json(res, 200, fx.googleConnection())
-  if (path === '/api/browser/status') return json(res, 200, { enabled: true, running: false, taken_over: false, access: [] })
-  if (path === '/api/browser/screen') return json(res, 200, { running: false, taken_over: false })
-  if (path === '/api/browser/logins') return json(res, 200, fx.websiteLogins())
-  if (path === '/api/imessage/status') return json(res, 200, fx.macStatus())
-  if (path === '/api/team') return json(res, 200, fx.team())
-  if (path === '/api/channels/settings') return json(res, 200, fx.channelSettings())
   if (path.startsWith('/api/counters/')) return json(res, 200, { ok: true })
 
   if (path === '/api/chat' && method === 'POST') {
-    // One short stubbed turn, as NDJSON, so the streaming state can be seen.
     res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store' })
-    const lines = [
-      { type: 'tool', status: 'running', tool: 'jarvis', label: 'Checking your calendar', toolCallId: 's1' },
-      { type: 'tool', status: 'completed', tool: 'jarvis', toolCallId: 's1' },
-      { type: 'delta', text: 'You have a walkthrough at 40 Marsh Lane on Friday at 2:00 PM, ' },
-      { type: 'delta', text: 'and nothing else booked this week.' },
-      { type: 'done', finish_reason: 'stop' },
-    ]
-    for (const l of lines) {
+    for (const l of routes.CHAT_LINES) {
       res.write(JSON.stringify(l) + '\n')
       await new Promise((r) => setTimeout(r, 150))
     }
