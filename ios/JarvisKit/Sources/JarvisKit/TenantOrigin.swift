@@ -36,10 +36,12 @@ public struct TenantOrigin: Equatable, Sendable {
         return .success(TenantOrigin(url: clean, host: host))
     }
 
-    public func endpoint(_ path: String) -> URL {
+    /// `path` is already percent-encoded where it needs to be.
+    public func endpoint(_ path: String, query: [URLQueryItem] = []) -> URL {
         var base = URLComponents(url: url, resolvingAgainstBaseURL: false)!
         let suffix = path.hasPrefix("/") ? path : "/" + path
-        base.path = suffix
+        base.percentEncodedPath = suffix
+        if !query.isEmpty { base.queryItems = query }
         return base.url!
     }
 }
