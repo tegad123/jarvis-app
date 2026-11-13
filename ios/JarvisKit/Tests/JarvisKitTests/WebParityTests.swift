@@ -158,6 +158,11 @@ final class WebParityTests: XCTestCase {
         XCTAssertEqual(LeadWording.next(after: "Lost", in: LeadWording.pipelineCycle), "New")
         XCTAssertEqual(LeadWording.next(after: "something else", in: LeadWording.statusCycle), "No Response")
         XCTAssertEqual(LeadWording.next(after: "done", in: TaskWording.statusCycle), "open")
+        // The web's stage button: an unknown stage counts as the first one.
+        XCTAssertEqual(LeadWording.nextPipeline(after: LeadWording.pipelineCycle[0]), LeadWording.pipelineCycle[1])
+        XCTAssertEqual(LeadWording.nextPipeline(after: "not a stage"), LeadWording.pipelineCycle[1])
+        XCTAssertEqual(LeadWording.nextPipeline(after: LeadWording.pipelineCycle.last), LeadWording.pipelineCycle[0])
+        XCTAssertTrue(LeadWording.statusCycle.contains("Dead? (confirm)"))
         XCTAssertEqual(Wording.initials("Dana Whitfield"), "DW")
         XCTAssertEqual(Wording.initials("priya"), "P")
         XCTAssertEqual(Wording.initials(""), "J")
@@ -655,6 +660,24 @@ final class WebParityTests: XCTestCase {
         }
         XCTAssertEqual(events.first, .tool(running: true, tool: "jarvis", label: "Checking your calendar", callId: "s1"))
         XCTAssertEqual(events.last, .done)
+    }
+
+    func testAttachmentsAreFetchedByIDWithTheSession() async throws {
+        let fake = RecordingTransport()
+        fake.handler = { _ in (200, "bytes") }
+        let jarvis = try client(fake)
+        let data = try await jarvis.attachmentData(id: "att 1/x")
+        XCTAssertEqual(String(decoding: data, as: UTF8.self), "bytes")
+        XCTAssertEqual(fake.requests.last?.httpMethod, "GET")
+        // One path segment: an id can never reach another route.
+        XCTAssertEqual(fake.requests.last?.url?.absoluteString, "https://team.example.com/api/attachments/att%201%2Fx")
+    }
+
+    func testPreviewSessionsFollowTheScenario() {
+        XCTAssertEqual(PreviewTransport.session(.owner)?.role, "owner")
+        XCTAssertEqual(PreviewTransport.session(.empty)?.personKey, "dana")
+        XCTAssertEqual(PreviewTransport.session(.member)?.role, "member")
+        XCTAssertNil(PreviewTransport.session(.signedOut))
     }
 
     func testPreviewScenariosDiffer() async throws {

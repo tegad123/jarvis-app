@@ -30,6 +30,12 @@ public struct PersonChoice: Decodable, Equatable, Identifiable {
     public var title: String?
     public var id: String { personKey }
 
+    public init(personKey: String, name: String, title: String? = nil) {
+        self.personKey = personKey
+        self.name = name
+        self.title = title
+    }
+
     enum CodingKeys: String, CodingKey {
         case name, title
         case personKey = "person_key"

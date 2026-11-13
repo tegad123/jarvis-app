@@ -360,7 +360,7 @@ public enum LeadWording {
     public static let temperatures = ["Hot", "Warm", "Cold"]
     public static let temperatureCycle = ["", "Cold", "Warm", "Hot"]
     public static let pipelineCycle = ["New", "Contacted", "Touring", "Offer Made", "Closed", "Lost"]
-    public static let statusCycle = ["No Response", "Responded", "Scheduled", "Not Interested", "Closed", "Dead?", "Dead", "Won", "Lost"]
+    public static let statusCycle = ["No Response", "Responded", "Scheduled", "Not Interested", "Closed", "Dead? (confirm)", "Dead", "Won", "Lost"]
 
     public static let touchKinds: [(id: String, label: String)] = [
         ("call", "Call"), ("text", "Text"), ("email", "Email"), ("met", "Met"), ("showing", "Showing"), ("note", "Note"),
@@ -388,6 +388,13 @@ public enum LeadWording {
     public static func next(after current: String?, in cycle: [String]) -> String {
         guard let index = cycle.firstIndex(of: current ?? "") else { return cycle.first ?? "" }
         return cycle[(index + 1) % cycle.count]
+    }
+
+    /// The pipeline stage a tap moves to. A stage the list does not know
+    /// counts as the first, so the tap lands on the second (LeadRow.tsx).
+    public static func nextPipeline(after current: String?) -> String {
+        let index = pipelineCycle.firstIndex(of: current ?? "") ?? 0
+        return pipelineCycle[(index + 1) % pipelineCycle.count]
     }
 
     /// Bars lit for a temperature: Hot 3, Warm 2, Cold 1.
@@ -437,6 +444,11 @@ public enum StatusTone: Equatable {
 public struct StatusCopy: Equatable {
     public var tone: StatusTone
     public var label: String
+
+    public init(tone: StatusTone, label: String) {
+        self.tone = tone
+        self.label = label
+    }
 }
 
 public enum SettingsWording {
@@ -552,7 +564,7 @@ public enum ApprovalWording {
         let canReject = approval.canReject != false
         if canApprove { return nil }
         if canReject {
-            if approval.isBrowserTask, let person = approval.forPerson, !person.isEmpty {
+            if let person = approval.forPerson, !person.isEmpty {
                 return "For \(person)’s browser. Only they can approve it; you can reject it."
             }
             return "Someone else approves this one; you can reject it."

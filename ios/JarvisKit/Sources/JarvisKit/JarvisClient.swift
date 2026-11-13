@@ -405,6 +405,12 @@ public final class JarvisClient {
         return try Self.boxed(AttachmentItem.self, "attachment", from: data)
     }
 
+    /// The bytes of a stored attachment, read with this session: a thumbnail
+    /// or a document to open. The server checks the reader is in the thread.
+    public func attachmentData(id: String) async throws -> Data {
+        try await send(method: "GET", path: "/api/attachments/\(Self.seg(id))")
+    }
+
     /// One chat turn, as it streams. Refuses before any network call when
     /// consent is off.
     public func streamChat(threadID: String, message: String, attachmentIDs: [String] = []) -> AsyncThrowingStream<ChatEvent, Error> {

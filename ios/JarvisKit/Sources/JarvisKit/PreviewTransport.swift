@@ -32,6 +32,17 @@ public final class PreviewTransport: HTTPTransport, @unchecked Sendable {
         return client
     }
 
+    /// Who is signed in under a scenario, as /api/session answers it.
+    public static func session(_ scenario: Scenario = .owner) -> SessionInfo? {
+        let source: String?
+        switch scenario {
+        case .signedOut: source = nil
+        case .member: source = PreviewFixtures.member["/api/session"]
+        case .owner, .empty: source = PreviewFixtures.owner["/api/session"]
+        }
+        return source.flatMap { try? JSONDecoder().decode(SessionInfo.self, from: Data($0.utf8)) }
+    }
+
     public func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         let method = request.httpMethod ?? "GET"
         let path = request.url?.path ?? "/"
